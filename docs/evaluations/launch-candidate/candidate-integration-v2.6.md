@@ -423,6 +423,80 @@ tokens** on each warm step, at 20 µ¢ a token. So the tool definitions cost lit
   **Rerun:** services rehearsal (controller code changed), founder-upgrade rehearsal (runtime changed; it also exercises
   the 4,000-token request against the fake Anthropic API) and the revision rehearsal (the target). All non-billable.
 
+## Group A on 5ee36d4 (24 Oct, 18:51–19:30Z): all rehearsals PASSED; production unchanged
+
+- **Pushed** fast-forward 8f6862e..5ee36d4 (fleet/integration-v2.6). **Built** on the VPS: build
+  `09d77dac1bc35b0ae58ece38968ed69b1447728e82c3c2eb5f936f6bbb7fdcee`, lockfile `1df54e35…` (unchanged). Staged and installed
+  beside production at `/opt/automaton-fleet/releases/5ee36d4…`; `current` stayed 89d7c21; no unit, runtime.env, pin or
+  setting changed. Kit `~/rlc134`.
+- **Data rehearsal: run, PASSED (18:54:13Z)**, not carried forward. The services rehearsal refuses to start without the
+  candidate's tooling tree, which only the data rehearsal creates (`/var/tmp/rollout-tooling-<commit>`). Same non-billable
+  throwaway-copy procedure: 111 → 115, row counts identical, ledger verified, re-run idempotent, rollback dump restores 111
+  with the same ledger head. The no-migration-change justification still holds; this is extra evidence, not a substitute.
+- **Services rehearsal: PASSED (18:54:55Z).** Candidate controller, Operator API and dashboard ready on 115; 89d7c21 refuses
+  schema 115 (rollback = database restore, owner-only); restored 111 with the same ledger head; production PIDs untouched.
+- **Founder-upgrade rehearsal: 27/27 PASSED** (a synthetic founder on 89d7c21 upgraded, rolled back and upgraded again
+  against the candidate controller; routed T1/T2/T3 calls through the fake Anthropic API; no credential in logs).
+- **Revision rehearsal: 19/19 PASSED** (19:07–19:2xZ), including 4c (the delivery carries exactly the reviewed bytes) and
+  4d (the buyer's request is resolved by the delivery). No evidence bundle was written (it is written only on failure).
+- **Closing comparison (read-only, before 18:51Z / after):** schema 111, ledger head 1176 and verification, agents (Agent-1
+  89d7c21, Agent-2 b60e262, both paused), registry state, founder cognition, unit files, units, PIDs, packages and tools
+  identical; **every settings group identical** (cognition policy, tiers, routing, founder cognition, Fleet Control AI,
+  review policy, AI-credit lots, balance, holds); **permanent history 329 events, same digest**. Total events 3,893 → 3,899:
+  +6 `session_opened` (temporary). Only the live database and `postgres` exist; `current` 89d7c21. Before-dump kept in
+  `~/rlc134/baseline-before-20261024T185115Z` (TOC 5,342 entries).
+
+### count_tokens: NOT run — key unavailable by the owner's own directive
+
+The approved request was not made. Production's controller runs with `FLEET_COGNITION_PROVIDER=none`: on 23 Oct
+(owner directive, local-only) the key was removed from service and kept only as a root-only recovery copy
+(`/etc/automaton-fleet/recovery/cognition.key.20261023T142625Z`, 0600). Using it, even for one free request, would undo
+that switch, so it is reported instead. Options: the owner confirms that this recovery copy may be used for exactly one
+`count_tokens` request, or runs it themselves. No inference request was made and no paid call was substituted.
+
+### Compatibility of the 4,000-token cap with the existing runtimes (for any future deployment)
+
+Both agents use the routed path (saved calls: Agent-1 legacy to 30 Sep, then T2/T3; Agent-2 T2 only, 7–10 Oct). Neither
+has ever reached an output limit (largest outputs 2,119 and 783 tokens).
+- **What changes for an old runtime:** with the candidate controller, a reply cut off at 4,000 tokens arrives as text with
+  **no tool calls** (the new `outputLimit` field is ignored by old runtimes). Before, the old controller turned a cut-off
+  tool call into a provider error (the turn stopped). **In both cases nothing truncated is executed.**
+- **Agent-1 on 89d7c21** (`mind.ts:1011`) and **Agent-2 on b60e262** (`mind.ts:787`): a reply with no tool calls ends the
+  turn as finished. The agent is **not told** its reply was cut off, so it could try the same oversized call in a later
+  turn; that repetition is bounded only by its turn rate and its AI fuse (Agent-2: 3000p/60h). Only the 5ee36d4 runtime
+  tells the agent and continues (at most twice).
+- **Agent-2 support is therefore not assumed.** Options before any controller install:
+  (a) keep the agents paused through the staged upgrade; upgrade Agent-1's runtime (Group C) before it is resumed; Agent-2
+      stays paused on b60e262 while the cap is active; or
+  (b) a later controller change applies the 4,000 cap only to runtimes that declare the new doctrine (founder-v10); older
+      runtimes keep the tier's own limit. Not made (the candidate is frozen); proposed for approval if Agent-2 may be
+      resumed unchanged.
+- The legacy (non-routed) path is not capped; it keeps the policy's own `max_output_tokens` (4,000 in production).
+
+### The reservation and the provider request use the same output limit
+
+`routed-gateway.ts`: one value, `maxTokens = routine ? candidate.maxOutputTokens : founderStepMaxTokens(candidate)`, is
+passed to `costBoundMicro(…, maxTokens, …)` (the amount authorised and reserved) and to `provider.chat({ maxTokens })`,
+which the Anthropic adapter sends as `max_tokens`. Checked with a throwaway test (not committed): with production's T3
+setting (16,000, adaptive thinking) the request asked for 4,000 and the reservation equalled that of a 4,000 tier
+exactly; a 3,000 tier sent 3,000 and reserved 2¢ less (1,000 × 2,000 µ¢); `enabled:6000` thinking sent 7,024 (N + 1,024)
+and reserved 6¢ more (rounded up to whole cents). Adaptive thinking is counted inside `max_tokens`, so the reservation
+includes it. Production's tiers are T2 Sonnet adaptive 8,000 and T3 Opus adaptive 16,000; neither has an `enabled:N`
+budget. The adapter still refuses locally (uncharged) any `enabled:N` budget ≥ `max_tokens`.
+
+### Pre-existing test failures (reported separately)
+
+The candidate's targeted tests pass **except four** in `fleet-cognition-anthropic.test.ts` (PostgreSQL integration tests at
+lines 469, 514, 539, 573: two founders through the native adapter, billing exhaustion, forged thinking, the v16 charge
+rule). They fail with `FLEET_INFERENCE_LOCAL_ONLY` (the test controller's default inference profile is `local_only`, from
+v112) and **fail identically on 2e07e70**, before this change. They are not fixed and not hidden; the test set is not clean.
+
+### Unchanged
+
+Inference policy (disabled), every model assignment (T1 Haiku, T2 Sonnet, T3 Opus, Fleet Control T2), the Fleet Control
+budget (unset), caching settings and credit records. No cutover, inference, runtime upgrade, budget change, credit posting
+or paid evaluation. **The candidate is frozen at 5ee36d4.**
+
 ## Task routing as wired today (read-only, from code; production prices from the 24 Oct snapshot)
 
 Prices in µ¢ per token (input / output / cache write): T1 claude-haiku-4-5 100/500/125, max output 2,000, cache off; T2
