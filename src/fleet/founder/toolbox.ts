@@ -370,11 +370,16 @@ export function opArgs(a: Record<string, unknown>): Record<string, unknown> {
   return { ...beside, ...inner };
 }
 /** A statement that a file was delivered or sent (not a promise: "will be delivered" does not match). */
-export const DELIVERY_CLAIM = /\b(?:has|have|had|was|were|is|are)\s+(?:now\s+|just\s+|successfully\s+|already\s+)?(?:been\s+)?(?:delivered|sent|e-?mailed|uploaded)\b|\b(?:I'?ve|I have|we'?ve|we have)\s+(?:now\s+|just\s+|already\s+)?(?:delivered|sent|e-?mailed|attached|uploaded)\b|\bplease (?:see|find|download|open) (?:the )?(?:attached|revised|updated|corrected|new)\b/i;
+export const DELIVERY_CLAIM = /\b(?:has|have|had|was|were|is|are)\s+(?:now\s+|just\s+|successfully\s+|already\s+)?(?:been\s+)?(?:\w+ed\s+(?:and|&)\s+)?(?:delivered|sent|e-?mailed|uploaded)\b|\b(?:I'?ve|I have|we'?ve|we have)\s+(?:now\s+|just\s+|already\s+)?(?:\w+ed\s+(?:and|&)\s+)?(?:delivered|sent|e-?mailed|attached|uploaded)\b|\bplease (?:see|find|download|open) (?:the )?(?:attached|revised|updated|corrected|new)\b/i;
 // While only a revision is owed the original was delivered: a sentence that says so ("the original was sent earlier; the
 // revision is in progress") is true. A sentence that claims a delivery and names the revision, or does not say which, is not.
 const EARLIER_DELIVERY = /\b(?:original|first|earlier|previous|initial|old)\b|\b(?:yesterday|before|last time)\b/i;
 const REVISION_WORD = /\b(?:revis\w*|updat\w*|correct\w*|amend\w*|fix\w*|new|changes?|changed|point\s*\d+)\b/i;
+/** After a first delivery of this turn: a sentence claiming a delivery that names the revision is not yet true. */
+const REVISED = /\b(?:revis\w*|updat\w*|correct\w*|amend\w*|fix\w*|changes?|changed|point\s*\d+)\b/i;   // not "new": "your new checklist" is the first file
+export function revisionDeliveryClaim(message: string): boolean {
+  return message.split(/[.;!?\n\u2014\u2013]+|,?\s+but\s+/i).some((c) => DELIVERY_CLAIM.test(c) && REVISED.test(c));
+}
 export function falseDeliveryClaim(message: string, revisionOnly: boolean): boolean {
   if (!revisionOnly) return DELIVERY_CLAIM.test(message);
   return message.split(/[.;!?\n\u2014\u2013]+|,?\s+but\s+/i)
@@ -729,8 +734,9 @@ export class FounderToolbox {
   private obligations: CustomerObligation[] | null = null;
   private readonly answered = new Set<string>();
   private readonly answerRefused = new Set<string>();
-  /** Orders a wallet deliver of this turn succeeded for (the obligations are read at the start of the turn). */
-  private readonly deliveredThisTurn = new Set<string>();
+  /** Orders a wallet deliver of this turn succeeded for — FleetController returned the delivery's record — and whether one of
+   *  them was a re-delivery (the order already delivered before it: the revision). The obligations are read at the start of the turn. */
+  private readonly deliveredThisTurn = new Map<string, { revision: boolean }>();
   noteObligations(list: CustomerObligation[] | null): void {
     this.obligations = list;
     this.answered.clear();
@@ -1498,12 +1504,13 @@ export class FounderToolbox {
           // still owed. A message that states a delivery happened, while FleetController's record says it is owed and no
           // delivery of this turn succeeded, is refused with the reason; an honest update is sent as written — while only a
           // revision is owed, that includes a sentence about the original delivery.
-          if (op === "order.message" && typeof args.orderId === "string" && typeof args.message === "string" && !this.deliveredThisTurn.has(args.orderId)
-            && (this.obligations ?? []).some((o) => o.id === args.orderId && (o.deliveryOwed || o.revisionOwed)
-              && falseDeliveryClaim(args.message as string, !o.deliveryOwed))) {
+          const sent = typeof args.orderId === "string" ? this.deliveredThisTurn.get(args.orderId) : undefined;
+          if (op === "order.message" && typeof args.orderId === "string" && typeof args.message === "string" && !sent?.revision
+            && (this.obligations ?? []).some((o) => o.id === args.orderId && (o.deliveryOwed || o.revisionOwed || sent)
+              && (sent ? revisionDeliveryClaim(args.message as string) : falseDeliveryClaim(args.message as string, !o.deliveryOwed)))) {
             return refuse("FLEET_CLAIM_UNSUPPORTED", "this message says the file was delivered, but its delivery is still owed (FleetController's record) and no wallet deliver "
               + "succeeded in this turn: deliver first (wallet deliver), or tell the buyer what is actually happening (while a revision is owed, a sentence about "
-              + "the earlier delivery may say so: \"the original was sent earlier; the revision is in progress\")");
+              + "the earlier delivery may say so: \"the original was sent earlier; the revision is in progress\"; a first delivery does not deliver a correction)");
           }
           if (IDEMPOTENT_OPS.has(op) && typeof args.idempotencyKey !== "string") args.idempotencyKey = `econ:${call.id}`.replace(/[^A-Za-z0-9:_.-]/g, "_").slice(0, 128).padEnd(8, "_");
           // 2026-10-20: money in customer-facing text is checked before it is sent (exact arithmetic; the record's figures).
@@ -1580,7 +1587,13 @@ export class FounderToolbox {
             r = { ...(r as Record<string, unknown>), moneyCheck: { documents: money.documents,
               note: "calculations, itemised totals, currencies and precision in the extracted text were checked; claims the extraction could not read (listed per file), formulas and figures without a currency are not" } };
           }
-          if (op === "order.deliver" && typeof args.orderId === "string" && (r as { ok?: unknown }).ok !== false) this.deliveredThisTurn.add(args.orderId);
+          // Review of run 5: only FleetController's record of the delivery licenses saying it happened, and a first delivery never
+          // licenses saying the correction was delivered — a delivery is the revision when the order was already delivered before it.
+          const deliveryRecord = (r as { order?: { delivery?: { deliveryId?: unknown } } }).order?.delivery?.deliveryId;
+          if (op === "order.deliver" && typeof args.orderId === "string" && (r as { ok?: unknown }).ok === true && typeof deliveryRecord === "string") {
+            const ob = (this.obligations ?? []).find((o) => o.id === args.orderId);
+            this.deliveredThisTurn.set(args.orderId, { revision: this.deliveredThisTurn.has(args.orderId) || (!!ob && !ob.deliveryOwed) });
+          }
           // v105: an invoice is written to the workspace from the record (text and PDF) — deliver those files as they are.
           if (op === "order.invoice" && (r as { ok?: unknown }).ok === true) r = await this.writeInvoice(r as { invoice: { number: string; text: string } } & Record<string, unknown>);
           // 2026-10-19: an answer to a buyer settles this turn's sleep check for that request (a refused one is not an answer).
