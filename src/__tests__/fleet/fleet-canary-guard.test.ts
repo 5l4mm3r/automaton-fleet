@@ -15,7 +15,7 @@ import { execFileSync } from "child_process";
 const SCRIPT = path.resolve(__dirname, "../../../scripts/fleet-canary.sh");
 const AGENT = "01M3F50SH7PNX2E3GST13J52AS";
 const measures = (o: Record<string, unknown> = {}) => JSON.stringify({ ledgerOk: true, agentChargedMinor: 0, agentUsageMicro: 0, creditConsumedUsdMicro: 0,
-  duplicateFiles: 0, repeatedBuyerMessages: 0, fleetControlOpenOver30m: 0, fleetControlUnknown: 0, agentInflight: 0, paused: false, ceilingHold: "open 1", ...o });
+  repeatedDeliveries: 0, repeatedMessages: 0, fleetControlOpenOver30m: 0, fleetControlUnknown: 0, agentInflight: 0, paused: false, ceilingHold: "open 1", ...o });
 
 describe("canary guard script", () => {
   let dir: string;
@@ -24,7 +24,7 @@ describe("canary guard script", () => {
       `ENDS_AT=${ends}`, `CASH_CEILING_MINOR=1000`, `CREDIT_CEILING_USD_MICRO=1500000000`, `HOLD_RUN=canary-agent1-ceiling`].join("\n") + "\n");
     return execFileSync("bash", [SCRIPT, mode, ...(dry ? ["--dry-run"] : [])], { encoding: "utf8", env: { ...process.env,
       FLEET_CANARY_CONF: path.join(dir, "canary.conf"), FLEET_CANARY_PSQL: path.join(dir, "psql"), FLEET_CANARY_NODE: path.join(dir, "node"),
-      FLEET_CANARY_CLI_DIR: dir, ...env } });
+      FLEET_CANARY_CLI_DIR: dir, FLEET_CANARY_MEASURES_SQL: path.resolve(__dirname, "../../../scripts/fleet-canary-measures.sql"), ...env } });
   };
   const actions = () => (fs.existsSync(path.join(dir, "actions.log")) ? fs.readFileSync(path.join(dir, "actions.log"), "utf8").trim().split("\n").filter(Boolean) : []);
 
@@ -56,8 +56,8 @@ describe("canary guard script", () => {
     ["cash ceiling", { agentChargedMinor: 1001 }, /agent cash charges 1001p exceed 1000p/],
     ["credit ceiling", { creditConsumedUsdMicro: 1_500_000_001 }, /provider credit consumed 1500000001/],
     ["ledger", { ledgerOk: false }, /ledger verification failed/],
-    ["duplicate file", { duplicateFiles: 1 }, /delivered twice/],
-    ["repeated message", { repeatedBuyerMessages: 1 }, /repeated/],
+    ["repeated delivery", { repeatedDeliveries: 1 }, /more than one delivery without a declared resend reason/],
+    ["repeated message", { repeatedMessages: 1 }, /sent again within 30 minutes/],
   ] as const) {
     it(`stops once on: ${name}`, () => {
       const out = run("check", { FAKE_MEASURES: measures(m) });

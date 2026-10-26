@@ -43,24 +43,10 @@ safe_stop() {
 }
 
 measures() {
-  # All values since STARTED_AT. Agent cash charges (posted pence, agent-paid); usage at charge rates; Fleet provider-credit
-  # consumption (agent + Fleet Control, excluding engineering runs); duplicate effects; open Fleet Control reservations.
-  Q "SELECT json_build_object(
-      'ledgerOk', (fleet_ledger_verify() ->> 'ok')::boolean,
-      'agentChargedMinor', (SELECT COALESCE(sum(charged_cents), 0) FROM fleet_cognition_log WHERE agent_id = :'agent' AND payer = 'agent' AND at >= :'start'::timestamptz),
-      'agentUsageMicro', (SELECT COALESCE(sum(COALESCE(charged_intended_microcents, charged_microcents, 0)), 0) FROM fleet_cognition_log WHERE agent_id = :'agent' AND at >= :'start'::timestamptz),
-      'creditConsumedUsdMicro', (SELECT COALESCE(-sum(usd_microcents), 0) FROM fleet_provider_credit_events WHERE kind = 'consumption' AND at >= :'start'::timestamptz
-                                   AND recorded_by NOT LIKE 'controller:engineering:%'),
-      'duplicateFiles', (SELECT count(*) FROM (SELECT d.order_id, f.content_sha256 FROM fleet_order_deliveries d JOIN fleet_order_delivery_files f ON f.delivery_id = d.delivery_id
-                           JOIN fleet_customer_orders o ON o.order_id = d.order_id WHERE o.agent_id = :'agent' AND d.status = 'sent' AND d.created_at >= :'start'::timestamptz
-                           GROUP BY 1, 2 HAVING count(*) > 1) x),
-      'repeatedBuyerMessages', (SELECT count(*) FROM (SELECT m.order_id, m.body FROM fleet_customer_messages m JOIN fleet_customer_orders o ON o.order_id = m.order_id
-                           WHERE o.agent_id = :'agent' AND m.author = 'agent' AND m.created_at >= :'start'::timestamptz GROUP BY 1, 2 HAVING count(*) > 1) x),
-      'fleetControlOpenOver30m', (SELECT count(*) FROM fleet_control_ai_reservations WHERE status = 'open' AND reserved_at < now() - interval '30 minutes'),
-      'fleetControlUnknown', (SELECT count(*) FROM fleet_control_ai_reservations WHERE status = 'unknown'),
-      'agentInflight', (SELECT count(*) FROM fleet_cognition_inflight WHERE agent_id = :'agent'),
-      'paused', (SELECT paused FROM fleet_founder_cognition WHERE agent_id = :'agent'),
-      'ceilingHold', (SELECT status || ' ' || usd_microcents FROM fleet_provider_credit_holds WHERE run_id = '$HOLD_RUN'))::text"
+  # scripts/fleet-canary-measures.sql (read-only): all values since STARTED_AT; duplicate EXECUTION, not duplicate content.
+  local sqlf; sqlf=${FLEET_CANARY_MEASURES_SQL:-$(dirname "$(readlink -f "$0")")/fleet-canary-measures.sql}
+  [[ -r "$sqlf" ]] || { echo "measures SQL missing: $sqlf" >&2; return 1; }
+  $PSQL -X -q -At -v ON_ERROR_STOP=1 -d "$DB" -v agent="$AGENT" -v start="$START" -v hold="$HOLD_RUN" -f - < "$sqlf" | tail -1
 }
 
 case "$MODE" in
@@ -74,8 +60,8 @@ case "$MODE" in
     [[ "$(j ledgerOk)" == True ]] || { safe_stop "ledger verification failed"; exit 0; }
     (( $(j agentChargedMinor) <= CASH_MAX )) || { safe_stop "agent cash charges $(j agentChargedMinor)p exceed ${CASH_MAX}p"; exit 0; }
     (( $(j creditConsumedUsdMicro) <= CREDIT_MAX )) || { safe_stop "provider credit consumed $(j creditConsumedUsdMicro) µ¢ exceeds $CREDIT_MAX µ¢"; exit 0; }
-    (( $(j duplicateFiles) == 0 )) || { safe_stop "the same file was delivered twice for one order"; exit 0; }
-    (( $(j repeatedBuyerMessages) == 0 )) || { safe_stop "a message to a buyer was repeated"; exit 0; }
+    (( $(j repeatedDeliveries) == 0 )) || { safe_stop "an order has more than one delivery without a declared resend reason (repeated execution)"; exit 0; }
+    (( $(j repeatedMessages) == 0 )) || { safe_stop "a message to a buyer was sent again within 30 minutes without a buyer message between (repeated execution)"; exit 0; }
     (( $(j fleetControlOpenOver30m) == 0 && $(j fleetControlUnknown) == 0 )) || note "\"warn\":\"a Fleet Control reservation is open over 30 min or of unknown cost: reconcile it\""
     ;;
   end)

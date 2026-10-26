@@ -13,8 +13,20 @@
  * The authorisation (unchanged) refuses a call whose estimate does not fit, under the agent row's lock (one authorisation at
  * a time per agent). The state also reports what was actually charged, separately. Nothing is posted, charged, refunded or
  * rewritten; promotional use stays charged to no one and owed to no one.
+ *
+ * One measure of provider credit in use (owner, 2026-10-26: "Make Fleet Control and agent authorisation account for the same
+ * in-flight provider-credit reservations atomically"). Fleet Control's reservation subtracted `fleet_provider_credit_held`
+ * (engineering holds, its own open calls, expiring promotional credit) but not the agents' open model-call reservations, which
+ * the agent authorisations and the engineering hold subtracted separately. So a Fleet Control call could take credit an agent's
+ * call in flight had reserved, and a ceiling was not hard. Now `fleet_provider_credit_held` also counts every open model-call
+ * reservation (live or expired, at its USD estimate), and the agent authorisations (agent-paid and treasury-paid) and the
+ * engineering hold no longer subtract them a second time. Every consumer takes the same provider-credit advisory lock before
+ * reading it, so concurrent reservations of any kind are serialised against one figure.
  */
 import { V62_SQL } from "./migrations-phase62.js";
+import { V111_SQL } from "./migrations-phase111.js";
+import { V112_SQL } from "./migrations-phase112.js";
+import { V118_SQL } from "./migrations-phase118.js";
 import { restate } from "./migrations-phase42.js";
 
 const STATE = restate(V62_SQL, "fleet_cognition_state", [
@@ -35,8 +47,37 @@ const STATE = restate(V62_SQL, "fleet_cognition_state", [
     'usageTodayMicrocents', spent.intended, 'reservedOpenMicrocents', spent.held, 'chargedTodayMicrocents', spent.charged,`],
 ]);
 
+const INFLIGHT_USD = `(SELECT COALESCE(sum(COALESCE(i.estimate_usd_cents, 0)), 0) FROM fleet_cognition_inflight i
+            WHERE COALESCE(i.route_provider, (SELECT provider FROM fleet_cognition_policy WHERE id = 1)) = p_provider)::bigint * 1000000`;
+const HELD = restate(V118_SQL, "fleet_provider_credit_held", [
+  [`            AND expires_at > now() AND expires_at <= now() + interval '60 minutes')::bigint;`,
+   `            AND expires_at > now() AND expires_at <= now() + interval '60 minutes')::bigint
+       -- v119: every open model-call reservation (live or expired) at its USD estimate — the same figure for every consumer.
+       + ${INFLIGHT_USD};`],
+]);
+const NOT_TWICE = `  v_reserved := 0;   -- v119: open model-call reservations are counted in fleet_provider_credit_held (never twice)`;
+const AUTHORIZE = restate(V112_SQL, "svc_cognition_authorize", [
+  [`  SELECT COALESCE(sum(COALESCE(estimate_usd_cents, 0)), 0) * 1000000 INTO v_reserved FROM fleet_cognition_inflight;`, NOT_TWICE],
+]);
+const AUTHORIZE_TREASURY = restate(V112_SQL, "fleet_cognition_authorize_treasury", [
+  [`  SELECT COALESCE(sum(COALESCE(estimate_usd_cents, 0)), 0) * 1000000 INTO v_reserved FROM fleet_cognition_inflight;`, NOT_TWICE],
+]);
+const ENGINEERING_HOLD = restate(V111_SQL, "fleet_admin_engineering_credit_hold", [
+  [`  v_free := fleet_provider_credit_balance(p_provider) - fleet_provider_credit_held(p_provider)
+            - COALESCE((SELECT sum(COALESCE(estimate_usd_cents, 0)) FROM fleet_cognition_inflight), 0) * 1000000;`,
+   `  v_free := fleet_provider_credit_balance(p_provider) - fleet_provider_credit_held(p_provider);   -- v119: open reservations included once`],
+]);
+
 export const V119_SQL = `
 ${STATE}
+
+${HELD}
+
+${AUTHORIZE}
+
+${AUTHORIZE_TREASURY}
+
+${ENGINEERING_HOLD}
 
 REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA @@SCHEMA@@ FROM PUBLIC;
 `;
