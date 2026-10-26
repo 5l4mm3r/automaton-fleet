@@ -57,6 +57,7 @@ import { rollbackFounderRuntime, upgradeFounderRuntime } from "./upgrade.js";
 import { runUpgradeRehearsal } from "./upgrade-rehearsal.js";
 import { runRevisionRehearsal } from "./revision-rehearsal.js";
 import { runScenarioSuite, ceilingPence, creditHoldUsdMicro, SCENARIO_IDS, type ScenarioId, type SuiteTerms } from "../eval/scenario-suite.js";
+import { resolveDocumentPython, documentToolsProblem } from "../eval/document-tools.js";
 import { readCognitionKey } from "../service/main.js";
 import { killMainProcess, procAlive } from "../eval/kill.js";
 import { OFFICE_PROGRAM } from "./exec-sandbox.js";
@@ -461,6 +462,10 @@ async function main(argv: string[]): Promise<number> {
       // The production credit hold for this run (placed first with hub economy-engineering-credit-hold), repeated here.
       const hold = creditHoldUsdMicro(terms, only);
       if (flag("--credit-hold") !== hold.toString()) throw new Error(`place the credit hold first (hub economy-engineering-credit-hold ${terms.runId} anthropic ${hold} <reason>) and repeat it: --credit-hold ${hold}`);
+      // 2026-10-26: S1 grades the delivered PDFs; without the document tools it cannot pass — refuse before spending.
+      const documentPython = resolveDocumentPython();
+      const toolsProblem = documentToolsProblem(only, documentPython);
+      if (toolsProblem) throw new Error(toolsProblem);
       const keyFile = flag("--key-file");
       if (!keyFile) throw new Error("--key-file <the controller's provider key file> is required");
       // Strict secret-file validation, and owned by the user the controller unit runs as; held by this process only.
@@ -516,7 +521,7 @@ async function main(argv: string[]): Promise<number> {
           killHard: (agentId) => killMainProcess(founderUnit(agentId), {
             systemctl: (args) => execFileSync("systemctl", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 60_000 }),
             alive: procAlive, sleep: (ms) => new Promise((r) => setTimeout(r, ms)) }),
-          workbookFixture: flag("--workbook"), log,
+          workbookFixture: flag("--workbook"), documentPython, log,
         });
       } finally {
         for (const r of regs) { try { r.stop(); } catch { /* stopped */ } }
