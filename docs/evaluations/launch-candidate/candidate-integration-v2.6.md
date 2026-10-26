@@ -2867,3 +2867,115 @@ PayPal cash is therefore 100 − 33 + 500 − 45 − 500 = **22p**, matching the
 - **Fees:** PayPal charged this account 33p on £1 and 45p on £5 for payments received as purchases. Whether a transfer
   from your own PayPal is charged depends on how it is sent, so I won't assume it. Fleet records exactly the net the
   transaction shows, read back from Transaction Search.
+
+## Funding position before Group A (27 Oct; read-only; every figure by SQL or code)
+
+### 1. Agent-1, separated
+
+| What | Figure | What it is |
+|---|---|---|
+| Book wallet (`agent:…AS:cash`) | **8,943p** | 10,000 genesis allocation − 2,239 inference − 447 AI-credit tax/fees − 1 media + 1,630 restored by the v74 write-off |
+| Real cash behind it | **0p** | The allocation was `owner-authorized-virtual:genesis-founder`: owner capital recorded with no money paid in. No backing is recorded (`fleet_capital_backing`: backed 0, unbacked 20,000 for both agents). The treasury PayPal holds 22p in total, all of it the residue of the £1 and £5 tests. |
+| Liabilities from its activity | **1,057p** owed to the owner | Part of `fleet:owner:payable` 1,081p accrued since the write-off: Agent-1 inference 880 + tax/fees 176 + media 1; the other 24p is the fleet's own. The owner's provider credit paid these; nothing is reimbursed. |
+| Customer obligations | **0** | No paid ordinary order, open or otherwise. |
+| Inference capacity | **$98.0103348 promotional** (expires 24 Nov, assumed 00:00Z cutoff) **+ $17.22 purchased** (owner-paid) | Fleet-wide provider credit, not PayPal cash. For the canary Agent-1 is bounded by the $15 hold, 754p/day and 120 turns/h. |
+
+**What the book wallet can and cannot do today.** It pays Agent-1's internal AI charges. Those move book money into the
+owner-reimbursable partition, and the provider is paid by credit, so no PayPal money moves. It cannot move real money:
+custody execution, money-out, card authority and refund authority are all off. The balance therefore shows neither
+runway nor an ability to cover refunds or other cash obligations. It is a budget figure on virtual capital.
+
+### 2. Smallest explicit launch treatment: proposed, nothing posted or changed
+
+**Recommended: (A) disclose and bound.** Nothing is written off, funded or reclassified; the existing records already
+state it (`fleet_capital_backing`: virtual 20,000, unbacked 20,000). The launch record and the Stage 1 approval carry this
+statement:
+
+> "Agent wallets are unbacked starting allocations (2 × £100 virtual owner capital). During the canary no wallet money
+> can leave PayPal. Real cash obligations (PayPal fees, the fee residue of any refund) are met only from real treasury cash
+> (the £5 float). Before any manual refund, real PayPal cash is checked by SQL against the refund's residue. A shortfall
+> stops the canary rather than drawing on virtual money."
+
+This adds no code; the check before a refund becomes a monitored stop.
+
+**Not recommended for this canary:**
+
+- **(B) back the allocation with real money** (`economy-capital-back`, v66). The backing posts no new capital, so
+  unallocated stays 0. It would therefore not fund Fleet Control or the refund booking; a float would still be needed.
+- **(C) write down the allocations.** That is an accounting-policy change, which you excluded.
+
+**The £5 stays ordinary owner funding** (`ledger-record-funding`), not a backing. A backing would leave
+`fleet:treasury:unallocated` at 0, where Fleet Control reserves and refunds are booked from.
+
+### 3. Real money the bounded canary needs
+
+| Item | Real PayPal money | Bound |
+|---|---|---|
+| API usage (agent and Fleet Control) | **£0 from PayPal** | Provider credit, promotional first ($98.01 > the $15 ceiling). If purchased credit is drawn, the owner already paid for it, and it becomes payable to the owner. |
+| Fleet Control's reserve | **£0 leaves PayPal** | Up to 30p is held in `fleet:treasury:unallocated` and released at settlement. It is consumed only for the purchased-credit part (v117/v118), at most 30p/day = 210p over 7 days, and expected 0 while promotional credit lasts. It is consumed in the books only (moved to owner-reimbursable). |
+| PayPal fee on your proof payment | **45p**, kept by PayPal | Observed on 19 Oct; none returned on the refund. |
+| Your proof refund | **500p** out, 455p of it the proof's own net receipt | Net cost = the fee above. |
+| Each refunded ordinary sale | **≈45p** per £5 sale (the fee PayPal keeps) | The rest is the sale's own money. Exposure = 45p × refunded sales. |
+
+By code:
+
+| Float | After the proof | After the worst-case Fleet Control figure | Refund residues still covered |
+|---|---|---|---|
+| 500p | 455p | 245p | 5 |
+| 455p | 410p | 200p | 4 |
+
+Not covered by the float: a PayPal dispute or chargeback fee, if one were charged. It would be a monitored stop.
+
+### 4. Owner-capital treatment is only for the identified proof order
+
+- `owner_proof` defaults to false (v76). It is set only by `fleet_admin_offer_proof`, the owner-only
+  `economy-offer-proof` command that creates that one order.
+- The capture and refund recorders take the owner-capital branch only `IF EXISTS (… z.owner_proof)` for that checkout.
+- Every other order follows the ordinary paths: the capture becomes agent revenue (net of fee), and a refund or reversal
+  is reconciled from PayPal evidence against the agent (v57 clawback) and closes the order.
+- Production has 0 ordinary paid orders for Agent-1 today. Stage 2's proof order is the only owner-capital case.
+
+### 5. Group A vs activation
+
+The funding position affects **activation only**. Group A runs on a throwaway copy, a synthetic founder and a fake
+provider: no funding, wallet, sale or refund is involved, and production is compared before and after. The decision on
+the starting allocations belongs to the Stage 1 approval.
+
+### Group A scope for code commit `7c194b8c2348baa8fa5d34bd7ef6b201dc4911c2` (for approval; not run)
+
+Changes after 81e1ae5:
+
+- v120 owner tasks (migration, CLI, admin);
+- the runtime's owner-task lines and wake signal;
+- tests and documentation.
+
+**Steps:**
+
+1. **Push** `fleet/canary-prep` to fleet-origin, no force: 3c30502, 5be54ff, 7c194b8 and this documentation commit. The
+   remote head is 212e76c now.
+2. **Build on the VPS** with `fleet-deploy-release.sh build`, two passes. Pins come from pass 1's output into
+   `~/rlc137/pins.txt` and are never placeholders. Pass 2 verifies them.
+3. **Side-install** to `/opt/automaton-fleet/releases/7c194b8…`. `current` stays 81e1ae5.
+4. **Data rehearsal:** `fleet-rollout.sh rehearse ~/rlc137/pins.txt 119 120`.
+5. **Services rehearsal:** `fleet-upgrade-rehearsal.sh ~/rlc137/pins.txt 119 120`. 81e1ae5 must refuse schema 120, and
+   rollback is a database restore of the copy.
+6. **New: founder-runtime rehearsals** (sudo, throwaway registry, fake provider, synthetic founder):
+   - `fleet-founders.sh upgrade-rehearsal 5ee36d4`: Agent-1's current runtime to 7c194b8, then upgrade, rollback and
+     re-upgrade;
+   - `fleet-founders.sh revision-rehearsal`: the runtime changed, so it is rerun;
+   - living founders untouched.
+7. **New: v120 check on a disposable copy** (copy-check, then dropped):
+   - send a task to the copy's Agent-1;
+   - its attention shows it, and Agent-2's attention and digest are unchanged;
+   - no conversation turn, in-flight reservation or journal;
+   - close it.
+8. **Production before and after:** identical. That covers schema 119, the ledger head, both agents paused on the same
+   PIDs, settings, and no tasks.
+
+UI 0.26.2 is reused. Agent-2 is not involved.
+
+**Not in Group A:**
+
+- install (Group B);
+- Agent-1 `upgrade-preflight` / `upgrade-runtime` (Group C);
+- any task, funding, hold, timer or paid call.
