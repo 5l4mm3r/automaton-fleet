@@ -423,6 +423,182 @@ tokens** on each warm step, at 20 µ¢ a token. So the tool definitions cost lit
   **Rerun:** services rehearsal (controller code changed), founder-upgrade rehearsal (runtime changed; it also exercises
   the 4,000-token request against the fake Anthropic API) and the revision rehearsal (the target). All non-billable.
 
+## Agent-1 canary: CONSOLIDATED activation package, revised (26 Oct ~15:20Z; supersedes the section below; preparation only)
+
+Nothing is activated, deployed, spent or authorised. Production is bc19e05 / schema 118. Agent-2 is excluded and unchanged.
+
+### 1. The tracker actually offered (verified 26 Oct, no model call)
+**Offer:** `uk-landlord-compliance-tracker-england-g-a9ddde`, £5.00, status **paused** (by Agent-1, 20 Oct 21:03Z),
+files_version 5.
+- **Current files:**
+  - `Landlord_Compliance_Tracker.xlsx`, 24,829 B, sha `f45c3d0071f69307…`;
+  - `README.txt`, 672 B, sha `4494dff2185aeb05…`;
+  - both added 20 Oct 20:59Z.
+- **The README promises:**
+  - dates dd/mm/yyyy in white cells, with due dates and OVERDUE / DUE SOON / OK flags calculated for 200 rows;
+  - a sample row to overwrite;
+  - gas every 12 months, EICR at least every 5 years, EPC valid 10 years;
+  - Excel, LibreOffice and Google Sheets;
+  - "not legal advice".
+
+**The installed inspector `fleet-qa-3` (`84749a94…`, LibreOffice render, VPS, read-only), on the actual files:**
+- **xlsx:**
+  - zip integrity, no macros, no external links;
+  - **1,200 formulas recalculated, no errors; saved values match the recalculation**;
+  - **date columns display as dates**; presentation deliberate; no placeholders;
+  - 2 of 2 pages rendered, none blank.
+- **README:** UTF-8, no placeholders; spelling advisory only ("organising", "xlsx", "yyyy").
+
+**Independent acceptance cases** (expected values calculated separately in Python; flags as of 26 Oct 2026). **All pass:**
+- gas last 15/12/2025 → due 15/12/2026, DUE SOON;
+- EICR 01/12/2021 → due 01/12/2026 (+60 months), DUE SOON;
+- EPC 01/06/2027 → OK;
+- gas 01/06/2025 → due 01/06/2026, OVERDUE;
+- **29/02/2024 → 28/02/2025** (EDATE month end), OVERDUE;
+- rent last increase 01/11/2025 → earliest next 01/11/2026.
+
+**Structure (openpyxl):**
+- *Properties*: 14 columns, 200 rows, 1,000 formulas; status conditional formats.
+- *Rent log*: 8 columns, 200 rows, 200 formulas, £ formats.
+- 1,400 + 800 cells formatted `dd/mm/yyyy`.
+
+**Remaining defects:**
+- **D1 (blocks publishing; the system enforces it).** The offer's linked review `d06474be` (18 Oct, inspector
+  `fleet-qa-2`) covered a **different, earlier file** (`tracker.zip`, 1,801 B), and `fleet-qa-2` is no longer a sale
+  inspector (v96 requires `fleet-qa-3`). Agent-1 must inspect and review the current files before republishing; publish
+  refuses otherwise.
+- **D2 (cosmetic, print view).** The sample property text "12 Example St (sample - overwrite)" is cut off by the Tenant
+  column; the Rent log note "Check the gov.uk guidance…" runs off the page edge.
+- **D3 (cosmetic).** The sample row's gas status shows OVERDUE today (sample dates are from 2025).
+- **D4 (not promised; optional).** There is no input validation (Y/N, dates), and "Alarms checked" has no due or status
+  column.
+
+None of D2–D4 contradicts the README. Agent-1's own review should handle D2/D3 when it republishes. **No functional defect
+was found.**
+
+### 2. Two separate ceilings for the whole canary (7 days)
+**Defect found in the daily fuse:**
+- `fleet_cognition_state` sums `charged_microcents` (v62), and v118 made that the purchased part.
+- So **calls on promotional credit do not count toward Agent-1's 754p daily budget**: while the grant lasts, the daily fuse
+  cannot stop it.
+- Only the turns-per-hour limit and the available provider credit bound it.
+
+**Recommended fix (not implemented; needs your approval and a small install, a v119 migration):** the daily spend counts
+`charged_intended_microcents`, i.e. the cost at charge rates whichever credit pays. That restores the fuse's runaway meaning.
+
+| Ceiling | Value | How it is enforced |
+|---|---|---|
+| **A. Agent-1 cash charges (£), whole canary** | **£10.00** | Daily: the 754p fuse (purchased part only). Whole-canary total: **monitoring**, and Agent-1's own cash (£89.43) is a hard limit. With promotional credit drawn first and ceiling B below the grant, cash charges are expected to be about £0. |
+| **B. Provider-credit consumption, ALL Fleet calls (Agent-1 + Fleet Control), promotional and purchased, whole canary** | **$15.00** | **Automatic.** A provider-credit hold leaves exactly $15.00 available: `economy-engineering-credit-hold canary-agent1-ceiling anthropic <balance − 1,500,000,000> "canary ceiling"`. Agent authorisations and Fleet Control reservations both refuse when free credit is short. The hold amount is computed at activation from the then-recorded balance (Fleet records $115.2303348 now, pending your Console check). |
+| **B1. Fleet Control's share, per rolling 24 h** | **30p** (≈ 70 typical message checks/day; ≤ 210p over 7 days) | Automatic: the Fleet Control budget (it counts promotional use, by USD cost at FX). |
+| **C. Turns per hour** | **120** (recommended; configured now: 600) | Automatic (`maxTurnsPerHour`). |
+
+**Order of magnitude:** S1 cost about $1.06 for one order with a correction. $15 is about 14 such orders. At 120 turns/hour,
+without the v119 fix, $15 could be consumed in a few hours by a runaway, and ceiling B would then stop it. **With v119**,
+the 754p daily fuse also applies (about $10/day).
+
+### 3. Stop conditions: automatic versus monitored
+| Condition | Type | What happens |
+|---|---|---|
+| Daily AI fuse 754p | **automatic** (purchased part until v119; full cost after) | further calls refused until the day rolls |
+| 120 turns/hour | **automatic** | calls refused until the hour rolls |
+| Provider-credit ceiling $15 (B) | **automatic** | agent calls and Fleet Control reservations refused |
+| Fleet Control budget 30p / float £5 | **automatic** | message checks defer (the message waits; nothing auto-approved) |
+| Insufficient cash for a call | **automatic** | that call refused |
+| Cost overrun / uncollectable | **automatic** | an exception blocks further paid calls until you allocate it |
+| Survival protection (on) | **automatic** | exhaustion alerts you (P1); never kills |
+| Order close rule | **automatic** | 10 messages/order; closes 7 days after resolution or on full refund |
+| Duplicate delivery / repeated buyer message | **monitored** (daily check, S2-style query) | **stop**: pause Agent-1 |
+| A delivered file fails inspection | **monitored** (I inspect every real delivery) | **stop**: pause, hold the offer |
+| Ledger verify false; Fleet cost ≠ records ≠ Console | **monitored** (daily) | **stop** |
+| Any P1 event; any external action outside the order flow | **monitored** (Fleet Command) | **stop** |
+| Buyer complaint about quality | **monitored** | handled per order; **stop** only if it shows a systematic defect |
+| **Buyer correction request** | **normal workflow** | the revision workflow (v114/v115) runs; **not a stop** |
+
+### 4. Order of activation (controlled test before any public acquisition)
+1. **Seller address.** You confirm it against your own record (section 6).
+2. **v119 daily-fuse fix:** recommended; local, test, rehearse, install. Your approval each step.
+3. **Fleet Control float (section 5) and budget** `economy-fleet-control-ai-budget 30 "canary"`.
+4. **Ceiling B hold** (section 2) and **turns/hour 120** for Agent-1 (founder cognition setting).
+5. **Inference:**
+   - key reinstated (owner action under `/etc`);
+   - `FLEET_COGNITION_PROVIDER=anthropic`;
+   - policy enabled;
+   - controller restart (about 45 s).
+   
+   Both agents stay paused.
+6. **Resume Agent-1.** It reviews its current files with `fleet-qa-3` and republishes (D1). I inspect the published files.
+7. **Open sales**, with **no outward posting** (no outward release) and **no public sharing yet**.
+8. **The controlled test:**
+   - You buy the offer once (owner-proof order) and then send "Thanks!".
+   - **Verify:**
+     - delivery and files;
+     - one message check: reserved, settled once, posted (£0 if promotional), hold released;
+     - the verdict recorded.
+   - **Then you refund £5.00 by hand in PayPal. Verify:**
+     - PayPal shows the refund;
+     - Fleet records it, the order closes as fully refunded, and the books reconcile.
+   - Refund authority stays off.
+9. **Only then, public acquisition:**
+   - Fleet's offer page and sitemap;
+   - a link you share privately with landlords you know;
+   - no agent posting.
+10. **The canary** runs 7 days, or until 3 real paid orders, or until any stop, whichever comes first.
+
+**Success excludes the controlled order.** Owner-proof orders count as operation proof only, never as demand or revenue.
+
+**Success means:**
+- at least 1 independent paid order fulfilled correctly (files inspected by me), reviews pass, nothing owed at close;
+- message checks correct;
+- ceilings A and B respected;
+- daily reconciliation without unexplained difference;
+- the ledger verifies;
+- Agent-1's cash matches its books.
+
+**Reporting:** daily (orders, revenue excluding owner proofs, AI cost by credit source, Fleet Control use, Console
+comparison, events), and immediately on any stop.
+
+**Safe stop:**
+1. pause Agent-1;
+2. hold the offer;
+3. close sales;
+4. clear the Fleet Control budget;
+5. release ceiling B after reconciling;
+6. if needed, provider `none` with the key back to recovery.
+
+Open orders are finished, or refunded by hand.
+
+### 5. The £5 Fleet Control float: source and exact entries
+- **Source:** **a £5.00 transfer from you into the treasury PayPal account** (rail `b71b3f3c-901c-4f22-818b-3e1b1269f420`).
+  The real PayPal balance is **£0.22** now. The £200.00 of capital on the books is unbacked (it sits in agent wallets), so
+  the float must be new money.
+- **Entries, after PayPal shows the completed incoming transaction:**
+  1. `ledger-record-funding <net pence received> paypal:txn:<TXN_ID>`: kind `owner_funding`, **D `fleet:treasury:unallocated`
+     / C `fleet:owner:capital`**, net pence (if PayPal takes a fee, the net amount).
+  2. `economy-paypal-attribute b71b3f3c-901c-4f22-818b-3e1b1269f420 <TXN_ID> <EVENT_CODE> owner_funding paypal:txn:<TXN_ID>`:
+     links the PayPal deposit as the evidence.
+- **Not** `economy-capital-back`: that would back existing capital and leave unallocated at £0, so there would be no float.
+- **Expected afterwards:** unallocated 500p; PayPal 522p; books cash 20,522p; capital-backing difference 0; unbacked still
+  20,000p.
+
+### 6. Seller address: stored value (not corrected)
+- **Stored (v1, set 17 Oct by operator:owner):** individual, legal name set; postal address
+  `3rd floor / 45 Albemarie Street / Mayfair / London / W1S 4JL`.
+- My notes from 20 Oct say "Albemarle" and "owner re-saves in HQ". I have not verified that against your own record, and I
+  have not changed anything.
+- **Please compare with the address you supplied.** If it differs, re-save it in HQ (seller set); I will verify the stored
+  text afterwards.
+
+### Remaining decisions
+1. v119 daily-fuse fix before the canary (recommended), or proceed with ceilings B and C only.
+2. Ceilings: A £10.00, B $15.00, B1 30p/day, C 120/hour (or other values).
+3. The £5 float, by your PayPal transfer.
+4. The seller address check.
+5. Then each step in section 4.
+
+The Console balances for the completed S1+S2 test are still to be confirmed (expected about promotional $98.01, purchased
+$17.22).
+
 ## Agent-1 canary: approval package (prepared 26 Oct ~15Z; nothing activated, deployed, spent or authorised)
 
 Basis: production bc19e05 / schema 118, read-only at about 14:50Z. Credit reconciled at $117.22 before the S1+S2 run; Fleet
