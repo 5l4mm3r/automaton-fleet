@@ -124,7 +124,7 @@ describe.skipIf(!PG_BIN)("v116: promotional AI credit as its own lot (PostgreSQL
       expiredUsdMicrocents: 42 * USD, fleetUse: { calls: 3, usdMicrocents: 3 * USD } });
     expect(st.promotional.find((p: any) => p.grantRef === "anthropic:credit_grant_A2")).toMatchObject({ remainingUsdMicrocents: 0, expired: false, fleetUse: { calls: 1 } });
     expect(st.policy.anthropic.draw_order).toBe("promotional_first");
-    expect(String(st.promotionalTreatment)).toMatch(/not decided/);
+    expect(String(st.promotionalTreatment)).toMatch(/owed to no one and charged to no one/);   // v118
     const lot = String((await lotOf("grant:anthropic:credit_grant_A2")).lot_id);
     await expect(R.one(`fleet.fleet_admin_ai_credit_lot_cost($1, 300, 360, 'not a purchase', $2)`, [lot, OWNER])).rejects.toThrow();
     expect(await R.one(`fleet.fleet_ledger_verify() ->> 'ok'`)).toBe("true");

@@ -162,6 +162,7 @@ ALTER TABLE fleet_control_ai_reservations
   ADD COLUMN held_minor            bigint NOT NULL DEFAULT 0 CHECK (held_minor >= 0),
   ADD COLUMN actual_usd_microcents bigint CHECK (actual_usd_microcents >= 0),
   ADD COLUMN posted_minor          bigint CHECK (posted_minor >= 0),
+  ADD COLUMN charged_micro         bigint CHECK (charged_micro >= 0),   -- the GBP micro this call added to its kind's accrual (v118 reverses the promotional part)
   ADD COLUMN status                text   NOT NULL DEFAULT 'open' CHECK (status IN ('open','unknown','settled','legacy')),
   ADD COLUMN unknown_at            timestamptz,
   ADD COLUMN settled_by            text   CHECK (settled_by ~ '^(controller|operator:[A-Za-z0-9._-]{1,64})$'),
@@ -296,6 +297,7 @@ BEGIN
   END IF;
   UPDATE fleet_control_accrual SET unposted_microcents = v_total - v_charge * 1000000, updated_at = now() WHERE kind = v_kind;
   UPDATE fleet_control_ai_reservations SET status = 'settled', actual_usd_microcents = v_usd, actual_minor = fleet_usd_microcents_minor(v_usd), posted_minor = v_charge,
+         charged_micro = v_micro,
          settled_at = now(), settled_by = CASE WHEN p_actor ~ '^operator:' THEN p_actor ELSE 'controller' END
    WHERE reservation_id = x.reservation_id RETURNING * INTO x;
   IF v_usd > x.max_usd_microcents OR v_charge > x.held_minor THEN

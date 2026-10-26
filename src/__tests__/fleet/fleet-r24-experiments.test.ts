@@ -75,13 +75,21 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
   }
 
   async function setup(allocation = 5_000) {
-    const c = await owner.connect();
-    try {
-      await c.query("BEGIN");
-      await wipeRegistry(c, "fleet");
-      await c.query("COMMIT");
-    } finally {
-      c.release();
+    // A Fleet Control claim from an earlier case's service may still be finishing when the wipe takes every table's
+    // exclusive lock; PostgreSQL then aborts one side (deadlock). The wipe is retried — nothing is weakened.
+    for (let attempt = 1; ; attempt++) {
+      const c = await owner.connect();
+      try {
+        await c.query("BEGIN");
+        await wipeRegistry(c, "fleet");
+        await c.query("COMMIT");
+        break;
+      } catch (err) {
+        await c.query("ROLLBACK").catch(() => undefined);
+        if ((err as { code?: string }).code !== "40P01" || attempt >= 3) throw err;
+      } finally {
+        c.release();
+      }
     }
     await store.setApprovedRuntime({ repo: "https://github.com/5l4mm3r/automaton-fleet", commit: "c".repeat(40) }, "test", { buildId: "d".repeat(64), lockfileSha256: "e".repeat(64) });
     await store.setMaxAgents(2, "test");

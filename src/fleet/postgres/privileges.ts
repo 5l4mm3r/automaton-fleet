@@ -1359,6 +1359,9 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_ai_credit_policy: new Set(["fleet_admin_ai_credit_policy_set", "fleet_admin_ai_credit_draw_order"]),
     fleet_ai_credit_policy_history: new Set(["fleet_admin_ai_credit_policy_set", "fleet_admin_ai_credit_draw_order"]),
     fleet_ai_credit_draws: new Set(["fleet_ai_credit_draw", "fleet_admin_ai_credit_promotional_grant", "fleet_ai_credit_promotional_expire"]),
+    // v118: promotional use attributed to the charge it covered, reversed per payer (owed to no one, charged to no one).
+    fleet_ai_credit_promotional_uses: new Set(["fleet_ai_credit_promotional_use_settle"]),
+    fleet_ai_credit_promotional_accrual: new Set(["fleet_ai_credit_promotional_use_settle"]),
     fleet_card_request_policy: new Set(["fleet_admin_card_request_policy_set"]),
     // v55: the owner's survival protection switch, only by the owner.
     fleet_survival_protection: new Set(["fleet_admin_survival_protection_set"]),
