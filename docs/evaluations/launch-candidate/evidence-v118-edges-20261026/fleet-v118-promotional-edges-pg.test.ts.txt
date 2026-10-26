@@ -1,0 +1,151 @@
+/**
+ * v118 edge verification (owner, Group A approval, 2026-10-26): promotional charges are reversed by the minutely settlement,
+ * so between the call and that pass the payer is charged. Checked here on the real paths (routed inference, the lifecycle
+ * tick, concurrent settlement):
+ *  - a temporary charge awaiting reversal must not kill the agent or settle its estate (survival protection off: "live"),
+ *    nor raise a false exhaustion notice (protection on);
+ *  - concurrent settlement passes never duplicate a reversal;
+ *  - sub-penny calls stay exact (what is charged and what is reversed accrue the same microcents);
+ *  - insufficient cash while promotional credit is available: the result is recorded (documented behaviour).
+ */
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import pg from "pg";
+import { findPgBin } from "./fixtures/ephemeral-pg.js";
+import { startEconomyRegistry, OWNER, type EconomyRegistry } from "./fixtures/economy-registry.js";
+import { PgFleetStore, type CognitionRecord } from "../../fleet/postgres/store.js";
+
+const PG_BIN = findPgBin();
+const route = { tier: "T2", provider: "anthropic", model: "claude-sonnet-5-5", taskClass: "founder_work", source: "class_minimum", scope: "task_step" };
+const rec = (inputTokens: number, outputTokens = 0): CognitionRecord => ({ outcome: "ok", inputTokens, outputTokens, promptSha256: "a".repeat(64),
+  responseSha256: "b".repeat(64), toolCalls: [], errorCode: null, usageSource: "provider", attempts: 1 });
+
+describe.skipIf(!PG_BIN)("v118 edges: the window before a promotional reversal (PostgreSQL)", { timeout: 300_000 }, () => {
+  let R: EconomyRegistry;
+  let svc: PgFleetStore;
+  let A: string, B: string;
+  let rate = 1_000_000;
+  const cash = (a: string) => R.balance(`agent:${a}:cash`);
+  const status = async (a: string) => String(await R.one(`(SELECT status FROM fleet.fleet_agents WHERE agent_id = $1)`, [a]));
+  const events = async (type: string, a: string) => Number(await R.one(`(SELECT count(*) FROM fleet.fleet_events WHERE event_type = $1 AND agent_id = $2)`, [type, a]));
+  const settle = () => R.one<Record<string, any>>(`fleet.svc_ai_credit_settle(20)`);
+
+  beforeAll(async () => {
+    R = await startEconomyRegistry(PG_BIN!, { founders: 2, allocationCents: 100, treasuryCents: 100_000 });
+    [A, B] = R.founders.map((f) => f.id);
+    await R.store.grantServiceRole();
+    svc = new PgFleetStore({ connectionString: R.pgc.serviceUrl });
+    await R.genesis.setCognitionPolicy({ enabled: true, provider: "anthropic", model: "claude-opus-5-5", maxOutputTokens: 4_000, actor: OWNER,
+      inputMicrocents: 400, outputMicrocents: 2_000, cacheWriteMicrocents: 500, cacheReadMicrocents: 20 });
+    for (const a of [A, B]) await R.genesis.setFounderCognition(a, { enabled: true, maxTurnsPerHour: 3_600, dailyBudgetCents: 10_000, reason: "t", actor: OWNER });
+    for (const [t, m] of [["T2", "claude-sonnet-5-5"], ["T3", "claude-opus-5-5"]]) {
+      await R.genesis.cognitionTierVerify(t, m, "test: models api 200", OWNER);
+      await R.genesis.cognitionTierEnable(t, true, OWNER);
+    }
+    await R.genesis.cognitionRoutingSet(true, 2_000, OWNER);
+    for (const a of [A, B]) await R.genesis.founderRoutingSet(a, true, OWNER);
+    await R.one(`fleet.fleet_admin_ai_credit_promotional_grant('anthropic', 'promo-edge', 500, 500, now() - interval '1 day', now() + interval '20 days',
+      'assumed_cutoff', 'test display', 'test console', $1)`, [OWNER]);
+    rate = Number(await R.one(`COALESCE((SELECT rate_micro FROM fleet.fleet_fx_rates WHERE base = 'USD' ORDER BY observed_on DESC, rate_id DESC LIMIT 1), 1000000)`));
+  }, 300_000);
+  afterAll(async () => { await svc?.close(); await R?.close(); });
+
+  /** One call whose charge takes exactly all of the agent's cash, on promotional credit. */
+  async function spendAll(a: string) {
+    const c = await cash(a);
+    let usdCents = Math.floor(c * 1_000_000 / rate);
+    while (Math.ceil(usdCents * rate / 1_000_000) < c) usdCents++;
+    const auth = await svc.cognitionRoutedAuthorize(a, usdCents, route, "c".repeat(64));
+    expect(auth, JSON.stringify(auth)).toMatchObject({ ok: true });
+    const est = Number(await R.one(`(SELECT estimate_cents FROM fleet.fleet_cognition_inflight WHERE request_id = $1)`, [auth.requestId]));
+    const tokens = Math.ceil(Math.ceil(est * 1e12 / rate) / 200);                      // cost ≥ the reservation (T2 input 200 µ¢)
+    const r = await svc.cognitionRoutedRecord(a, String(auth.requestId), rec(tokens), {});
+    return { auth, r, before: c, est };
+  }
+
+  it("survival protection OFF: an agent whose last pence went on promotional credit is not killed before the reversal", async () => {
+    await R.one(`fleet.fleet_admin_survival_protection_agent_set($1, 'live', 'test: the survival rule applies', $2)`, [A, OWNER]);
+    const s = await spendAll(A);
+    console.log("EDGE spendAll A", JSON.stringify({ before: s.before, estimateCents: s.est, record: s.r }));
+    const after = await cash(A);
+    const measure = await R.one<Record<string, any>>(`fleet.fleet_agent_wallet_measure($1)`, [A]);
+    console.log("EDGE A after the call, before any settlement", JSON.stringify({ cash: after, exhausted: measure.exhausted }));
+    const tick = await R.store.lifecycleTick();
+    console.log("EDGE A lifecycle tick", JSON.stringify({ insolvency: tick.insolvency, aiCredits: (tick.aiCredits as any)?.detection?.promotionalUse ?? tick.aiCredits }));
+    const st = await status(A);
+    const estate = Number(await R.one(`(SELECT count(*) FROM fleet.fleet_events WHERE agent_id = $1 AND event_type IN ('agent_wallet_exhausted','agent_died','estate_settled'))`, [A]));
+    console.log("EDGE A after the tick", JSON.stringify({ status: st, cash: await cash(A), deathOrEstateEvents: estate }));
+    expect(st).toBe("active");                                                          // REQUIRED: not killed by a charge being reversed
+    expect(estate).toBe(0);
+  });
+
+  it("survival protection ON: no false exhaustion notice while the reversal is pending", async () => {
+    const s = await spendAll(B);
+    console.log("EDGE spendAll B", JSON.stringify({ before: s.before, record: s.r }));
+    const tick = await R.store.lifecycleTick();
+    console.log("EDGE B tick", JSON.stringify({ insolvency: tick.insolvency }));
+    console.log("EDGE B after", JSON.stringify({ status: await status(B), cash: await cash(B), protectedNotices: await events("agent_exhaustion_protected", B) }));
+    expect(await status(B)).toBe("active");
+    expect(await events("agent_exhaustion_protected", B)).toBe(0);                      // REQUIRED: no false P1 notice
+  });
+
+  it("insufficient cash while promotional credit is available (documented): a call needs the agent's cash until the reversal", async () => {
+    await settle();
+    const c = await cash(B);
+    // The reversal has run: B's cash is back. Spend it all again, then ask for one more call before the next pass.
+    if (c > 0) await spendAll(B);
+    const blocked = await svc.cognitionRoutedAuthorize(B, 1, route, "c".repeat(64));
+    console.log("EDGE B authorize with cash 0 and promotional credit available", JSON.stringify({ cash: await cash(B), authorize: blocked }));
+    await settle();
+    const again = await svc.cognitionRoutedAuthorize(B, 1, route, "c".repeat(64));
+    console.log("EDGE B authorize after the reversal", JSON.stringify({ cash: await cash(B), authorize: again }));
+    if (again.ok) await svc.cognitionRoutedRecord(B, String(again.requestId), rec(1), {});
+    expect(blocked.ok === true || typeof blocked.code === "string").toBe(true);          // recorded either way (documentation, not a pass/fail rule)
+  });
+
+  it("concurrent settlement passes never duplicate a reversal", async () => {
+    await settle();
+    for (let i = 0; i < 3; i++) {
+      const a = await svc.cognitionRoutedAuthorize(B, 5, route, "c".repeat(64));
+      expect(a.ok, JSON.stringify(a)).toBe(true);
+      await svc.cognitionRoutedRecord(B, String(a.requestId), rec(20_000), {});
+    }
+    const pools = [0, 1, 2].map(() => new pg.Pool({ connectionString: R.pgc.serviceUrl, max: 1 }));
+    try {
+      const out = await Promise.allSettled(pools.map((p) => p.query(`SELECT fleet.svc_ai_credit_settle(20) AS r`)));
+      console.log("EDGE concurrent settle", JSON.stringify(out.map((o) => o.status === "fulfilled" ? (o.value.rows[0].r.detection?.promotionalUse ?? o.value.rows[0].r) : String((o as PromiseRejectedResult).reason).slice(0, 160))));
+    } finally { await Promise.all(pools.map((p) => p.end())); }
+    await settle();
+    const dupUses = Number(await R.one(`(SELECT count(*) FROM (SELECT draw_id FROM fleet.fleet_ai_credit_promotional_uses GROUP BY 1 HAVING count(*) > 1) d)`));
+    const dupJournals = Number(await R.one(`(SELECT count(*) FROM (SELECT idempotency_key FROM fleet.fleet_ledger_journal WHERE kind = 'ai_credit_promotional_use' GROUP BY 1 HAVING count(*) > 1) d)`).catch(() => -1));
+    const acc = (await R.q(`SELECT micro::text, posted_minor::text FROM fleet.fleet_ai_credit_promotional_accrual WHERE agent_id = $1`, [B]))[0];
+    const reversed = Number(await R.one(`(SELECT COALESCE(sum(p.amount_cents), 0) FROM fleet.fleet_ledger_postings p JOIN fleet.fleet_ledger_journal j ON j.journal_id = p.journal_id
+      WHERE j.kind = 'ai_credit_promotional_use' AND p.account_id = $1 AND p.side = 'D')`, [`agent:${B}:cash`]));
+    console.log("EDGE concurrency result", JSON.stringify({ dupUses, dupJournals, accrual: acc, reversedToCash: reversed }));
+    expect(dupUses).toBe(0);
+    expect(reversed).toBe(Number(acc.posted_minor));                                    // every reversal posted once
+    expect(await R.one(`fleet.fleet_ledger_verify() ->> 'ok'`)).toBe("true");
+  });
+
+  it("sub-penny calls stay exact: the charge and the reversal accrue the same microcents", async () => {
+    await settle();
+    const c0 = await cash(B);
+    const chargeCarry0 = Number(await R.one(`(SELECT COALESCE(unposted_microcents, 0) FROM fleet.fleet_cognition_accrual WHERE agent_id = $1)`, [B]));
+    const acc0 = (await R.q(`SELECT micro::bigint AS m, posted_minor::bigint AS p FROM fleet.fleet_ai_credit_promotional_accrual WHERE agent_id = $1`, [B]))[0];
+    let micro = 0;
+    for (let i = 0; i < 7; i++) {                                                       // 7 × 1,700 input tokens ≈ 0.25p each
+      const a = await svc.cognitionRoutedAuthorize(B, 1, route, "c".repeat(64));
+      expect(a.ok, JSON.stringify(a)).toBe(true);
+      await svc.cognitionRoutedRecord(B, String(a.requestId), rec(1_700), {});
+      micro += Number(await R.one(`(SELECT charged_microcents FROM fleet.fleet_cognition_log WHERE request_id = $1)`, [a.requestId]));
+    }
+    await settle();
+    const chargeCarry1 = Number(await R.one(`(SELECT unposted_microcents FROM fleet.fleet_cognition_accrual WHERE agent_id = $1)`, [B]));
+    const acc1 = (await R.q(`SELECT micro::bigint AS m, posted_minor::bigint AS p FROM fleet.fleet_ai_credit_promotional_accrual WHERE agent_id = $1`, [B]))[0];
+    const chargedMinor = Math.floor((chargeCarry0 + micro) / 1_000_000);
+    const reversedMinor = Number(acc1.p) - Number(acc0.p);
+    console.log("EDGE sub-penny", JSON.stringify({ calls: 7, microCharged: micro, chargeCarry0, chargeCarry1, promoMicroAdded: Number(acc1.m) - Number(acc0.m),
+      chargedMinor, reversedMinor, cashDelta: (await cash(B)) - c0 }));
+    expect(Number(acc1.m) - Number(acc0.m)).toBe(micro);                                // the same microcents
+    expect((await cash(B)) - c0).toBe(reversedMinor - chargedMinor);                    // exact in whole pence; remainders carried
+  });
+});

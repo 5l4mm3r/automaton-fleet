@@ -423,6 +423,38 @@ tokens** on each warm step, at 20 µ¢ a token. So the tool definitions cost lit
   **Rerun:** services rehearsal (controller code changed), founder-upgrade rehearsal (runtime changed; it also exercises
   the 4,000-token request against the fake Anthropic API) and the revision rehearsal (the target). All non-billable.
 
+## Group A STOPPED before push: v118 edge verification found defects (26 Oct ~14Z; nothing pushed, built or deployed)
+
+Owner approval (26 Oct) covered Group A for 35a3f07 / 0e59645, with focused checks of the promotional settlement first, and
+"if these reveal a runtime/accounting defect, preserve evidence and stop before making further code changes or deploying."
+The checks ran locally on the real paths: routed inference, `lifecycleTick` and the settlement. Evidence is kept in
+`evidence-v118-edges-20261026/` (test source, full output, SHA256SUMS). The test is not committed to `src/`, because two of
+its cases fail.
+
+| Check | Result |
+|---|---|
+| Death or estate from a charge awaiting reversal (protection "live") | **DEFECT.** Agent A spent its last 100p on a call wholly on promotional credit: cash 0, `exhausted: true`. In the next `lifecycleTick` the insolvency pass (4th) ran before the AI-credit settlement (9th): `died: 1`, 2 death/estate events, status `dead`. The same tick then reversed the charge: **a dead agent holding 100p.** |
+| Same, with protection on (production today) | **DEFECT (notice only).** The agent stayed active, but a false P1 `agent_exhaustion_protected` was raised. |
+| Concurrent settlement (3 passes at once) | No duplicate reversal or journal; the books verify. **But** 2 of 3 passes failed on the primary key of `fleet_ai_credit_promotional_uses`, which rolled back everything else in those passes (v70 reclassification, Fleet Control sweep, expiry) until the next minute. A robustness defect. |
+| Sub-penny exactness | **Exact.** 7 calls at 340,000 µ¢: charge and reversal accrued the same 2,380,000 µ¢; whole pence charged 2, reversed 2; cash change 0; remainders carried. |
+| Retries and restart | Covered by the settlement design (one row per draw, idempotency-keyed journals) and the concurrency result: no duplicate. Settling again adds nothing (v118 test). |
+| Insufficient cash while promotional credit is available | **Documented:** with cash 0 before the pass, `authorize` → `FLEET_INSUFFICIENT_ALLOCATION`; after the pass, cash is back and the call is authorised. Up to a minute of refused work. Fleet Control likewise needs unallocated £ to hold a call, even when promotional credit pays (v117 by design). |
+| Over-refund on an uncollectable call (found in code) | **DEFECT.** `fleet_cognition_log.charged_microcents` stores the charge before the v111 shortfall (`migrations-phase23.ts:514`, `v_micro`), but only the collectable part is posted (`migrations-phase111.ts`, `v_charge` capped to cash). v118 reverses from `charged_microcents`, so for such a call it would credit the agent, and reduce the owner payable, for money never charged. It only arises when cash moved between authorisation and record. Not reproduced live. |
+
+**Not done, per the approval:**
+- no code change after these findings;
+- no push, build, side-install or rehearsal;
+- production untouched.
+
+**Correction options (for the owner; not started):**
+- **(a)** Decide which credit pays before the charge is posted, so a promotional draw is never charged at all. The charge
+  paths would draw first and charge only the purchased part. This removes the window, the refusals and the notice.
+- **(b)** Keep the reversal, but make exhaustion and authorisation count pending promotional reversals, and run the
+  settlement before insolvency in `lifecycleTick`.
+- **Both:**
+  - reverse from what was actually posted (exclude uncollectable);
+  - insert promotional-use rows with `ON CONFLICT DO NOTHING` and skip the accrual on conflict.
+
 ## Funding candidate 35a3f07 — L7 resolved; frozen for Group A (prepared 26 Oct ~13:30Z; nothing deployed, posted or activated)
 
 Commit `35a3f079aa090803e8ed719930615574c9db7e8b`, branch `fleet/funding-v116`, LOCAL. Schema 115 → 118 (v116, v117, v118). No
