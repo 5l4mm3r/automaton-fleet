@@ -423,6 +423,146 @@ tokens** on each warm step, at 20 µ¢ a token. So the tool definitions cost lit
   **Rerun:** services rehearsal (controller code changed), founder-upgrade rehearsal (runtime changed; it also exercises
   the 4,000-token request against the fake Anthropic API) and the revision rehearsal (the target). All non-billable.
 
+## Canary candidate a0cb8c8: v119, canary guard, tracker layout (26 Oct ~15:45Z; local; nothing installed or activated)
+
+Branch `fleet/canary-prep`, local, not pushed. It contains:
+- `0fa9534`: harness document tools;
+- `a0cb8c8a999205889683ea49ef1e8702e707d5e7`: v119, `scripts/fleet-canary.sh`, the canary systemd units (not installed) and tests.
+
+Base: production bc19e05 / schema 118. Schema 118 → **119** (one function restated; it posts nothing). No founder runtime or UI
+change.
+
+### v119: the daily limit counts usage whichever credit pays
+`fleet_cognition_state` now computes the rolling-24-hour spend as:
+- the intended charge of every agent-paid call, i.e. its cost at the call's controlled rate whichever credit paid;
+- **plus every reservation of the agent still open** (at its reserved estimate).
+
+The state also reports `usageTodayMicrocents`, `reservedOpenMicrocents` and `chargedTodayMicrocents` (what was actually
+charged), separately. Authorisation is unchanged: one at a time per agent (agent row lock, one live call), refused when the
+estimate does not fit. Nothing is charged, refunded, rewritten or owed; promotional use stays charged to no one.
+
+### Tests (exact)
+- `tsc --noEmit` clean.
+- 33 files run together (`--maxWorkers 4 --minWorkers 1`): **31 passed; 291 of 299 tests passed**, then
+  `fleet-v111-cognition-settlement-pg` passed 10/10 on its own once its daily limit was moved out of the way.
+- **`fleet-cognition-anthropic` still has its 4 known `FLEET_INFERENCE_LOCAL_ONLY` failures (13/17).** The set is not entirely
+  clean.
+
+New or changed:
+
+| File | Result | What it proves |
+|---|---|---|
+| `fleet-v119-daily-limit-pg` (new) | 5/5 | Promotional calls are stopped at 100p with £0 charged and owed. An expired, unrecorded reservation counts until recorded, then once. Concurrent authorisations: one passes, the other `BUSY`. A replay is refused and nothing is recounted. Mixed and purchased calls count their full usage (the charge stays the purchased part). |
+| `fleet-v111-cognition-settlement-pg` | 10/10 | Its daily limit is now set out of the way. **Reason:** v119 refused its first case at the daily limit before the cash rule it tests, and the stranded hold then failed 3 later cases. The cash rule is unchanged and still proved. |
+| `fleet-canary-guard` (new; stub psql/CLI) | 10/10 | `--dry-run` mutates nothing (no action, no marker, no log). Each of 5 triggers stops once (pause, offer hold, sales closed, Fleet Control budget off) and later checks do nothing. An unknown-cost reservation is a warning, not a stop. The end keeps the credit hold while any reservation is open and releases it only when none is. Past `ENDS_AT`, the hourly check ends the canary itself. |
+| `fleet-scenario-document-tools` (new) | 3/3 | the harness wiring, on the saved PDFs |
+
+**Dry run of the guard against production, read-only, 15:23Z:** measures read correctly; the forced-ceiling and the
+past-deadline runs printed exactly the safe-stop and release actions; production unchanged.
+
+### Exact limits for the canary (7 days)
+| Limit | Value | Kind |
+|---|---|---|
+| Agent-1 daily usage (rolling 24 h) | **754p** at charge rates (≈ $10.08 at FX 0.748039), **including open reservations, whichever credit pays** | automatic (v119) |
+| Turns per hour | **120** | automatic |
+| Provider credit for all Fleet calls, 7 days | **$15.00** (= 1,500,000,000 µ¢) | automatic: ceiling hold, plus the hourly guard |
+| Agent-1 cash charges, 7 days | **£10.00** (1,000p) | automatic: the hourly guard stops |
+| Fleet Control, rolling 24 h | **30p** (at most 210p over 7 days, inside the $15) | automatic |
+
+**How the $15 ceiling counts calls in flight:**
+- **The hold:** `canary-agent1-ceiling`, amount = recorded balance − 1,500,000,000 µ¢ at activation.
+- **An agent call** is authorised only if balance − held (engineering and ceiling holds, open Fleet Control maxima, and
+  promotional credit expiring within 60 min) − **every open cognition reservation** (live or expired, at its USD estimate)
+  ≥ its estimate.
+- **A Fleet Control call** reserves only if balance − held ≥ its maximum. It does **not** subtract open agent reservations,
+  so a Fleet Control call that starts while an agent call is in flight can overshoot by at most that Fleet Control call's
+  maximum (message check ≤ 7.1¢; worst case relevance T3 ≤ 21¢). Disclosed; not changed.
+- **Actual costs** replace estimates at settlement. Only an overrun (a provider cost above the estimate) can exceed it; that
+  is recorded and becomes a cost exception that stops the agent.
+
+### Automatic expiry and reservation cleanup
+- **The end** fires at `ENDS_AT` (start + 7 days) via `automaton-fleet-canary-end.timer` (`Persistent=true`). The hourly check
+  also ends the canary once `ENDS_AT` has passed: two independent triggers.
+- **The end:**
+  - runs the safe stop (pause Agent-1, hold the offer, close sales, clear the Fleet Control budget);
+  - releases the ceiling hold **only if** no cognition reservation of Agent-1 and no Fleet Control reservation is open or of
+    unknown cost.
+  - Otherwise the hold stays and the log says so. You then resolve: `economy-cognition-resolve` /
+    `economy-fleet-control-ai-reconcile` from provider evidence, then `economy-engineering-credit-release`.
+- **Reservations clean themselves up where they can:**
+  - a cognition reservation expires after 5 minutes but stays held until recorded or resolved (v111);
+  - a Fleet Control reservation is settled by the minutely sweep after 15 minutes from its recorded consumption, otherwise
+    marked unknown with its hold kept (v117).
+  - Nothing releases credit for an unresolved call.
+- **Not automatic:** setting provider `none` and moving the key back to recovery (root and a restart). That is your step if
+  you want inference fully off after the end.
+
+### What runs persistently without this Claude session
+| Already in production | |
+|---|---|
+| Controller lifecycle pass (every minute) | settlements, the Fleet Control sweep, reservation expiry, promotional-credit expiry |
+| Hourly operations watch | health findings, overdue paid orders, low AI credit → notifications |
+| Fleet Command + owner email notifications | P0–P3 events (offer held, budget changes, cost exceptions, exhaustion alerts) |
+| `automaton-fleet-heartbeat.timer` (5 min) | external monitor ping; failed checks named |
+| Backup (daily) and backup drill (weekly) timers | |
+
+| New with the canary (installed by you at activation) | |
+|---|---|
+| `automaton-fleet-canary-check.timer` (hourly) | the measures above and the automatic safe stop |
+| `automaton-fleet-canary-end.timer` (once, at `ENDS_AT`) | the end and conditional release |
+
+| Needs a session (me) or you | |
+|---|---|
+| Inspecting each real delivered file; Console reconciliation (Fleet's split against the Console); judging complaints; the daily report | |
+
+### Tracker: print-layout correction (separate candidate file; the live offer is NOT changed)
+- **Candidate:** `canary-tracker-candidate/Landlord_Compliance_Tracker.xlsx`, sha256 `7793dff2084dd796…`, 27,965 B.
+- **Changes:**
+  - column widths (Properties A 22 … N 9.5; Rent log A 22, H 30);
+  - wrapping for the property name, tenant, scheme reference and Rent log Notes columns, and the header row;
+  - row 1 repeated on every printed page;
+  - fit to 1 page wide × as many tall.
+  
+  Recalculated and saved with LibreOffice so the computed values are stored.
+- **Identical to the live file:** 1,000 + 200 formulas, all input values, 2,200 date and money formats, 4 conditional-format
+  rules. The £ format is now written `\£#,##0.00`, which displays the same.
+- **Inspector `fleet-qa-3`:** every check passes (recalc 1,200, no errors, cached values match, dates shown, render 2/2). The
+  6 independent acceptance cases pass. Advisory warnings only (expected-results without cases; README spelling).
+- **Render, viewed:** no clipping. The sample name wraps onto 2 lines; the Rent log note wraps within the page.
+- **Cosmetic, left as is:** on the wrapped Rent log sample row, the values sit at the bottom of the taller row while the
+  wrapped cells sit at the top. The sample row still shows OVERDUE (D3, sample dates from 2025).
+- **Files needing a fresh agent review before republishing:**
+  1. `Landlord_Compliance_Tracker.xlsx` (the candidate above, if you adopt it; otherwise the live `f45c3d00…`);
+  2. `README.txt` (`4494dff2…`, unchanged).
+  
+  Both must be reviewed by Agent-1 with `fleet-qa-3`, because the offer's linked review `d06474be` covers an older file. Placing
+  the candidate in Agent-1's workspace is an activation-time step (your approval); Agent-1 then decides and reviews.
+
+### Deployment scope (each step needs your approval; none is authorised)
+1. **Group A for `a0cb8c8`:**
+   - push `fleet/canary-prep` (no force);
+   - VPS build: pins from the build output;
+   - side-install;
+   - data rehearsal 118 → 119 and services rehearsal on disposable copies;
+   - production before/after identity.
+   
+   Founder-upgrade and revision rehearsals are carried forward (no founder file changed).
+2. **Group B:** install bc19e05 → a0cb8c8, schema 118 → 119, about 45 s outage. No agent restart; both agents stay paused;
+   inference off.
+3. **At activation (later approvals):**
+   - the seller address;
+   - the £5 float entries;
+   - the Fleet Control budget of 30p;
+   - the ceiling hold;
+   - Agent-1 at 120 turns/hour;
+   - install the canary config and timers (`ENDS_AT` set);
+   - inference on;
+   - resume Agent-1;
+   - the tracker review;
+   - sales open;
+   - the controlled order, message check and manual refund;
+   - then acquisition.
+
 ## Agent-1 canary: CONSOLIDATED activation package, revised (26 Oct ~15:20Z; supersedes the section below; preparation only)
 
 Nothing is activated, deployed, spent or authorised. Production is bc19e05 / schema 118. Agent-2 is excluded and unchanged.
