@@ -423,6 +423,176 @@ tokens** on each warm step, at 20 µ¢ a token. So the tool definitions cost lit
   **Rerun:** services rehearsal (controller code changed), founder-upgrade rehearsal (runtime changed; it also exercises
   the 4,000-token request against the fake Anthropic API) and the revision rehearsal (the target). All non-billable.
 
+## Funding candidate 35a3f07 — L7 resolved; frozen for Group A (prepared 26 Oct ~13:30Z; nothing deployed, posted or activated)
+
+Commit `35a3f079aa090803e8ed719930615574c9db7e8b`, branch `fleet/funding-v116`, LOCAL. Schema 115 → 118 (v116, v117, v118). No
+founder runtime or UI change. It supersedes 3c4de3d (below) for L7; everything else there stands.
+
+### L7: promotional credit is owed to no one (v118)
+
+**The path today (5ee36d4; and 3c4de3d without v118).** Every AI charge is posted when the call is recorded, before the
+draw is known:
+- agent inference: `D agent:<id>:expense / C agent:<id>:cash`;
+- owner conversation and Fleet Control: `D fleet:expense / C fleet:treasury:unallocated` (v117: the reserved partition);
+- always the v69 legs: `D fleet:treasury:owner_reimbursable / C fleet:owner:payable`.
+
+The consumption then draws lots. A treasury lot is reclassified out of the payable by the settlement (v70). Nothing
+corrected a promotional draw, so **free credit became a cost to the payer and a debt to you**. Production has no
+promotional lot yet (v116 is not installed), so this never happened.
+
+**The correction.** For each draw from a promotional lot, the minutely settlement reverses exactly the covered part of
+that call's own £ charge: the charge in GBP micro × promotional USD ÷ the call's USD.
+- `D fleet:owner:payable / C fleet:treasury:owner_reimbursable`: not owed to you.
+- `D payer cash / C payer expense`: not charged. The payer is the agent (agent cash and expense), or the treasury or Fleet
+  Control (unallocated and `fleet:expense`).
+- Accrued per payer, posted in whole pence, never beyond what was charged.
+
+| Kept separate | Where | Effect |
+|---|---|---|
+| Promotional credit consumed | `fleet_ai_credit_promotional_uses` (one row per draw: payer, USD, £ reversed, basis); status `consumed.promotional` | owed to no one, charged to no one |
+| Purchased credit consumed and its evidenced reimbursement | owner lots, v69 legs unchanged; status `consumed.purchased` with the owner payable | owed to you |
+| Internal charge to agents for promotional use | status `consumed.internalChargeToAgentsForPromotional` = `{policy: "none approved", postedMinor: 0}` | none; any such charge needs a separately approved policy and migration |
+
+**Edge cases:**
+- Engineering runs post no £ charge, so their promotional use is recorded only.
+- A promotional draw whose charge cannot be found within 60 minutes is recorded as `unattributed`. Nothing is reversed, and
+  Fleet Command is told (P2).
+- An owner-conversation call the treasury could not fund in full is held for review (`unfunded_owner_review`), not reversed.
+
+**Known gap, not changed:** an owner-conversation call still books only what unallocated money covers, recording the
+shortfall and an event (v62). That is the same class as the Fleet Control defect, on a path used only when you talk to an
+agent; fixing it is your call.
+
+**No credit entries and no historical refunds are posted.** The 34.81p over-charge stays a separately tracked item.
+
+### Tests: exact results for 35a3f07
+Command, from `~/projects/automaton-fleet-v25`:
+`npx tsc --noEmit -p .` → clean; then
+`npx vitest run --maxWorkers 4 --minWorkers 1 src/__tests__/fleet/fleet-v118-promotional-use-pg.test.ts src/__tests__/fleet/fleet-v117-control-funded-calls-pg.test.ts src/__tests__/fleet/fleet-v116-ai-credit-promotional-pg.test.ts src/__tests__/fleet/fleet-spend-review-v64-pg.test.ts src/__tests__/fleet/fleet-v65-completion-pg.test.ts src/__tests__/fleet/fleet-v68-wake-lessons-pg.test.ts src/__tests__/fleet/fleet-knowledge-successor-pg.test.ts src/__tests__/fleet/fleet-message-check.test.ts src/__tests__/fleet/fleet-r24-experiments.test.ts src/__tests__/fleet/fleet-v66-capital-backing-pg.test.ts src/__tests__/fleet/fleet-v69-ai-credit-reimbursable-pg.test.ts src/__tests__/fleet/fleet-v70-ai-credit-funding-pg.test.ts src/__tests__/fleet/fleet-v71-ai-credit-detection-pg.test.ts src/__tests__/fleet/fleet-v72-ai-credit-acquisition-cost-pg.test.ts src/__tests__/fleet/fleet-v73-ai-credit-historical-cost-pg.test.ts src/__tests__/fleet/fleet-v74-ai-credit-test-period-pg.test.ts src/__tests__/fleet/fleet-v100-obligations-pg.test.ts src/__tests__/fleet/fleet-v111-cognition-settlement-pg.test.ts src/__tests__/fleet/fleet-v115-revision-review.test.ts src/__tests__/fleet/fleet-cognition-routing-pg.test.ts src/__tests__/fleet/fleet-launch-checks-script.test.ts src/__tests__/fleet/fleet-phase4.test.ts src/__tests__/fleet/fleet-f2-migration-paths-pg.test.ts`
+
+**Result: Test Files 23 passed (23); Tests 209 passed (209)** (26 Oct ~13:20Z).
+
+| File | Tests |
+|---|---|
+| fleet-v118-promotional-use-pg (new) | 7 |
+| fleet-v117-control-funded-calls-pg (new) | 7 |
+| fleet-v116-ai-credit-promotional-pg | 5 |
+| fleet-spend-review-v64-pg | 12 |
+| fleet-v65-completion-pg | 5 |
+| fleet-v68-wake-lessons-pg | 7 |
+| fleet-knowledge-successor-pg | 4 |
+| fleet-message-check | 5 |
+| fleet-r24-experiments | 26 |
+| fleet-v66-capital-backing-pg | 5 |
+| fleet-v69-ai-credit-reimbursable-pg | 3 |
+| fleet-v70-ai-credit-funding-pg | 3 |
+| fleet-v71-ai-credit-detection-pg | 5 |
+| fleet-v72-ai-credit-acquisition-cost-pg | 5 |
+| fleet-v73-ai-credit-historical-cost-pg | 4 |
+| fleet-v74-ai-credit-test-period-pg | 3 |
+| fleet-v100-obligations-pg | 20 |
+| fleet-v111-cognition-settlement-pg | 10 |
+| fleet-v115-revision-review | 5 |
+| fleet-cognition-routing-pg | 8 |
+| fleet-launch-checks-script | 5 |
+| fleet-phase4 (privilege audit) | 53 |
+| fleet-f2-migration-paths-pg | 2 |
+
+**v118, proved with amounts:**
+- **An agent call wholly on promotional credit:** after settlement the owner payable, reimbursable partition, agent cash,
+  agent expense, unallocated and `fleet:expense` all equal their values before the call. Settling again changes nothing.
+- **Split $0.40 promotional / $0.20 purchased:** payable, reimbursable and the agent's charge rise by exactly the purchased
+  part.
+- **Purchased only:** the v69 legs are unchanged.
+- **Fleet Control on promotional credit:** the books return to their starting values, with exactly one reversal journal.
+  Settling again adds none, and the request has one consumption event.
+- **Unattributed draw:** recorded and reported; the books are unchanged.
+
+**Disclosed:** at the default worker count, 23 database suites at once caused hook and test timeouts, and a deadlock between
+the r24 test wipe and a Fleet Control claim left running by an earlier case's service. The r24 setup now retries its wipe on
+`40P01` (test-only), and the run above used 4 workers. With 6 or more workers, the r24 wipe deadlocked twice in a row (that
+was before the retry). On its own it passes: 26/26, twice.
+
+### Reconciliation plan, refreshed (read-only, 13:26:55Z)
+Production is unchanged: recorded $16.7617993, no Fleet use since 23 Oct 14:26Z, no holds, no blockers. The entries are the
+same as below; the difference is +45,820,070 µ¢.
+- **The explained price correction:** 46,421,300 µ¢ (Sonnet 5.5 cache reads, published price).
+- **The separate display-precision difference:** −601,230 µ¢ ($0.0060123). That is Console-implied usage ($24.07) minus Fleet
+  at published prices ($24.0639877). It is within the ±$0.01 of two cent readings, and is left in the reconciliation's
+  balance difference.
+
+The Console figures used are yours from 26 Oct. **Immediately before posting, I re-read the Console figures and re-run the
+plan.** If anything moved, the new output is presented before any entry.
+
+### Group A for 35a3f07 (for approval; production unchanged)
+1. **Push:** `git push fleet-origin fleet/funding-v116` (new branch). It carries 7 commits beyond the remote's
+   `fleet/integration-v2.6` (5ee36d4): the docs commits bc0802f, b01433f and d96eefc, plus bc5ac23, 3c4de3d, 1d8fcaf and
+   35a3f07.
+2. **Build on the VPS:** a side-build of 35a3f07. Pins come from the build output; no placeholders.
+3. **Side-install** beside production at `/opt/automaton-fleet/releases/35a3f07…`. `current` stays 5ee36d4; no unit,
+   runtime.env, pin or setting changes.
+4. **Data rehearsal:** `fleet-rollout.sh rehearse 115 → 118` on a throwaway copy. It must show:
+   - row counts identical;
+   - privilege audit clean;
+   - ledger head unchanged (the migrations post nothing);
+   - ledger verified;
+   - re-run applies nothing;
+   - the rollback dump restores 115.
+   
+   Added read-only checks on the copy: anthropic `draw_order = promotional_first` with the rule as evidence; T2 cache read 10;
+   `fleet:treasury:control_reserved` 0; no promotional lot.
+5. **Services rehearsal:** `fleet-upgrade-rehearsal.sh 115 → 118` on the copy. The candidate controller, Operator API and
+   dashboard must be ready on 118; 5ee36d4 must refuse 118.
+6. **Not repeated,** because nothing they test changed: the founder-upgrade rehearsal (no founder runtime change) and the
+   revision rehearsal (v115 and the toolbox are unchanged).
+7. **Closing comparison:** production's schema 115, ledger head and verification, agents (both paused; Agent-2 b60e262 and
+   its PID), settings groups, lots and holds, and permanent history must be identical before and after.
+
+Non-billable: no provider call, no key, no posting.
+
+### Combined S1 + S2 evaluation (proposal; not run; Group D, separate approval)
+- **Build:** the installed funding build (35a3f07 after Group B), in its own throwaway registry with a synthetic founder on
+  Agent-1's runtime 5ee36d4.
+- **Run:** `scen-35a3f07-s1s2`, plan C caps, `--only s1-order-and-correction,s2-interrupted-twice`.
+- **Terms:** frozen read-only at 13:27:32Z as `terms-s1s2-35a3f07.json`, sha256
+  `6ab6d9520188e33ab3835fca6d4ec346c173c95b1c692f39611f9a905e84eabb`. Re-frozen after the install: T2 cache read 20 → 10 is
+  the only expected change, and the ceiling and hold do not depend on prices.
+- **All-in ceiling: 610p** (S1 360p + S2 250p), enforced by the cost meter before every call. It is a limit, not a forecast.
+- **Credit hold: 679,527,158 µ¢ ($6.79527158),** by `creditHoldUsdMicro` (FX 0.748039; acquisition 4955/4129).
+- **Time limits:** 45 + 45 minutes, one attempt each, no rerun.
+- **Costs included:** every model call the harness controller makes passes the meter: founder steps, escalations, the
+  agent's own reviews. Fleet Control is not exercised (no budget in the throwaway registry; the correct S1 path creates no
+  check).
+- **S1 pass:**
+  - the byte check of the actual delivered PDFs, original and corrected;
+  - every delivery reviewed, nothing owed;
+  - I open both files myself.
+- **S2 pass (harness):** two real kills, each with the main process confirmed gone, while the founder is busy; recovery after
+  each; exactly one delivery; no repeated message to the buyer within 60 s after.
+- **S2, added by me:** I open S2's delivered PDF myself. The S2 grader does not inspect the file.
+- **Afterwards:**
+  - import the calls once (they draw promotional credit first if the grant is recorded);
+  - release the hold;
+  - reconcile the run's cost by call against the Console;
+  - check the ledger;
+  - production agents still paused.
+- **Known:** the harness does not keep provider rejection reasons (plan C lost 6).
+
+### Agent-1's configured limits (read-only, 13:27:55Z; nothing changed)
+| Setting | Agent-1 | Agent-2 |
+|---|---|---|
+| Founder cognition | enabled, paused | enabled, paused |
+| Daily budget | 754 | 3000 |
+| Turns per hour | 600 | 60 |
+| Last set | operator:ubuntu, 21 Oct 11:06Z | 10 Oct 12:37Z |
+| Policy default | 754 / 20 per hour (policy disabled) | |
+
+They will be presented again for approval before any launch. Nothing is restored from older notes.
+
+### Fleet Control
+It waits for its own funding and budget approval. Its first real message check must be verified (reserved, settled,
+posted) before unattended customer handling relies on it.
+
 ## Funding candidate 3c4de3d (prepared 26 Oct; for approval; nothing deployed, posted or activated)
 
 Supersedes sections 2 and 3 of the 24 Oct package below where they differ. Branch `fleet/funding-v116`, commit
