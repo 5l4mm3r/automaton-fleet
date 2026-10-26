@@ -423,6 +423,95 @@ tokens** on each warm step, at 20 µ¢ a token. So the tool definitions cost lit
   **Rerun:** services rehearsal (controller code changed), founder-upgrade rehearsal (runtime changed; it also exercises
   the 4,000-token request against the fake Anthropic API) and the revision rehearsal (the target). All non-billable.
 
+## Funding candidate bc19e05: option A repair (prepared 26 Oct ~15Z; local; for renewed Group A approval)
+
+Commit `bc19e05890773199b794a7a4345ed1c77a6467e1`, branch `fleet/funding-v116`, LOCAL. Schema 115 → 118. No founder runtime or UI
+change. It replaces 35a3f07's v118 (the delayed reversal, never deployed); v116 and v117 are amended in place.
+
+**What changed (option A, approved 26 Oct):** recording a call writes its provider-credit consumption first. The lots are
+drawn under their row locks, so concurrent calls serialise there. The function then reads back what promotional credit paid
+and charges only the purchased part: the intended charge × purchased USD ÷ the call's USD, rounded up.
+- **Wholly promotional:** no charge, no owner payable, no exception.
+- **Mixed:** the purchased part only. The overrun and uncollectable exceptions also cover the purchased part only.
+- **Purchased only:** unchanged (v69 legs).
+- **Paths covered:** routed agent inference, legacy agent inference, owner conversation (treasury) and Fleet Control
+  settlement.
+- **The call log keeps four amounts apart:**
+  - intended (`charged_intended_microcents`);
+  - promotional USD (`promotional_usd_microcents`);
+  - purchased before any shortfall (`charged_microcents`);
+  - posted (`charged_cents`).
+
+  Fleet Control reservations store the promotional USD and the £ micro charged.
+- **Reservations never rely on promotional credit.**
+  - An agent's authorisation still needs its own cash for the full estimate, because promotional credit can be spent by a
+    competing call or expire first.
+  - Promotional credit expiring within 60 minutes does not count as available for new reservations
+    (`fleet_provider_credit_held`).
+  - Fleet Control still holds the full £ maximum. Uncertain costs keep their holds.
+- **Gone:** the minutely settlement does nothing for promotional use; the reversal tables, ledger kind and pass are removed.
+- **Unchanged:** wallet-zero death. Survival protection, delayed death and treasury subsidy are not used.
+
+**Tests**, run from `~/projects/automaton-fleet-v25`: `npx tsc --noEmit -p .` clean; then
+`npx vitest run --maxWorkers 4 --minWorkers 1 src/__tests__/fleet/fleet-cognition-routing-pg.test.ts src/__tests__/fleet/fleet-f2-migration-paths-pg.test.ts src/__tests__/fleet/fleet-knowledge-successor-pg.test.ts src/__tests__/fleet/fleet-launch-checks-script.test.ts src/__tests__/fleet/fleet-message-check.test.ts src/__tests__/fleet/fleet-phase4.test.ts src/__tests__/fleet/fleet-r24-experiments.test.ts src/__tests__/fleet/fleet-spend-review-v64-pg.test.ts src/__tests__/fleet/fleet-v100-obligations-pg.test.ts src/__tests__/fleet/fleet-v111-cognition-settlement-pg.test.ts src/__tests__/fleet/fleet-v115-revision-review.test.ts src/__tests__/fleet/fleet-v116-ai-credit-promotional-pg.test.ts src/__tests__/fleet/fleet-v117-control-funded-calls-pg.test.ts src/__tests__/fleet/fleet-v118-promotional-edges-pg.test.ts src/__tests__/fleet/fleet-v118-promotional-use-pg.test.ts src/__tests__/fleet/fleet-v65-completion-pg.test.ts src/__tests__/fleet/fleet-v66-capital-backing-pg.test.ts src/__tests__/fleet/fleet-v68-wake-lessons-pg.test.ts src/__tests__/fleet/fleet-v69-ai-credit-reimbursable-pg.test.ts src/__tests__/fleet/fleet-v70-ai-credit-funding-pg.test.ts src/__tests__/fleet/fleet-v71-ai-credit-detection-pg.test.ts src/__tests__/fleet/fleet-v72-ai-credit-acquisition-cost-pg.test.ts src/__tests__/fleet/fleet-v73-ai-credit-historical-cost-pg.test.ts src/__tests__/fleet/fleet-v74-ai-credit-test-period-pg.test.ts`
+→ **Test Files 24 passed (24); Tests 216 passed (216).**
+
+Also run: `fleet-cognition-hardening` 16/16, `fleet-cognition-accounting` 11/11, `fleet-conversations-v62-pg` 8/8, and
+`fleet-founder-upgrade` 12/12 (its cache-saving expectation now uses the published T2 price: 3,574 × 190).
+`fleet-cognition-anthropic`: 4 of 17 fail with `FLEET_INFERENCE_LOCAL_ONLY`, as before this candidate (a known, pre-existing
+failure recorded on 2e07e70).
+
+**`fleet-v118-promotional-edges-pg` (8):**
+1. **Genuine wallet-zero death is unchanged.** Purchased credit, protection live: cash 0, `died: 1`, status `dead`.
+2. **REGRESSION** (failed on the first draft; evidence `evidence-v118-edges-20261026/`). Protection live, the agent's last
+   100p on promotional credit:
+   - charged 0, cash unchanged, not exhausted;
+   - the tick reports `died: 0`; status active; no death or estate event.
+3. **REGRESSION:** protection on — no false `agent_exhaustion_protected` notice.
+4. **REPRODUCED, the uncollectable case.** An owner transfer moved the agent's cash between authorisation and record, on a
+   mixed call:
+   - purchased charge = ⌈intended × purchased ÷ total⌉;
+   - posted 10p (all the cash left), and the owner payable rose by exactly 10p;
+   - the uncollectable exception equals the shortfall of the purchased part;
+   - the settlement then posts nothing: no refund, ever.
+5. **Concurrency.** Two agents' records, two Fleet Control settles of the same reservation and three settlement passes ran
+   at once:
+   - none failed, and one Fleet Control settle was a replay;
+   - one consumption per request, with draws totalling each call's USD;
+   - the $0.02 grant served exactly $0.02;
+   - the owner payable equals exactly what was posted, and the ledger verifies.
+6. **Sub-penny.** 7 calls each under a penny: accrual carry + posted pence × 10⁶ = carry before + charged micro, exactly.
+7. **Boundaries:**
+   - a grant expiring within the hour is counted as held;
+   - a grant that expires between authorisation and record draws purchased credit, charged in full (the authorisation
+     covered it);
+   - a replayed record → `FLEET_COGNITION_ALREADY_RECORDED`, one consumption;
+   - a late result (expired reservation) on promotional credit → charged 0, once.
+8. **Documented:** with cash 0 and promotional credit left, authorisation → `FLEET_INSUFFICIENT_ALLOCATION`.
+
+**`fleet-v118-promotional-use-pg` (6), at record time:**
+- **Wholly promotional:** every balance unchanged.
+- **Split $0.40 / $0.20:** payable, reimbursable, agent cash and expense move by exactly the purchased posting.
+- **Purchased only:** unchanged.
+- **Fleet Control on promotional credit:** posted 0, the hold released whole, the books unchanged.
+- **Status:** the three kept apart (internal agent charge: none approved).
+
+**Group A for bc19e05 (for renewed approval; production unchanged).**
+- **Push:** `git push fleet-origin fleet/funding-v116`, no force. It carries 9 commits beyond the remote's
+  `fleet/integration-v2.6`: bc0802f, b01433f, d96eefc, bc5ac23, 3c4de3d, 1d8fcaf, 35a3f07, 0e59645, 5c4a133, then bc19e05
+  (and this docs commit).
+- **Then:**
+  - side-build;
+  - side-install beside production (`current` stays 5ee36d4);
+  - `fleet-rollout.sh rehearse 115 → 118` and `fleet-upgrade-rehearsal.sh 115 → 118` on throwaway copies;
+  - privilege audit, rollback dump and before/after production identity.
+- **Added check on the copy:** both record functions read the promotional draw (`fleet_ai_credit_promotional_drawn`
+  present); no promotional lot exists, so no charge changes.
+- **Not repeated** (unchanged founder runtime): the founder-upgrade and revision rehearsals.
+
+**S1+S2 terms:** the prices are unchanged, so the ceiling (610p) and hold (679,527,158 µ¢) stand. The run id is re-frozen as
+`scen-<installed commit>-s1s2` after the install.
+
 ## Group A STOPPED before push: v118 edge verification found defects (26 Oct ~14Z; nothing pushed, built or deployed)
 
 Owner approval (26 Oct) covered Group A for 35a3f07 / 0e59645, with focused checks of the promotional settlement first, and
