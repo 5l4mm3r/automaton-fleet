@@ -1,0 +1,13 @@
+[
+  {
+    "delivery_id": "39a02e05-d5c2-4948-8a14-8891101d5dcf",
+    "order_id": "a319ea6f-b8b1-4ab5-be61-007fba555c5c",
+    "status": "sent",
+    "resend_reason": null,
+    "created_at": "2026-10-26T14:35:02.314Z",
+    "file_name": "move-in-inventory-checklist.pdf",
+    "content_sha256": "13930ef96602a18d2d9471994093b603f26bdd85b266ec560f862c1be36f5cfb",
+    "verdict": "pass",
+    "automated_ok": true
+  }
+]

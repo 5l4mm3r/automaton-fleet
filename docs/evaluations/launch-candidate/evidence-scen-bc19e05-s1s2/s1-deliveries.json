@@ -1,0 +1,24 @@
+[
+  {
+    "delivery_id": "a3cfb218-2aab-4706-877e-2a6422389357",
+    "order_id": "d3ebbbd7-09f9-42cd-b5ba-2b8ffa114c58",
+    "status": "sent",
+    "resend_reason": null,
+    "created_at": "2026-10-26T14:26:41.226Z",
+    "file_name": "gas-safety-landlord-annual-checklist.pdf",
+    "content_sha256": "32adb6332b9978f5ca3cec3add0954a58d2e2dbfd252182b977d7955fe5245e8",
+    "verdict": "pass",
+    "automated_ok": true
+  },
+  {
+    "delivery_id": "a21f56ee-a8fe-4425-b1df-d44324dbf2dd",
+    "order_id": "d3ebbbd7-09f9-42cd-b5ba-2b8ffa114c58",
+    "status": "sent",
+    "resend_reason": "Buyer requested a write-in line under point 7 for the date of the next annual gas safety check; revised PDF adds 'Date of next annual check' line.",
+    "created_at": "2026-10-26T14:29:21.474Z",
+    "file_name": "gas-safety-landlord-annual-checklist.pdf",
+    "content_sha256": "7c5125845da9f6c2c063bfbbcbf93122cba38a8e166374a033995359825e784c",
+    "verdict": "pass",
+    "automated_ok": true
+  }
+]

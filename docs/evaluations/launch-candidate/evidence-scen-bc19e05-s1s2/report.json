@@ -1,0 +1,93 @@
+{
+  "runId": "scen-bc19e05-s1s2",
+  "termsSha256": "f5be12a40c8f4168c5e77311dbd76ca92be1acfc61f4c971978e982b476ab2d0",
+  "ceilingPence": 610,
+  "release": {
+    "repo": "https://github.com/5l4mm3r/automaton-fleet",
+    "commit": "bc19e05890773199b794a7a4345ed1c77a6467e1",
+    "buildId": "721bb15dfa906bb6e1e37af92b6c8425a64a8bbf8d3f87cdd5d24b6b54ca9ee8",
+    "lockfileSha256": "1df54e3526cb39c847d18fec14f1d4e3595557e34d94040c5b774f9b2f2a21c1"
+  },
+  "results": [
+    {
+      "id": "s1-order-and-correction",
+      "verdict": "incomplete",
+      "reason": "delivered twice, but the documents could not be graded (no document tools on this host)",
+      "observations": {
+        "calls": 17,
+        "minutesToFirstDelivery": 2.4,
+        "minutesToAnswer": 2.7,
+        "minutesToResolution": 2.7,
+        "sentDeliveries": 2,
+        "reviews": [
+          {
+            "verdict": "pass",
+            "automated_ok": true
+          },
+          {
+            "verdict": "pass",
+            "automated_ok": true
+          }
+        ],
+        "openAtEnd": []
+      },
+      "cost": {
+        "calls": 18,
+        "refused": 0,
+        "usdMicro": "105550040",
+        "allInMicro": "94750497",
+        "capPence": 360
+      },
+      "startedAt": "2026-10-26T14:24:06.301Z",
+      "endedAt": "2026-10-26T14:29:44.552Z",
+      "founder": "01M5W9HYE9J020YTA1X568512E"
+    },
+    {
+      "id": "s2-interrupted-twice",
+      "verdict": "completed",
+      "reason": "recovered from two hard kills and delivered exactly once, no message repeated",
+      "observations": {
+        "calls": 21,
+        "kills": [
+          {
+            "at": "2026-10-26T14:30:51.448Z",
+            "callsBefore": 2,
+            "pid": 2106087,
+            "signalNote": "systemctl kill exited non-zero: Failed to kill unit automaton-fleet-founder@01M5W9W9376WXJ6YSTA54RK8SD.service: Failed to send signal SIGKILL to auxiliary processes: Invalid argument"
+          },
+          {
+            "at": "2026-10-26T14:31:32.647Z",
+            "callsBefore": 4,
+            "pid": 2106207,
+            "signalNote": "systemctl kill exited non-zero: Failed to kill unit automaton-fleet-founder@01M5W9W9376WXJ6YSTA54RK8SD.service: Failed to send signal SIGKILL to auxiliary processes: Invalid argument"
+          }
+        ],
+        "minutes": 6.1,
+        "deliveries": [
+          "sent"
+        ],
+        "mailsMentioningTheProduct": 1,
+        "repeatedMessages": 0
+      },
+      "cost": {
+        "calls": 21,
+        "refused": 0,
+        "usdMicro": "93416480",
+        "allInMicro": "83858403",
+        "capPence": 250
+      },
+      "startedAt": "2026-10-26T14:29:44.553Z",
+      "endedAt": "2026-10-26T14:36:05.687Z",
+      "founder": "01M5W9W9376WXJ6YSTA54RK8SD"
+    }
+  ],
+  "total": {
+    "calls": 39,
+    "usdMicro": "198966520",
+    "allInMicro": "178608900"
+  },
+  "callsFiles": [
+    "/var/lib/automaton-fleet-eval/scen-bc19e05-s1s2/s1-order-and-correction/calls.jsonl",
+    "/var/lib/automaton-fleet-eval/scen-bc19e05-s1s2/s2-interrupted-twice/calls.jsonl"
+  ]
+}

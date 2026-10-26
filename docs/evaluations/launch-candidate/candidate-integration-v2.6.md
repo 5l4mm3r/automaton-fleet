@@ -423,6 +423,80 @@ tokens** on each warm step, at 20 µ¢ a token. So the tool definitions cost lit
   **Rerun:** services rehearsal (controller code changed), founder-upgrade rehearsal (runtime changed; it also exercises
   the 4,000-token request against the fake Anthropic API) and the revision rehearsal (the target). All non-billable.
 
+## S1+S2 on bc19e05 with real Anthropic (`scen-bc19e05-s1s2`, 26 Oct 14:24–14:36Z; owner-approved)
+
+**Terms:** `terms-s1s2-bc19e05.json` (sha256 `4c428fa1…`, re-checked before start).
+- Ceiling 610p (S1 360p, S2 250p).
+- Hold 679,527,158 µ¢, placed 14:24:04Z.
+- 45 minutes per scenario, one attempt, no rerun, no cap change.
+
+**The run:** the installed release `bc19e05` (build `721bb15d…`), with a synthetic founder in a throwaway registry and all
+external actions simulated.
+- **Correction to my terms summary:** the synthetic founder ran the **release commit bc19e05**, not 5ee36d4 as stated. The
+  founder-runtime code is identical (no founder file changed between them).
+- **Key:** the recovery key was used for this run only. A 0600 copy owned by the controller's service user sat in
+  `/run/fleet-scen-bc19e05-s1s2/` from 14:24:05Z and was shredded at 14:36:05Z; its absence was verified. It was never
+  displayed. The evidence has no key-shaped string.
+- **Production throughout:** both agents paused (same PIDs), policy off, provider `none`.
+
+| | S1: order + correction | S2: two hard kills |
+|---|---|---|
+| Harness verdict | `incomplete`: "delivered twice, but the documents could not be graded (no document tools on this host)" | **`completed`**: "recovered from two hard kills and delivered exactly once, no message repeated" |
+| Cause of S1's verdict | **Harness defect:** `scenario-suite` in `src/fleet/founder/cli.ts` never passes `documentPython`, so the byte grader cannot run from this command | — |
+| Calls / cost | 18 Opus calls (16 billed, 2 provider errors uncharged); **$1.0555004; 94.75p all-in** (cap 360p) | 21 Opus calls (19 billed, 2 provider errors uncharged); **$0.9341648; 83.86p all-in** (cap 250p) |
+| Time | first delivery 2.4 min; correction asked 14:26:42Z; revised PDF 14:29:21Z (2.7 min to resolution); ended 14:29:44Z | 6.1 min; ended 14:36:05Z |
+| Stop reason | scenario finished (resolved, nothing owed); not the ceiling, not the time limit | scenario finished; not the ceiling, not the time limit |
+
+**S1 documents (checked by me; the release's own grader run on the delivered bytes after the run):**
+- **Original** `32adb633…`: one A4 page, "Gas safety: the landlord's annual 10-point checklist" (England), points 1–10, each
+  with a tick box; property, date and next-check write-in lines; access and emergency notes; source footer. No clipping or
+  overlap.
+- **Revision** `7c512584…`: a different file. The only text change (pdftotext diff) is the write-in line **"Date of next
+  annual check" directly under point 7**, which is what the buyer asked for ("Point 7 should also have a line to write the
+  date of the next annual check"). Still one A4 page.
+- **`gradeS1Documents`** (`fleet-python`, pypdfium2 5.13 / pypdf 6.19): `ok: true`, `identical: false`. Both versions have 10
+  points, 10 tick boxes, gasSafety true and no inspector fails. In the revision: `correction: found, "Date of next annual
+  check", drawn line`.
+- **Both deliveries** passed their own review (`automated_ok`). The buyer received two emails (delivery, then revision with
+  its explanation). Nothing was owed at the end.
+- **Judgement:** S1's fulfilment and correction **pass on the documents**. The harness verdict stays recorded as
+  `incomplete` because of its own wiring defect; it is not rewritten.
+
+**S2 recovery (checked by me in the host log):**
+- **Kill 1** 14:30:51Z: main process 2106087 SIGKILLed (`status=9/KILL`); restarted with a new instance.
+- **Kill 2** 14:31:32Z: main process 2106207 SIGKILLed; restarted again.
+- The systemd note "Failed to send signal SIGKILL to auxiliary processes" is the known, recorded behaviour: the main process
+  was confirmed gone each time.
+- After recovery: **exactly one delivery** (14:35:02Z, review pass), **one buyer email**, **0 repeated messages**.
+- **Document** `13930ef9…`: one A4 page, "Move-in Inventory Checklist", furnished flat (England), room by room (entrance,
+  living room, kitchen, bedrooms, bathroom, throughout), a G/F/P and notes grid, meters, keys and documents, and signatures.
+  No clipping. It matches the order ("a one-page PDF … for a furnished flat (England), room by room").
+- **Judgement:** S2 **passes**.
+
+**The 4 provider errors:** each has an Anthropic request id (`req_011CgR17…`, `req_011CgR1K…`, `req_011CgR1d…`,
+`req_011CgR1k…`) and was uncharged. The harness does not keep the provider's rejection reason (a known gap).
+
+**Costs and credit, imported once:**
+- `economy-engineering-calls-import`: **39 recorded, 0 already recorded; $1.9896652 (198,966,520 µ¢); 178.61p all-in**
+  (ceiling 610p).
+- 35 consumption events; 0 calls of unknown cost.
+- **Hold released** (all calls settled; nothing unresolved): held 0; free $115.2303348.
+- **Fleet's allocation:** the whole $1.9896652 drew from the promotional lot (included credit first). Promotional
+  $98.0103348, purchased $17.22, total $115.2303348.
+- Owner payable 1,081p unchanged; no £ journal (engineering runs post none); ledger verifies.
+- **Not yet confirmed: which balance Anthropic billed.** The Console should show about promotional $98.01, purchased $17.22.
+  Any difference is a discrepancy to report and reconcile, not to assume away.
+
+**Evidence:** `evidence-scen-bc19e05-s1s2/` holds the report, the S1 grade, the three PDFs, deliveries, the buyer's message,
+the import and the release (SHA256SUMS). The full run evidence is at `/var/lib/automaton-fleet-eval/scen-bc19e05-s1s2/` (root).
+
+**Remaining for an Agent-1 canary (from this run):**
+1. **The harness defect.** `scenario-suite` should pass the toolchain's `fleet-python` as `documentPython`, so S1 grades
+   itself. This is a harness-only fix.
+2. **The Console reconciliation** of this run's $1.99.
+3. **The canary decisions already listed:** L4 Fleet Control funding and budget, L5 Agent-1 activation and spending terms
+   (with current values: 754 / 600 per hour), and L6 the sales channel.
+
 ## RECONCILED: Fleet's provider credit equals the Console (26 Oct, 14:21Z; owner-approved entries)
 
 **Console (Kai, Billing, 26 Oct):**

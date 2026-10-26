@@ -1,0 +1,13 @@
+{
+  "ok": true,
+  "run": {
+    "calls": 39,
+    "usdMicro": 198966520,
+    "allInMicro": 178608900
+  },
+  "runId": "scen-bc19e05-s1s2",
+  "recorded": 39,
+  "usdMicro": 198966520,
+  "allInMicro": 178608900,
+  "alreadyRecorded": 0
+}

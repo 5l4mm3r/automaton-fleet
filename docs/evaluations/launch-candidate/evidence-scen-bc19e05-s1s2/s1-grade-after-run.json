@@ -1,0 +1,50 @@
+32adb6332b9978f5
+7c5125845da9f6c2
+{
+  "ok": true,
+  "reasons": [],
+  "identical": false,
+  "first": {
+    "points": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10
+    ],
+    "missingPoints": [],
+    "tickBoxes": 10,
+    "gasSafety": true,
+    "ok": true,
+    "inspectorFails": []
+  },
+  "second": {
+    "points": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10
+    ],
+    "missingPoints": [],
+    "tickBoxes": 10,
+    "gasSafety": true,
+    "ok": true,
+    "correction": {
+      "found": true,
+      "label": "Date of next annual check",
+      "writeIn": "drawn line"
+    },
+    "inspectorFails": []
+  }
+}
