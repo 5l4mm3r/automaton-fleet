@@ -1,0 +1,14 @@
+# The canary's end, once. NOT INSTALLED by default: at activation the owner sets OnCalendar to ENDS_AT (UTC) in a drop-in, e.g.
+#   [Timer]
+#   OnCalendar=
+#   OnCalendar=2026-11-03 15:00:00 UTC
+# The hourly check also ends the canary once ENDS_AT has passed (a second, independent trigger).
+[Unit]
+Description=Automaton Fleet canary end (once)
+
+[Timer]
+OnCalendar=2099-01-01 00:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

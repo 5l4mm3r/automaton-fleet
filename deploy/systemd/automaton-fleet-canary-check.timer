@@ -1,0 +1,11 @@
+# Hourly canary checks while the canary runs. NOT INSTALLED by default (owner, at activation).
+[Unit]
+Description=Automaton Fleet canary checks, hourly
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

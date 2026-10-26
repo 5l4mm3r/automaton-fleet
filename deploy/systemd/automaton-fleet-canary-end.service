@@ -1,0 +1,11 @@
+# Agent-1 canary guard: end (scripts/fleet-canary.sh). NOT INSTALLED by default: installed by the owner at canary activation,
+# removed at its end. Runs as the operator (owner CLI via admin.env group; read-only psql via sudo -u postgres).
+[Unit]
+Description=Automaton Fleet canary guard (end)
+
+[Service]
+Type=oneshot
+User=ubuntu
+Environment=FLEET_CANARY_CONF=/home/ubuntu/canary/canary.conf
+ExecStart=/opt/automaton-fleet/current/scripts/fleet-canary.sh end
+TimeoutStartSec=300s

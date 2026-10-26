@@ -49,7 +49,8 @@ describe.skipIf(!PG_BIN)("v111 cognition settlement integrity (PostgreSQL)", { t
       SELECT 'anthropic', 'adjustment', 10000::bigint * 1000000 - fleet.fleet_provider_credit_balance('anthropic'), 'test: exact credit', 'operator:test'`);
     await R.genesis.setCognitionPolicy({ enabled: true, provider: "anthropic", model: "claude-opus-5-5", maxOutputTokens: 4_000, actor: OWNER,
       inputMicrocents: 400, outputMicrocents: 2_000, cacheWriteMicrocents: 500, cacheReadMicrocents: 20 });
-    await R.genesis.setFounderCognition(A, { enabled: true, maxTurnsPerHour: 3_600, dailyBudgetCents: 10_000, reason: "t", actor: OWNER });
+    // v119: open reservations count toward the daily limit too; this suite tests the CASH rule for them, so the limit is set out of the way.
+    await R.genesis.setFounderCognition(A, { enabled: true, maxTurnsPerHour: 3_600, dailyBudgetCents: 1_000_000, reason: "t", actor: OWNER });
     for (const [t, m] of [["T2", "claude-sonnet-5-5"], ["T3", "claude-opus-5-5"]]) {
       await R.genesis.cognitionTierVerify(t, m, "test: models api 200", OWNER);
       await R.genesis.cognitionTierEnable(t, true, OWNER);
