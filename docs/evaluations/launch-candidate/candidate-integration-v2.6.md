@@ -3133,3 +3133,73 @@ was rehearsed in step 6a.
 - any paid call.
 
 These are Stage 1, with its own approval.
+
+## Groups B and C INSTALLED (26 Oct, 18:52–18:55Z): production on 7c194b8, schema 120; Agent-1 upgraded while paused
+
+Approved by the owner for commit `7c194b8c2348baa8fa5d34bd7ef6b201dc4911c2`, build
+`1100ee336a61bb450417a1a912389505c410330341b9a1fcbf7ef2f727976901`. Group C ran only after Group B had verified.
+
+**Group B** (`~/rlc137/install.sh`, sha256 `0e00fc5b…17c9` verified before the run; `FLEET_ROLLOUT_AUTO_RESTORE` unset):
+
+- **Gates:** all passed.
+- **Pre-install backup:** `~/rlc137/baseline-pre-install-7c194b8-20261026T185215Z`, 5,457 dump entries; kept, not
+  restored. Its summary line prints "toc 0 lines", a quirk of that line; the gate's own count read 5,457.
+- **Release 81e1ae5 → 7c194b8, schema 119 → 120:**
+  - **outage 18:53:16–18:54:02Z (46 s)**;
+  - reconciliation OK;
+  - `RELEASE 7c194b8 DEPLOYED 18:54:10Z`, readyz 200;
+  - root UI 0.26.2 reused.
+- **Verified:**
+  - both agents paused with the same PIDs at that point;
+  - inference off;
+  - tiers, ledger head, credit and owner payable unchanged;
+  - zero owner tasks, empty task lists and digests;
+  - unit files unchanged, flags false, permissions closed, ledger verified.
+
+**Group C** (Agent-1 only):
+
+- `upgrade-preflight`: ok (5ee36d4 → 7c194b8, 1,087 state files).
+- `upgrade-runtime`: **verified**.
+  - **upgradeId `cc7e1df3-b150-4f68-9879-6ed84cd5a4aa`**;
+  - downtime 2.6 s; PID 2004178 → **2135441**;
+  - one health challenge passed after 1.4 s;
+  - identity, credential, memory, mind and workspace byte-identical (state sha `258c26ba…`, 1,087 files, nothing lost,
+    changed or added);
+  - Agent-1's ledger accounts unchanged (cash 8,943, expense 1,057; 941 journals, last seq 1176);
+  - backup `/var/lib/automaton-fleet-upgrades/cc7e1df3-b150-4f68-9879-6ed84cd5a4aa`.
+- **Rollback, exact:**
+  `sudo /opt/automaton-fleet/current/scripts/fleet-founders.sh rollback-runtime 01M3F50SH7PNX2E3GST13J52AS cc7e1df3-b150-4f68-9879-6ed84cd5a4aa "<reason>"`
+  (back to 5ee36d4; rehearsed in Group A step 6a).
+- **Agent-2:** b60e262, PID 866408, paused; untouched before, during and after.
+
+**Final state (18:55Z, read-only):**
+
+- **Release:** `current` = releases/7c194b8. runtime.env pins 7c194b8 / `1100ee33…6901`; fleet_state runtime 7c194b8,
+  cap 2, DEVELOPMENT, 2 living.
+- **Schema:** 120.
+- **Agents:**
+  - Agent-1 7c194b8, paused, 754p/day, 600 turns/h, PID 2135441;
+  - Agent-2 b60e262, paused, 3,000p/day, 60 turns/h, PID 866408.
+- **Ledger:** head 1176 `e214852e…`, verify true. Owner payable 1,081p.
+- **Credit:** balance 11,523,033,480 µ¢, held 0, open holds 0.
+- **Off and closed:**
+  - inference off (policy disabled, `FLEET_COGNITION_PROVIDER=none`, no key-file line);
+  - Fleet Control budget unset;
+  - sales closed;
+  - no outward release, refund authority, custody activation or identity/card autonomy;
+  - no canary units;
+  - owner tasks 0;
+  - the four flags false.
+
+## Stage 1: ready for its approval (preconditions now met)
+
+- v120 is installed, and Agent-1 runs the runtime that shows owner tasks.
+- The Stage 1 steps, task text, stops and approval list are as recorded above under "Stage 1: safeguards, task,
+  review".
+- **The hold, recomputed by SQL just now:** 11,523,033,480 − 0 − 1,500,000,000 = **10,023,033,480 µ¢**. It is
+  recomputed again immediately before placing it.
+- **Still owed by you before Stage 1:**
+  - the seller-address check ("Albemarie");
+  - the £5 treasury deposit and its transaction ID.
+- **Scope:** the tracker remains an execution test (Stages 1–2). Stage 3 waits for Agent-1's evidence-backed offer
+  proposal. No repeat of the completed paid S1+S2 tests is planned.
