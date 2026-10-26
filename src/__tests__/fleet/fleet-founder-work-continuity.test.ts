@@ -46,7 +46,8 @@ function rig(script: (turn: number, step: number, packet: string) => Step, o: { 
   }
   const world = { eventsDigest: hex32(1), notices: [] as Array<{ id: string; at: string; body: string }>, ownerPending: 0, cash: 9_906,
     requests: [] as unknown[], storefrontStatus: "draft", economyCalls: [] as string[], refuse: {} as Record<string, string>,
-    recentEvents: [] as Array<{ kind: string; id: string; at: string; tool?: string }>, obligations: undefined as unknown[] | undefined };
+    recentEvents: [] as Array<{ kind: string; id: string; at: string; tool?: string }>, obligations: undefined as unknown[] | undefined,
+    ownerTasks: undefined as Array<{ id: string; at: string; title: string; body: string }> | undefined, ownerTasksDigest: undefined as string | undefined };
   const packets: string[] = [];
   const outputsSeen: string[] = [];
   const imagesSeen: Array<{ turn: number; step: number; images: number }> = [];
@@ -55,7 +56,8 @@ function rig(script: (turn: number, step: number, packet: string) => Step, o: { 
     cognitionStatus: async () => ({ policyEnabled: true, provider: "anthropic", founderEnabled: true, paused: false, routing: { active: true },
       capabilities: { ...capabilityView(CAPS, true), reproductionExecutable: false },
       attention: { ownerPending: world.ownerPending, eventsDigest: world.eventsDigest, notices: world.notices, recentEvents: world.recentEvents,
-        ...(world.obligations ? { customerObligations: world.obligations } : {}) },
+        ...(world.obligations ? { customerObligations: world.obligations } : {}),
+        ...(world.ownerTasks ? { ownerTasks: world.ownerTasks, ownerTasksDigest: world.ownerTasksDigest } : {}) },
       survival: { survivalEquityCents: world.cash, inferenceTodayCents: 80, burnPerDayCents: 40, runwayDays: 240 } }),
     ledger: async () => ({ cash: world.cash, survivalEquity: world.cash, genesisAllocation: 10_000, externalCustomerRevenue: 0 }),
     ownerRequests: async () => ({ ok: true, requests: world.requests }),
@@ -810,5 +812,46 @@ describe("work continuity (owner acceptance, 2026-10-18)", () => {
     expect(seen).toContain("FLEET_CAPABILITY_NOT_GRANTABLE");                  // the manifest still decides, per call
     expect(seen).toContain("FLEET_SALES_CLOSED");                              // the controller still decides, per call
     expect(onB.world.economyCalls.filter((x) => x === "offer.publish")).toHaveLength(1);    // only o9 reached the controller (and was refused)
+  });
+  it("11. v120: an owner task is in every working packet until closed — attributed to the owner, after a restart too; a new one wakes a waiting founder; no owner conversation turn", async () => {
+    const TASK = { id: "7a1e0c55-0000-4000-8000-000000000001", at: "2026-10-27T10:00:00Z", title: "Replace your tracker's files",
+      body: "The corrected workbook is in from-owner/tracker-v6/. Remove tracker.zip, attach the workbook, inspect, and review exactly the two files." };
+    const r = rig((t, s) => (s === 1 ? { calls: [c("list_files", { path: "" })] } : { calls: [c("sleep", { reason: "nothing new" })] }));
+    r.world.ownerTasks = [TASK];
+    r.world.ownerTasksDigest = hex32(11);
+    await r.mind.turn("hb 1");                                                   // the first ordinary working turn
+    const first = r.packets[0];
+    expect(first).toContain("Owner task 7a1e0c55");
+    expect(first).toContain("from your owner");
+    expect(first).toContain("never approves spending, identity use, accounts or outward action");
+    expect(first).toContain(TASK.body);
+    expect(first).not.toMatch(/Fleet Control notice[^\n]*Replace your tracker/);  // never labelled as Fleet Control
+    await r.mind.turn("hb 2");
+    expect(r.packets.every((p) => p.includes(TASK.body))).toBe(true);           // durable: every packet, not once
+    expect(r.world.economyCalls).not.toContain("owner.claim");                   // no owner conversation turn (no treasury payer)
+    // A restart: the task is still in the first packet of the new process.
+    const again = rig(() => ({ calls: [c("sleep", { reason: "x" })] }), { root: r.root });
+    Object.assign(again.world, r.world, { economyCalls: [] });
+    await again.mind.turn("after restart");
+    expect(again.packets.length).toBeGreaterThan(0);                             // the previous turn did work: the restart thinks
+    expect(again.packets[0]).toContain(TASK.body);
+    // Waiting (stalled): unchanged state costs nothing; a NEW task wakes it, with both tasks in the packet.
+    await beats(r, 40);
+    const waiting = r.infers();
+    await beats(r, 10);
+    expect(r.infers()).toBe(waiting);
+    const T2 = { ...TASK, id: "7a1e0c55-0000-4000-8000-000000000002", title: "Second task", body: "Record what you changed in your field journal, briefly." };
+    r.world.ownerTasks = [TASK, T2];
+    r.world.ownerTasksDigest = hex32(12);
+    await beats(r, 2);
+    expect(r.infers()).toBeGreaterThan(waiting);
+    expect(r.packets.at(-1)).toContain(T2.body);
+    expect(r.packets.at(-1)).toContain(TASK.body);
+    // Closed by the owner: gone from the next packet.
+    r.world.ownerTasks = [T2];
+    r.world.ownerTasksDigest = hex32(13);
+    await beats(r, 2);
+    expect(r.packets.at(-1)).not.toContain(TASK.body);
+    expect(r.world.economyCalls).not.toContain("owner.claim");
   });
 });

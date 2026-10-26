@@ -2463,3 +2463,407 @@ review. The delivered files are still checked by hand before any pass is claimed
    cluster inventory.
 6. **Known and recorded:** the 8 failures the desktop recorded in `fleet-cognition-anthropic`, `r24-experiments`,
    `research` and `storefront-gateway-pg` (present before this work; not in the release evidence set).
+
+## Staged canary activation package: Agent-1 (prepared 26 Oct, revision 1; PREPARATION ONLY, nothing activated)
+
+**Production now:** 81e1ae5 at schema 119. Both agents are paused, inference is off, sales are closed, the Fleet Control
+budget is unset, no credit hold exists and no canary units are installed. All figures below were read read-only or
+computed by SQL on 26 Oct.
+
+**Agent-2 stays unchanged** throughout: b60e262, paused, limits untouched. No command below names it.
+
+### Agreed limits
+
+| Limit | Value | Enforced by |
+|---|---|---|
+| Agent-1 rolling daily AI usage | 754p (unchanged; v119 counts usage from every credit source) | `fleet_cognition_authorize` (automatic) |
+| Agent-1 turns | 120 per hour (currently 600) | `founder-cognition --turns-per-hour 120` (automatic) |
+| Provider-credit authorisation ceiling | $15.00 = 1,500,000,000 µ¢ | ceiling hold `canary-agent1-ceiling` (automatic) plus the hourly guard |
+| Fleet Control AI budget | 30p/day | `economy-fleet-control-ai-budget 30` (automatic) |
+| Deadline | STARTED_AT + 7 days | `automaton-fleet-canary-end.timer`, plus the hourly check after ENDS_AT |
+| Agent cash charges (guard) | 1,000p | hourly guard (monitored; the exposure stated below still applies) |
+
+**Approval wording, kept verbatim:** $15 is an authorisation ceiling based on reserved estimates, not an unconditional
+provider-billing guarantee; an underestimated call could exceed it and trigger a cost exception.
+
+Cash exposure is unchanged from 212e76c: at most £11.23 under the credit ceiling. The hourly check alone would allow up to
+£17.54.
+
+### Inputs the owner supplies before Stage 1
+
+**Seller address.** The stored seller identity is version 1, set 2026-10-17 18:56Z by operator:owner, legal form
+individual. Its postal address reads, character for character:
+
+```
+3rd floor
+45 Albemarie Street
+Mayfair
+London
+W1S 4JL
+```
+
+The owner compares this with their own record. Note "Albemarie": the owner checks this spelling against the record,
+and nothing here infers or corrects it. If it is wrong, the owner re-saves it in HQ. Before Stage 1, the stored text is
+read back and quoted, and its version must be 2 if it was re-saved or 1 if confirmed as is.
+
+**£5 treasury funding.** This is new money to the treasury PayPal (rail b71b3f3c-901c-4f22-818b-3e1b1269f420), and the
+owner keeps the PayPal transaction ID. The real balance is £0.22 now. Only the actual net receipt is recorded, read from
+the transaction itself (`hub-paypal-reconciliation` / the rail's transaction listing), never assumed to be 500p. If
+PayPal took a fee, the receipt is below 500p and is recorded as received.
+
+
+The funding posts to `fleet:treasury:unallocated` (D) against `fleet:owner:capital` (C); see `fleet_admin_record_owner_funding`.
+Unallocated holds **0p** today (26 Oct, by SQL), so this is the money that funds:
+
+- Fleet Control's reservations;
+- the treasury's share of the Stage 2 refund booking.
+
+### The offer's files: one inventory (replaces the earlier, conflicting descriptions)
+
+Offer `d7063a0a-9aab-4d0a-800d-ee2547e89ce7`, slug `uk-landlord-compliance-tracker-england-g-a9ddde`: status paused,
+files_version 5, linked review `d06474be-d05b-4fec-83e2-5428874b24d0`.
+
+**Live deliverables, read 26 Oct:**
+
+| File ID | Name | SHA-256 | Bytes | Action |
+|---|---|---|---|---|
+| `076ad190-4d4e-4bf8-b398-a464d608e9be` | Landlord_Compliance_Tracker.xlsx | `f45c3d0071f6930788ff0f8bdc29f190736c76763426322f79ca23e751cf1bd0` | 24,829 | **remove** (print clipping) |
+| `c9452df2-6ff1-4140-9851-19faedeff3aa` | README.txt | `4494dff2185aeb052df9131199f34e768599e098d93b72394c994f2fe5dfcd89` | 672 | **keep** (same bytes as the candidate README) |
+| `b6d299a1-a0a3-481a-9a0b-2db310fe1e45` | tracker.zip | `10adb667c1a32792e152825aabd0808cf6b0655b700c5c19f85705650d352831` | 1,801 | **remove** (see below) |
+
+**What tracker.zip is.** It is the September CSV version, contradicting the xlsx listing. Its members are:
+
+- README.txt, 645 B, dated 27 Sep;
+- properties.csv, 593 B, dated 26 Sep;
+- rent_log.csv, 241 B, dated 26 Sep.
+
+**The stale review.** Review d06474be (18 Oct, inspector fleet-qa-2, verdict pass) covers **only** tracker.zip
+(files_digest `c88786bf…`). It covers neither the xlsx nor the README. The earlier statement that "the live offer passes
+fleet-qa-3" was my own inspection of the xlsx, not the offer's review.
+
+**Final deliverables, binding:**
+
+- `Landlord_Compliance_Tracker.xlsx` `7793dff2084dd7968019041e7579ecdedafd73529190c14b8a85a39820bc69b5` (30,462 B,
+  candidate);
+- `README.txt` `4494dff2185aeb052df9131199f34e768599e098d93b72394c994f2fe5dfcd89` (672 B).
+
+Their files digest (`fleet_files_digest`) is **`f3e6193aafe44a8d5cf55809082cd7efb1aa8c9abd7c8514e4f3ceb7710d6c69`**. The
+shell computation and the production function return the same value.
+
+A fresh review passes Stage 1 only if:
+
+- its subject is offer d7063a0a;
+- its files_digest equals f3e6193a…;
+- its inspector is fleet-qa-3;
+- its verdict is pass;
+- the offer's deliverables are exactly those two files.
+
+Any other set, including one still containing tracker.zip, fails Stage 1.
+
+### Telling Agent-1: the routes that exist, and why none fits
+
+| Route | What submitting costs | Who pays the agent's answer | Verdict |
+|---|---|---|---|
+| Owner message (v62: HQ conversation / `fleet_admin_agent_message_send`; files reach `from-owner/`) | nothing | **the treasury**. Each pending owner message is answered in a dedicated conversation turn (`svc_cognition_conversation_authorize`, payer `treasury`). No flag routes it into an ordinary turn. | This is the paid owner conversation. It carries the known gap: a call the treasury cannot fund in full is booked only up to unallocated, with the shortfall recorded. **Excluded.** |
+| Fleet Control notice (v94, `author = 'fleet_control'`) | nothing | the agent, in its ordinary working turn; it also wakes a hibernating agent | Written only by Fleet Control's own code. The runtime labels every notice "Fleet Control notice … from the Fleet's own control system" (`continuity.ts` `noticeLines`), so an owner instruction sent this way would be misattributed. **Rejected.** |
+| Answer to an owner request | nothing | the agent | Agent-1 has no open request; its only one, 62cbe1b7 (Gumroad), was approved on 26 Sep. **Not applicable.** |
+| Mission (`economy-mission-assign`) | nothing | the agent | Kinds are marketing, opportunity_hunt and knowledge_data only, with cost-sharing semantics. This is not product rework. **Not suitable.** |
+
+**Limitation.** No existing route gives Agent-1 an explicit owner instruction in its ordinary, agent-paid turn.
+
+**v120 "owner task": IMPLEMENTED LOCALLY (27 Oct candidate; not pushed, not deployed).**
+
+- **Controller (`migrations-phase120.ts`):**
+  - its own table, `fleet_owner_tasks`, rather than a message kind, so the v62 owner-conversation machinery never sees it:
+    no claim, no conversation turn, no treasury payer;
+  - owner-only `fleet_admin_owner_task_send` / `fleet_admin_owner_task_close` / `fleet_admin_owner_tasks`, needing an
+    `operator:` actor plus the fleet_cognition approver. The agents' service role cannot call them or read the table;
+  - CLI: `founder-task <agentId> "<title>" <task…>`, `founder-task-close <taskId> <reason…>`, `hub-owner-tasks [agentId]`;
+  - bounded: 3 open per agent, title 3–120 and task 10–1,500 characters, no control characters, the secret detector
+    applies, and dead agents are refused;
+  - a task's words never change; closing happens once (immutable-history trigger);
+  - Fleet Command records `owner_task_sent` / `owner_task_closed` (P3);
+  - `fleet_agent_attention` gains `ownerTasks` (open tasks, oldest first) and `ownerTasksDigest`. `eventsDigest` and
+    `notices` are untouched, so an agent with no task (Agent-2) sees an identical attention apart from an empty list. A
+    runtime that does not know the key ignores it, so a task is never shown as a Fleet Control notice.
+- **What a task does not do:** it changes no cognition setting, so a paused agent stays paused and its model calls are
+  still refused. It grants nothing: spending, identity, accounts and outward release keep their own flows, and the text
+  says so. It writes no owner message, conversation turn, in-flight reservation or ledger entry; the tests assert all of
+  these.
+- **Runtime (`continuity.ts` `ownerTaskLines` / `ownerTaskSignal`, `mind.ts`):**
+  - every working packet carries each open task as "Owner task <id> (…; from your owner: an instruction for your normal
+    work, paid like any step; it never approves spending, identity use, accounts or outward action …; shown until your
+    owner closes it)";
+  - tasks are essential lines, never shortened, and are not deduplicated, so they are visible after a restart;
+  - a new or closed task changes the wake digest, so it wakes a waiting founder.
+- **Cost:** Agent-1's ordinary turns, so its own wallet, its 754p/day, 120 turns/h and the $15 hold.
+- **Agent-2:** keeps runtime b60e262, gets no task, and its attention digest is unchanged.
+
+**Tests (27 Oct, local; no provider, loopback only):**
+
+- `npx tsc --noEmit -p .`: clean.
+- **New:** `fleet-v120-owner-tasks-pg` 6/6 (owner only; untouched cognition, outward, messages, turns, in-flight and
+  ledger; paused stays paused; payer is the agent, not the treasury; durable until closed; bounds). Work-continuity test 11
+  (first packet, every packet, after a restart, wake on a new task, gone when closed, never an owner conversation turn):
+  the suite runs 32/32.
+- **Related, unchanged:** launch-checks 5/5, v94 6/6, v100 obligations 20/20, v67 4/4, v119 daily-limit 5/5.
+- **Two files under 4-worker load:** in the combined run, founder-upgrade failed 8/12 and migration-paths failed 1/2, all
+  at the 30 s hook timeout. Run alone, unchanged, they passed: founder-upgrade 12/12 (including the real-process
+  upgrade/rollback rehearsal) and migration-paths 2/2 (each step to v120; direct upgrades from v8 and v24). Both results
+  are kept here.
+- The four known fleet-cognition-anthropic `FLEET_INFERENCE_LOCAL_ONLY` failures were not rerun; this change does not
+  touch them.
+
+**The task text** (≤ 1,500 characters, as it would be sent):
+
+> Adopt the corrected files for your offer "UK Landlord Compliance Tracker (England)" (offer d7063a0a, slug
+> uk-landlord-compliance-tracker-england-g-a9ddde). The corrected workbook is in your workspace at
+> from-owner/tracker-v6/Landlord_Compliance_Tracker.xlsx
+> (sha256 7793dff2084dd7968019041e7579ecdedafd73529190c14b8a85a39820bc69b5). It fixes printing: columns were cut off on
+> printed pages. 1) offer file remove: tracker.zip (the September CSV version, 10adb667…) and
+> Landlord_Compliance_Tracker.xlsx (f45c3d00…). Keep README.txt (4494dff2…, unchanged). 2) offer file: attach the
+> corrected workbook as a deliverable. 3) deliverable inspect both files with your acceptance cases, and look at the
+> printed pages. 4) deliverable review, subject offer, of exactly those two files. If you find a defect, fix it and review
+> your fixed file instead. Do not publish: sales stay closed until the owner's next step.
+
+The agent keeps its judgement: a review of its own corrected file is acceptable, but Stage 1 then binds to that file's
+digest, re-quoted. Placing the file uses the existing `from-owner/` convention, which the doctrine already tells agents
+holds owner files. It is a root copy into
+`/var/lib/automaton-founders/01M3F50SH7PNX2E3GST13J52AS/workspace/ws_01M3F50SH8BHKVHZP1291FN09K/from-owner/tracker-v6/`,
+owner fnd-01M3F50SH7PNX2E3GST13J52AS, 0600, with hashes verified after copying.
+
+**Not recommended, listed for completeness:** using the owner conversation with the £5 float in unallocated. Each call's
+reservation is a true upper bound (v104), so the gap is narrow, but it is not closed. It needs your explicit acceptance
+of the gap.
+
+### Stage 1: safeguards, task, review; SALES STAY CLOSED
+
+**Precondition:** v120 approved, released and installed, and Agent-1 upgraded to the labelling runtime; or another route
+chosen by you.
+
+**What it changes**, in order. Steps 1–7 run with Agent-1 paused.
+
+1. **Funding, recorded once:**
+   - `ledger-record-funding <NET> paypal:txn:<TXN_ID>`
+   - `economy-paypal-attribute b71b3f3c-901c-4f22-818b-3e1b1269f420 <TXN_ID> <EVENT_CODE> owner_funding paypal:txn:<TXN_ID>`
+   - Verify: one journal, unallocated = `<NET>`, owner payable still 1,081p, ledger verify ok.
+2. **Limits:** `founder-cognition 01M3F50SH7PNX2E3GST13J52AS pause --turns-per-hour 120 "canary: 120 turns/h"`.
+   Read back 754p and 120.
+3. **Fleet Control budget:** `economy-fleet-control-ai-budget 30 "canary: Fleet Control 30p/day"`.
+4. **Ceiling hold:** `economy-engineering-credit-hold canary-agent1-ceiling anthropic <balance − held − 1500000000>`.
+   This was 10,023,033,480 µ¢ on 26 Oct; recompute by SQL immediately before. Verify free = 1,500,000,000.
+5. **Inference reinstated** (owner and root; the key is never in chat or evidence):
+   - key at `/etc/automaton-fleet/cognition.key` (0600 automaton-fleet-service);
+   - `FLEET_COGNITION_API_KEY_FILE` added to service.env;
+   - `cognition-enable anthropic claude-opus-5-5 --max-output 4000 --in-microcents 400 --out-microcents 2000`, with
+     prices read back;
+   - `systemctl restart automaton-fleet`;
+   - verify both agents paused, and Agent-2 identical to the baseline.
+6. **Guard:** canary.conf, the four units, the end-timer drop-in at ENDS_AT, both dry runs writing nothing, then
+   `systemctl enable --now` on both timers. Configuration as before: CANARY_ID agent1-c1, CASH_CEILING_MINOR 1000,
+   CREDIT_CEILING_USD_MICRO 1500000000, HOLD_RUN canary-agent1-ceiling.
+7. **Files and task:**
+   - root-copy the candidate to `from-owner/tracker-v6/` and verify both hashes;
+   - send `founder-task 01M3F50SH7PNX2E3GST13J52AS "Replace your tracker's files" <the text above>`.
+8. **Resume:** `founder-cognition 01M3F50SH7PNX2E3GST13J52AS resume "canary agent1-c1 stage 1"`. This is STARTED_AT.
+
+**Passes when:**
+
+- the offer's deliverables are exactly the two final files;
+- a fleet-qa-3 offer review passes with files_digest f3e6193a… (or a re-quoted digest for Agent-1's own fix);
+- the offer is NOT published (the task does not ask for it; sales stay closed);
+- no guard stop has fired, and the ledger verifies;
+- figures are reported by code;
+- Agent-2 is unchanged.
+
+The owner then closes the task (`founder-task-close`).
+
+**Stops:**
+
+- **Automatic** (safe stop, once): cash over 1,000p; credit consumed over $15; a ledger verification failure; a repeated
+  delivery or message; ENDS_AT.
+- **Refusals:** 754p, 120 turns/h, the $15 hold, the 30p Fleet Control budget.
+- **Monitored:**
+  - a cost exception;
+  - a Fleet Control reservation open for 30 min or of unknown cost;
+  - any outward posting or channel activation;
+  - work outside its own offer and workspace;
+  - **no passing review within 24 h of STARTED_AT**. This is a review checkpoint, not a wait for discovery: the task is
+    in front of the agent from its first turn. The owner decides at the checkpoint.
+
+**Approval S1** covers steps 1–8 as written:
+
+- recording the funding;
+- the limits;
+- the Fleet Control budget;
+- the hold;
+- the key install, service.env edit, cognition-enable and controller restart (sudo, `/etc`, systemctl);
+- the unit install and enable;
+- the workspace copy;
+- the task;
+- Agent-1's resume.
+
+v120 and the runtime upgrade are **separate approvals before it** (Group A/B, then the runtime upgrade).
+
+### Stage 2: controlled order, delivery, message check, MANUAL PayPal refund (after Stage 1 passes)
+
+**No refund authority is granted, no custody refund is sent, and REAL_PAYMENTS stays false.**
+
+**What it changes:**
+
+0. **Publish (approval S2):** a second owner task, "Publish on your review <reviewId>". Then close the Stage 1 task.
+   Agent-1 publishes in an ordinary turn, and the offer is live only once sales open.
+1. `economy-sales open`.
+2. You pay £5 via `economy-offer-proof uk-landlord-compliance-tracker-england-g-a9ddde`. This is owner capital net of
+   fee, never agent revenue, and is excluded from demand.
+3. **Delivery:** exactly one sent delivery; its file hashes are 7793dff2… and 4494dff2…, equal to the review; no
+   repeat.
+4. **Message check:** you send one buyer message on the order page. Fleet Control's check reserves and settles once,
+   within 30p. Agent-1 answers and classifies the message, with no repeat.
+5. **Manual refund:** you refund the full £5 **in the PayPal app** on that capture.
+6. `economy-sales closed`.
+
+**How Fleet observes and reconciles the manual refund** (verified in code and on production 26 Oct, read-only):
+
+- **Two independent sources,** counted once (the larger of the two):
+  - PayPal's `PAYMENT.CAPTURE.REFUNDED` webhook. The custody worker (`paypal-treasury.ts:363`) takes the capture from
+    the event and records evidence with `cx_paypal_clawback_evidence` (source `webhook`, the refund ID).
+  - Transaction Search, T1107 (source `search`). The last successful search was 2026-10-26 16:21:58Z, HTTP 200.
+
+  Neither path consults refund authority or the custody refund queue. Those govern only refunds that Fleet itself
+  sends.
+- **Booking** (live `cx_paypal_refund_record`, confirmed to call `fleet_order_refunded`). For an owner-proof order:
+  - D `fleet:owner:capital`, C `fleet:treasury:unallocated` (owner capital returned, never the agent's);
+  - a row in `fleet_offer_proof_returns`;
+  - the order becomes `refunded`, so its conversation closes (v108);
+  - PayPal's fee returned on the refund is recorded as fee-return evidence.
+- **Precedent:** the 20 Oct proof refund came through this same evidence path: webhook evidence `841606975U696002C`, 500p
+  at 21:27:48Z; Search T1107 at 00:50:36Z on 21 Oct; proof return R69207…; order 1186e00e `refunded`. That refund was
+  custody-sent. A refund made in the PayPal app is new here: the code path is the same, but **its first live observation
+  is this test.**
+- **Condition: unallocated must cover the refund.** Since v107, a booking that unallocated cannot cover fails and is
+  retried every pass. Before you refund, SQL shows unallocated ≥ 500p. That is the float's net plus the proof's net
+  receipt, minus open Fleet Control reservations. If it is short, do not refund yet; report instead. The v106 claim-wait
+  is not needed and is not used.
+- **If it is not observed** within 24 h (webhook, plus at least one Search pass): stop. The existing owner tools then
+  apply:
+  - `hub-paypal-reconciliation` shows the item;
+  - `economy-paypal-reconciliation-resolve` / HQ `paypal_debit_classify` classify it.
+
+  Neither grants outbound authority.
+
+**Passes when:**
+
+- delivery and message check are verified;
+- the refund is recorded once, with evidence from both sources (or the webhook plus a Search pass);
+- the proof-return journal is 500p;
+- the order is `refunded` and closed;
+- the ledger verifies, and no stop fired.
+
+**Stops:**
+
+- Stage 1's, plus:
+  - delivery hashes not equal to the review;
+  - a message check that does not settle;
+  - a refund not observed or booked within 24 h;
+  - any posting to the agent's wallet.
+- On a stop: safe stop, fix forward, no restore.
+
+**Approval S2:**
+
+- sales open;
+- your £5 proof payment;
+- your manual refund in PayPal;
+- sales closed again.
+
+**No route that differs from this** (a refund authority or a custody refund) is proposed. It would need its own
+approval.
+
+### Stage 3: as before
+
+Sales open to ENDS_AT. Acquisition is the offer page plus your own link. There is no outward posting, no channels, no
+ads, and `economy-outward` stays held. Stops are the same as above. `end` releases the hold only when no reservation is
+open.
+
+**Approval S3:** sales open for the window, and your link sharing.
+
+### Unchanged throughout
+
+- The four safety flags stay false, and the cap stays 2.
+- Owner conversations stay excluded.
+- No refund or payout authority; no custody execution.
+- Agent-2 stays b60e262 and untouched.
+- No production database restore.
+
+### Cash handling: the proof payment, the manual refund and the float (read 26 Oct; figures by SQL/code)
+
+**The precedent, as the ledger recorded it.**
+
+PayPal transactions on the treasury rail:
+
+| Date | Transaction | Code | Gross | Fee |
+|---|---|---|---|---|
+| 10 Oct | 19C47714VJ327730R | T0006 | +100 | −33 (the £1 test) |
+| 19 Oct | 6JF13918S8462694B | T0006 | +500 | −45 (the proof) |
+| 20 Oct | 841606975U696002C | T1107 | −500 | 0 (the refund; PayPal returned no fee) |
+
+PayPal cash is therefore 100 − 33 + 500 − 45 − 500 = **22p**, matching the observed balance.
+
+| Journal | Kind | Debit | Credit |
+|---|---|---|---|
+| 965 (19 Oct) | `owner_funding` (owner proof purchase, net of fee) | `fleet:treasury:unallocated` 455 | `fleet:owner:capital` 455 |
+| 1109 (20 Oct) | `owner_proof_return` | `fleet:owner:capital` 500 | `fleet:treasury:unallocated` 498 + `fleet:treasury:owner_reimbursable` 2 |
+
+- **The sale.** It is not a sale in the books. The owner paid their own agent's offer with their own money. Booking that
+  as agent revenue would fabricate demand and give the agent cash nobody earned, so the money is the owner's contribution
+  to the treasury: owner capital. Only what PayPal actually delivered is credited, net of PayPal's fee (455p). The agent's
+  wallet, revenue and sweep figures are untouched.
+- **Funding the refund.** The refund returns that contribution, gross: the owner gets 500p back, so owner capital is
+  debited 500p. It is paid from `fleet:treasury:unallocated`. On 20 Oct unallocated held 498p, so v107 took the missing 2p
+  from `owner_reimbursable`, the cash set aside for the owner, without changing what is owed.
+- **The fee.** PayPal kept the 45p fee on the purchase and returned none on the refund. The owner's net capital from the
+  round trip is +455 − 500 = **−45p**. The fee is borne by owner capital: real cash and owner equity both fell 45p. It
+  balances, but it is **not shown as a fee line**; it is implicit in the capital movements. That is a presentation gap,
+  not a balance error. A separate fee expense line would be a change of accounting policy, so it is noted and not changed.
+- **For the canary.** The refund needs 500p in unallocated when PayPal reports it. That comes from:
+  - the float's net (`<NET>`);
+  - the proof's net (≈455p, if PayPal's fee is the same 45p);
+  - minus open Fleet Control reservations.
+
+  The float still available afterwards = `<NET>` − the proof fee PayPal keeps − Fleet Control charges. By code, with no
+  Fleet Control charges: a 500p float leaves **455p**, and a 455p float leaves **410p**. Each Fleet Control check, up to
+  30p a day, reduces it further. The float is **partly consumed** by the test: by the proof's fee and Fleet Control's
+  checks, never by the refund itself.
+
+**1,079p owner-reimbursable vs 22p in PayPal vs 1,081p owner payable.** These are three different things:
+
+- **`fleet:owner:payable` 1,081p** is what Fleet owes the owner. It is the AI usage the owner's provider credit paid for
+  after the v74 write-off, plus acquisition tax/fees. It is a liability, not cash.
+- **`fleet:treasury:owner_reimbursable` 1,079p** is the book cash set aside to repay that liability (v69). Each posting
+  that created payable also moved book cash into this partition. By journal kind, computed by SQL:
+  - opening, 12 Oct: +1,824 (created against payable, with no cash source);
+  - agent inference charges: +880 (239 postings, from the agents' wallet cash);
+  - AI-credit acquisition tax/fees: +543 (59 postings, from wallet cash);
+  - owner-conversation turns: +20 (5 postings, from unallocated);
+  - a search job: +1;
+  - the v74 write-off: −2,187 (moved to unallocated as the owner's contributed capital);
+  - the 20 Oct refund: −2.
+
+  1,824 + 880 + 543 + 20 + 1 − 2,187 − 2 = 1,079.
+- **The 2p difference** (1,081 − 1,079) is the 20 Oct refund's v107 draw.
+- **Why it is not in PayPal.** Fleet's book cash is 20,022p: the agent wallets 8,943 + 10,000, plus reimbursable 1,079.
+  `fleet_capital_backing` reports 20,000p of that as **unbacked virtual capital**: the two £100 genesis allocations,
+  never paid in. 20,022 − 20,000 = 22p, exactly PayPal's balance (difference 0). The money that moved into
+  `owner_reimbursable` came out of virtual wallet money, so it is itself unbacked. The payable is real: the owner did pay
+  the provider. The cash the books set aside to repay it has not been funded.
+- **So:** the owner is owed 1,081p; Fleet has 22p of real cash; none is reimbursed; nothing here is lost or
+  double-counted. Repaying the owner needs real money in, which is a separate decision.
+
+**Before the £5 transfer:**
+
+- **Destination:** the treasury PayPal on rail b71b3f3c-901c-4f22-818b-3e1b1269f420. Its stored account reference is
+  `F*************@proton.me`, consistent with fleet.treasury@proton.me. Confirm in your PayPal that you are sending to
+  that account.
+- **Fees:** PayPal charged this account 33p on £1 and 45p on £5 for payments received as purchases. Whether a transfer
+  from your own PayPal is charged depends on how it is sent, so I won't assume it. Fleet records exactly the net the
+  transaction shows, read back from Transaction Search.

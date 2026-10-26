@@ -1456,6 +1456,8 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_owner_claim_waits: new Set(["fleet_admin_owner_claim_wait", "fleet_admin_owner_claim_wait_end"]),
     // v108: the owner's supported customer geography (owner only).
     fleet_sales_geography: new Set(["fleet_admin_sales_geography"]),
+    // v120: owner tasks — sent and closed by the owner only (never by an agent or the service role).
+    fleet_owner_tasks: new Set(["fleet_admin_owner_task_send", "fleet_admin_owner_task_close"]),
     fleet_control_ai_budget: new Set(["fleet_admin_fleet_control_ai_budget", "fleet_admin_fleet_control_ai_budget_clear"]),
     fleet_control_ai_reservations: new Set(["svc_fleet_control_ai_reserve", "svc_fleet_control_ai_settle",
       // v117: settled once (worker, record path, sweep, owner); a reported call without one gets one (recorded in full).

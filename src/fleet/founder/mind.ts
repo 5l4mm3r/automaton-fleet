@@ -49,7 +49,7 @@ import { TaskClassificationError, classifyTask, isEscalationReason, isRoutineCla
 import { economyLine, parseBrief, type EconomyBrief } from "./economy.js";
 import { OWED_RECHECK_MAX_MS, OWED_RECHECK_MS, newestBuyerMessage, obligationLines, owedDeliveryLine, owedRevisionLine, obligationSignal, parseObligations, refusalReason, type CustomerObligation } from "./obligations.js";
 import { officeState } from "./exec-sandbox.js";
-import { CARRY_MAX_CHARS, compact, PROGRESS_FILE, REPEATING_STEPS, REPEATING_STOP, ProgressMemory, REPEAT_NOTE_AT, callSig, carryLinesWithin, clearCarry, isExternal, isWriteTool, loadCarry, noticeLines, repeatNote, saveCarry, savePacket, wakeBrief } from "./continuity.js";
+import { CARRY_MAX_CHARS, compact, PROGRESS_FILE, REPEATING_STEPS, REPEATING_STOP, ProgressMemory, REPEAT_NOTE_AT, callSig, carryLinesWithin, clearCarry, isExternal, isWriteTool, loadCarry, noticeLines, ownerTaskLines, ownerTaskSignal, repeatNote, saveCarry, savePacket, wakeBrief } from "./continuity.js";
 
 export interface MindPorts {
   cognitionStatus(): Promise<Record<string, unknown>>;
@@ -750,7 +750,9 @@ export class FounderMind {
     // 2026-10-19: the buyers' open requests (their states, never reply times: the agent's own answer does not wake it) and
     // whether the office renderer can run here (a renderer that becomes available wakes an agent waiting for it, free).
     const signals = [capabilities ? `caps:${capabilities.sig}` : "", typeof events === "string" && /^[0-9a-f]{32}$/.test(events) ? `events:${events}` : "",
-      ...(deps ?? []).map((r) => `dep:${r.requestId}:${r.status}`).sort(), obligationSignal(parseObligations(status.attention)), `office:${officeState()}`].filter(Boolean).join("|");
+      ...(deps ?? []).map((r) => `dep:${r.requestId}:${r.status}`).sort(), obligationSignal(parseObligations(status.attention)), `office:${officeState()}`,
+      // v120: the owner's open tasks — a new or closed task wakes a hibernating founder.
+      ownerTaskSignal(status.attention)].filter(Boolean).join("|");
     return { economics, view, capabilities, deps, signals };
   }
 
@@ -815,6 +817,8 @@ export class FounderMind {
     const W = this.o.workContinuity === true;
     const carried = W ? loadCarry(this.o.stateDir) : null;
     const notices = noticeLines(status.attention, new Set(prev?.noticesShown ?? []));
+    // v120: the owner's open tasks — essential, in every packet (never shortened), until the owner closes them.
+    const tasks = ownerTaskLines(status.attention);
     const upgrade = W ? upgradeLine(this.upgradedFrom(prev), this.o.runtimeCommit) : null;
     // F2-A: the founder's own decision ledger and open goals decide what an idle wake is for; its survival position is
     // FleetController's observation (information for the founder's own strategy, never a permission or a ration).
@@ -861,6 +865,7 @@ export class FounderMind {
       prev ? `Your previous turn (${prev.at}) ended with: ${(prev.outcome || "(no closing note)").slice(0, lvl >= 4 ? 400 : 1_200)}${prev.tools.length && lvl < 5 ? ` [tools used: ${prev.tools.join(", ")}]` : ""}`
            : "No closing note from a previous turn is recorded: rely on your goals, facts and notes below.",
       ...(carried && !owner ? carryLinesWithin(carried, [CARRY_MAX_CHARS, 3_000, 1_500, 1_500, 1_200, 900, 600][Math.min(lvl, 6)]) : []),
+      ...tasks,
       ...(lvl >= 2 ? notices.lines.slice(0, 1) : notices.lines),
       ...(upgrade ? [upgrade] : []),
       ...(W && !owner && !carried && prev?.stalled === 1 ? [STALL_LINE] : []),

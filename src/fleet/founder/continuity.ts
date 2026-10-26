@@ -259,6 +259,25 @@ export function noticeLines(attention: unknown, shown: ReadonlySet<string>): { l
 }
 
 /**
+ * v120: the owner's open tasks (attention.ownerTasks, oldest first). Unlike a notice, a task is shown in EVERY working turn
+ * until the owner closes it — durable across turns and restarts — and is attributed to the owner, never to Fleet Control.
+ */
+export function ownerTaskLines(attention: unknown): string[] {
+  const list = attention && typeof attention === "object" && Array.isArray((attention as { ownerTasks?: unknown }).ownerTasks) ? (attention as { ownerTasks: unknown[] }).ownerTasks : [];
+  return list.filter((t): t is { id: string; at: string; title: string; body: string } => !!t && typeof t === "object" && typeof (t as { id?: unknown }).id === "string"
+    && typeof (t as { title?: unknown }).title === "string" && typeof (t as { body?: unknown }).body === "string").slice(0, 3)
+    .map((t) => `Owner task ${t.id.slice(0, 8)} (${String((t as { at?: unknown }).at ?? "").slice(0, 16).replace("T", " ")} UTC; from your owner: an instruction for your normal work, `
+      + `paid like any step; it never approves spending, identity use, accounts or outward action, which keep their own flows; shown until your owner closes it): `
+      + `${t.title.slice(0, 120)} — ${t.body.slice(0, 1_500)}`);
+}
+
+/** v120: the digest of the owner's open tasks (a new or closed task wakes the founder), or "" when absent. */
+export function ownerTaskSignal(attention: unknown): string {
+  const d = attention && typeof attention === "object" ? (attention as { ownerTasksDigest?: unknown }).ownerTasksDigest : undefined;
+  return typeof d === "string" && /^[0-9a-f]{32}$/.test(d) ? `tasks:${d}` : "";
+}
+
+/**
  * 2026-10-23 (owner directive: the compact, evolving agent workspace) — the WAKE BRIEF: one short block at the top of a
  * working packet that says, from the founder's own records only, why it woke, what it is working towards, what it already
  * did, what it planned next, which open requests and blockers stand, and its money position. A view over existing state

@@ -186,6 +186,16 @@ export class PgHubAdmin {
   fleetControlAiReconcile(reservationId: string, usdMicrocents: number, ref: string, actor: string) {
     return this.one(`SELECT fleet_admin_fleet_control_ai_reconcile($1, $2, $3, $4) AS r`, [reservationId, usdMicrocents, ref, actor]);
   }
+  /** v120: an owner task — shown in the agent's ordinary working turns until closed; changes no setting, approves nothing. */
+  ownerTaskSend(agentId: string, title: string, body: string, actor: string) {
+    return this.one(`SELECT fleet_admin_owner_task_send($1, $2, $3, $4) AS r`, [agentId, title, body, actor]);
+  }
+  ownerTaskClose(taskId: string, reason: string, actor: string) {
+    return this.one(`SELECT fleet_admin_owner_task_close($1::uuid, $2, $3) AS r`, [taskId, reason, actor]);
+  }
+  ownerTasks(agentId: string | null) {
+    return this.one(`SELECT fleet_admin_owner_tasks($1) AS r`, [agentId]);
+  }
   /** v110: clear it again (unset = no paid Fleet Control call). */
   fleetControlAiBudgetClear(reason: string, actor: string) {
     return this.one(`SELECT fleet_admin_fleet_control_ai_budget_clear($1, $2) AS r`, [reason, actor]);
