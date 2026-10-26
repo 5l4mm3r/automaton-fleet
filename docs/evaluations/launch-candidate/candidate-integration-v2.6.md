@@ -2979,3 +2979,157 @@ UI 0.26.2 is reused. Agent-2 is not involved.
 - install (Group B);
 - Agent-1 `upgrade-preflight` / `upgrade-runtime` (Group C);
 - any task, funding, hold, timer or paid call.
+
+## Group A on 7c194b8 (26 Oct, 17:43–18:15Z): PASSED; production unchanged
+
+Approved by the owner for code commit `7c194b8c2348baa8fa5d34bd7ef6b201dc4911c2`.
+
+- **Docs head pushed:** `8e301202b5e52c2f835a5e4b7893bb8357410b0a`. `git diff --name-only 7c194b8 8e30120` lists only this
+  record, so the changes after the code commit are documentation only.
+- **Models:** every model in Group A was fake: the scripted model behind a loopback fake Messages API with a fake key.
+  No paid call was made; costs in the rehearsal logs are synthetic.
+
+| Step | Result |
+|---|---|
+| 1. Push | `fleet/canary-prep` to fleet-origin, fast-forward `212e76c..8e30120`, no force |
+| 2. Build (VPS) | Pass 1 read the identity; pins written from its output to `~/rlc137/pins.txt`. Pass 2 verified **build `1100ee336a61bb450417a1a912389505c410330341b9a1fcbf7ef2f727976901`**, lockfile `1df54e35…` (unchanged) |
+| 3. Side-install (sudo) | `/opt/automaton-fleet/releases/7c194b8…`, identity re-verified; `current` stayed 81e1ae5 |
+| 4. Data rehearsal `fleet-rollout.sh rehearse 119 → 120` | **PASSED 17:46:24Z.** Row counts identical; only 120 applies; privilege audit `ok`, no problems; 1,117 journals; ledger verify true; rerun no-op; the rollback dump restores 119 with the same head |
+| 5. Services rehearsal `fleet-upgrade-rehearsal.sh 119 → 120` | **PASSED 17:47:17Z.** 81e1ae5 refuses 120 (rollback = database restore); the candidate controller, Operator API and dashboard were ready on 120; ledger unchanged; rollback restored 119, and 81e1ae5 was ready again; production PIDs unchanged |
+| 6a. Founder upgrade rehearsal (sudo) `upgrade-rehearsal 5ee36d4…` → 7c194b8 | **PASSED 27/27.** A synthetic founder on Agent-1's runtime was upgraded, rolled back and re-upgraded, with routed cognition through fake provider paths. Production unchanged, host clean, living founders untouched (PIDs 2004178 / 866408) |
+| 6b. Revision rehearsal (sudo) | **PASSED 19/19.** Production unchanged, host clean, living founders untouched |
+| 7. v120 on a disposable copy (`copy-check.sh` sha `fc064939…`; dropped) | See the list below |
+| 8. Production before / after (17:43:06Z / 18:14:54Z) | See the list below |
+
+**Step 7 results:**
+
+- schema 120, privilege audit ok;
+- a task sent with `operator:ubuntu` appears in Agent-1's attention (id matches);
+- a non-owner actor is refused with `FLEET_APPROVAL_REQUIRED`;
+- Agent-2's attention is byte-identical;
+- Agent-1's `eventsDigest` is unchanged (tasks have their own digest);
+- cognition settings, conversation turns (2), in-flight (0), journals (1,117), messages (6) and ledger verify are
+  unchanged;
+- `hub-owner-tasks` lists it;
+- after the close, the task list is empty and the digest is the empty md5; a second close is a replay;
+- events: one sent, one closed;
+- the live ledger head and schema are unchanged, and the live table is absent.
+
+The script printed "NOT-REFUSED" beside the refusal. That line is an artefact of `pipefail` in the check's `|| echo`
+fallback, not a failure: the refusal code was matched, and the copy held exactly one task afterwards.
+
+**Step 8 results:**
+
+- identical: schema 119; ledger head 1176 `e214852e…`, verify true; agents (Agent-1 5ee36d4, Agent-2 b60e262, both paused,
+  PIDs 2004178 / 866408); state; units; unit files; packages; tools; settings (sha `28dba03d…`, equal to 81e1ae5's
+  post-install capture);
+- **events:** 3,410 → 3,376. The live controller's retention pass removed 40 expired temporary rows (13 session_opened,
+  1 runtime_approved, 2 each of 13 role-grant kinds). Six new rows are the paused agents' routine `session_opened`
+  renewals (ids 11040–11045). Permanent history is unchanged: 340 rows, the same digest.
+
+**Not done:** install, runtime upgrade, any production task, funding entry, credit hold, timer, inference, cutover or
+restore.
+
+## Owner corrections and decisions (26 Oct)
+
+**Proposed vs current settings.** The canary limits are **proposed**, not active. Production now, read at 17:43Z:
+
+| Setting | Current production | Proposed for the canary |
+|---|---|---|
+| Agent-1 daily AI limit | 754p | 754p |
+| Agent-1 turns per hour | **600** | 120 |
+| Provider-credit ceiling | **none** (no hold) | $15.00 hold (`canary-agent1-ceiling`) |
+| Fleet Control AI budget | **unset** | 30p/day |
+| Deadline / guard timers | **none installed** | STARTED_AT + 7 days, check hourly |
+| Agent-2 | paused, 3,000p/day, 60 turns/h, b60e262 | unchanged |
+
+**Refund-capacity figures are estimates.** The figures under "Real money the bounded canary needs" assume PayPal's fee
+stays 45p per £5 and that refunded sales' own proceeds are retained in PayPal. Actual fees and retained proceeds are read
+from the transactions and decide the real figure.
+
+**Commercial selection (owner, 26 Oct).**
+
+- The tracker is an **execution-test product**, not an approved commercial strategy.
+- Reusable technical procedures are kept: delivery, review, the refund paths.
+- Simulated orders, the owner proof purchase and successful file generation are **not evidence of market demand**.
+- **Before public acquisition (Stage 3),** Agent-1 must propose an evidence-backed offer, comparing:
+  - customer demand;
+  - achievable value;
+  - demonstrated capability;
+  - acquisition access;
+  - full delivery and support costs.
+
+  It considers tailored services alongside digital products, and may recommend replacing the tracker. No example is
+  pre-selected.
+- No research spend or external posting is authorised by this.
+- The technical scope (Group A, B and C, Stages 1–2) is unchanged. **Stage 3 now waits for that proposal and your
+  approval of it.**
+
+## Group B / C package for 7c194b8 (prepared; NOT run; needs approval)
+
+**Group B: install release 81e1ae5 → 7c194b8, schema 119 → 120.**
+
+- **Script:** `install-7c194b8.sh` beside this record, sha256
+  `0e00fc5b6827426be8dbe8a70a126dd1e8df8067dc6852d06ed60f9a85ea17c9`, staged identically as `~/rlc137/install.sh`.
+  It is generated from the 81e1ae5 script with only these changes: the pins, schema 119 → 120, and the v120 checks.
+- **Run:** `bash ~/rlc137/install.sh`.
+- **Pins:** commit `7c194b8c2348baa8fa5d34bd7ef6b201dc4911c2`, build
+  `1100ee336a61bb450417a1a912389505c410330341b9a1fcbf7ef2f727976901`, lockfile
+  `1df54e3526cb39c847d18fec14f1d4e3595557e34d94040c5b774f9b2f2a21c1`. UI 0.26.2 is reused (sha `77ce19a4…`).
+- **Gates, all checked before any change:**
+  - the pins;
+  - both rehearsals of 7c194b8 passed and are under 24 h old (run again after 17:46Z on 27 Oct);
+  - UI checksum;
+  - release directory present;
+  - both agents paused on 5ee36d4 / b60e262;
+  - inference off (policy disabled, provider none, Fleet Control unset);
+  - permissions closed (outward release, card, custody, sales, refund authority);
+  - the four flags false;
+  - schema 119 on 81e1ae5;
+  - no open credit hold;
+  - no canary unit;
+  - founder unit template identical;
+  - `FLEET_ROLLOUT_AUTO_RESTORE` unset;
+  - a fresh full-dump baseline (TOC checked), kept and never restored by the script.
+- **Change:** `fleet-release.sh` cutover. It takes a fresh dump, migrates 120, reconciles, approves the runtime and
+  restarts the controller-side units. **No founder unit restarts**, and no task is sent.
+- **Verification:**
+  - controller ready;
+  - both agents paused with the **same PIDs and runtimes**;
+  - inference off;
+  - tiers, ledger head, credit and owner payable unchanged;
+  - v116–v119 checks still hold;
+  - **v120:** zero owner tasks, an empty `ownerTasks` list and the empty digest for both agents, no owner-task event;
+  - unit files unchanged, flags false, permissions closed, ledger verified;
+  - settings captured.
+- **On failure:** no database restore. Controller-side units stop and you decide; the pre-install backup is kept.
+
+**Group C: Agent-1's runtime 5ee36d4 → 7c194b8, while paused (after Group B; separate approval).**
+
+1. `sudo /opt/automaton-fleet/current/scripts/fleet-founders.sh upgrade-preflight 01M3F50SH7PNX2E3GST13J52AS`. This
+   changes nothing.
+2. `sudo /opt/automaton-fleet/current/scripts/fleet-founders.sh upgrade-runtime 01M3F50SH7PNX2E3GST13J52AS`. Agent-1's
+   unit restarts on 7c194b8 and **stays paused**; the `upgradeId` is recorded.
+3. Verify:
+   - Agent-1's runtime is 7c194b8 and paused;
+   - its heartbeat and health challenge pass;
+   - its identity, memory, workspace and ledger accounts are unchanged;
+   - **Agent-2 is untouched:** b60e262, PID 866408, paused;
+   - inference off;
+   - ledger head unchanged.
+
+**Rollback:** `fleet-founders.sh rollback-runtime 01M3F50SH7PNX2E3GST13J52AS <upgradeId> <reason>`, back to 5ee36d4. It
+was rehearsed in step 6a.
+
+**Not in B or C:**
+
+- sending a task;
+- funding;
+- a credit hold;
+- timers;
+- the key, inference or the Fleet Control budget;
+- resuming either agent;
+- opening sales;
+- any paid call.
+
+These are Stage 1, with its own approval.
