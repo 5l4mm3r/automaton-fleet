@@ -497,9 +497,9 @@ failure recorded on 2e07e70).
 - **Status:** the three kept apart (internal agent charge: none approved).
 
 **Group A for bc19e05 (for renewed approval; production unchanged).**
-- **Push:** `git push fleet-origin fleet/funding-v116`, no force. It carries 9 commits beyond the remote's
-  `fleet/integration-v2.6`: bc0802f, b01433f, d96eefc, bc5ac23, 3c4de3d, 1d8fcaf, 35a3f07, 0e59645, 5c4a133, then bc19e05
-  (and this docs commit).
+- **Push:** `git push fleet-origin fleet/funding-v116`, no force. It carries 11 commits beyond the remote's
+  `fleet/integration-v2.6`: bc0802f, b01433f, d96eefc, bc5ac23, 3c4de3d, 1d8fcaf, 35a3f07, 0e59645, 5c4a133, bc19e05 and
+  37ead49 (docs).
 - **Then:**
   - side-build;
   - side-install beside production (`current` stays 5ee36d4);
