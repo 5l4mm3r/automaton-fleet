@@ -423,6 +423,60 @@ tokens** on each warm step, at 20 µ¢ a token. So the tool definitions cost lit
   **Rerun:** services rehearsal (controller code changed), founder-upgrade rehearsal (runtime changed; it also exercises
   the 4,000-token request against the fake Anthropic API) and the revision rehearsal (the target). All non-billable.
 
+## INSTALLED: bc19e05 in production (Group B, funding), 26 Oct 14:08:59–14:10:56Z
+
+Approved by the owner: commit `bc19e05890773199b794a7a4345ed1c77a6467e1`, build `721bb15dfa906bb6e1e37af92b6c8425a64a8bbf8d3f87cdd5d24b6b54ca9ee8`.
+Run: `bash ~/rlc135/install.sh`. The script is `install-bc19e05.sh` beside this record, sha256
+`7609e263ad3ca1cbd738758065bed8a374fa09b4880a8dd9ddf4d55832f19ed7`; the staged copy was identical.
+
+**Gates passed before any change:**
+- pins (commit, build and lockfile);
+- both rehearsals passed and less than 24 h old;
+- UI package checksum;
+- the side-installed release present;
+- both agents paused on 5ee36d4 / b60e262;
+- inference off and permissions closed;
+- the four safety flags false;
+- the founder unit template unchanged;
+- `FLEET_ROLLOUT_AUTO_RESTORE` unset.
+
+**Pre-install backup** (kept; never restored by the script): `~/rlc135/baseline-pre-install-bc19e05-20261026T140900Z`,
+5,433 dump entries.
+
+**Release:** `fleet-release.sh` 115 → 118.
+- Outage 14:10:00–14:10:46Z (46 s).
+- Cutover reconciliation OK (3,413 events preserved).
+- Rollout deployed 14:10:53Z; release deployed 14:10:54Z; root UI 0.26.2 unchanged; `production_deployed` recorded.
+
+**Verification (all passed):**
+- readyz 200, schema v118, runtime release `@bc19e05…`;
+- both agents paused on the same runtimes with the **same processes**: Agent-1 2004178, Agent-2 866408 (no restart,
+  no upgrade);
+- inference off: policy disabled, provider none, Fleet Control ceiling unset;
+- tiers unchanged apart from price;
+- ledger head 1176 `e214852e…` unchanged; credit 1,676,179,930 µ¢ and owner payable 1,081 unchanged; verify true;
+- draw order `promotional_first`, with the provider rule as evidence;
+- T2 cache read 10;
+- control_reserved 0, no promotional lot;
+- the credit-source lookup is in the three charge paths;
+- safety flags false; permissions closed.
+
+**Settings diff (pre → post):** only `tiers[T2].cache_read_microcents_per_token` 20 → 10 (updated_by `migration:v116`) and
+the new `fleetControlAi.funding` view (all zero).
+
+**Events since the start:**
+- `production_deployed` 1, `runtime_approved` 1;
+- role grants;
+- `session_opened` 1;
+- 2 `api_auth_failed` on `/v1/heartbeat` at 14:10:52Z. This is the same pair seen at every controller restart (21, 23 and
+  24 Oct): a heartbeat during the outage carried an expired session. Both agents were heartbeating again at 14:11:12Z.
+
+**Rollback:** 5ee36d4 refuses schema 118, so going back is a database restore of the pre-install backup. That is the
+owner's decision only; none is authorised. Fix forward is preferred.
+
+**Not done:** no credit entry, key or provider activation, budget change, paid call, agent resume or S1+S2. The
+reconciliation waits for fresh Console balances.
+
 ## Group A on bc19e05 (26 Oct, 13:58–14:20Z): PASSED; production unchanged
 
 Approved by the owner, renewed Group A for code candidate `bc19e05890773199b794a7a4345ed1c77a6467e1`.
