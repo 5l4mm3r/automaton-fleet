@@ -423,6 +423,47 @@ tokens** on each warm step, at 20 µ¢ a token. So the tool definitions cost lit
   **Rerun:** services rehearsal (controller code changed), founder-upgrade rehearsal (runtime changed; it also exercises
   the 4,000-token request against the fake Anthropic API) and the revision rehearsal (the target). All non-billable.
 
+## RECONCILED: Fleet's provider credit equals the Console (26 Oct, 14:21Z; owner-approved entries)
+
+**Console (Kai, Billing, 26 Oct):**
+- purchased $17.22;
+- promotional $100.00 of $100.00: granted 10/24/2026, expires 11/24/2026, "All dates are in UTC";
+- auto-reload off.
+
+**Plan, read-only at 14:18:27Z:** no Fleet use since 23 Oct 14:26Z, no holds, no blockers. The difference of +45,820,070 µ¢
+is the Sonnet price correction (46,421,300 µ¢) plus the display-precision difference (−601,230 µ¢, within ±$0.01).
+
+**Posted as owner actions (`operator:ubuntu`, CLI of the installed release), in order:**
+1. `economy-ai-credit-reconcile anthropic 1722` →
+   `{"ok": true, "restoredToLots": 45820070, "differenceUsdMicrocents": 45820070}`.
+2. `economy-ai-credit-promotional-grant anthropic max-included-20261024 10000 10000 2026-10-24T00:00:00Z 2026-11-24T00:00:00Z assumed_cutoff "granted 10/24/2026; expires on 11/24/2026; dates in UTC" Console Billing, Promotional credits`
+   → lot `a6765484-2b44-4b00-b207-c63ad4eafd8b`, remaining $100.00, used before recording $0. Recorded 11,722,000,000 µ¢.
+
+**Verified:**
+- purchased lot 1,722,000,000 µ¢ ($17.22); promotional lot 10,000,000,000 µ¢ ($100.00);
+- total 11,722,000,000 µ¢ = **$117.22 of provider credit** (USD; not a £ ledger figure);
+- owner payable 1,081p unchanged (reimbursable 1,079p);
+- **no £ journal:** 1,117 journals, head 1176 `e214852e…`, verify true;
+- no agent charge; promotional consumed 0 / charged 0 / owed 0;
+- both agents paused, same runtimes and processes;
+- inference off: policy f, provider none, Fleet Control ceiling unset;
+- events: `ai_credit_balance_reconciled` 1, `ai_credit_promotional_grant_recorded` 1, `session_opened` 2.
+
+**Corrected wording on promotional charging.** Earlier sections of this record, the v116 migration's header comment and the
+plan script's closing note said that how promotional use is treated was "not decided" or "a later migration". That is
+superseded:
+- since v118 (installed), Fleet knows which credit pays before a charge is posted;
+- promotional use is **charged to no one and owed to no one**;
+- purchased use keeps the v69 treatment (owed to the owner, the evidenced reimbursement);
+- **no internal charge to agents for promotional use is approved** (it would need a separate policy and migration).
+
+The plan script's note is corrected. The v116 comment is left as installed (code comments are not changed after install)
+and is superseded by v118's header.
+
+**The $100 grant reduces charges; it does not replace capital.** Reservations never rely on it. An agent still needs its
+own cash for each call's full estimate, and Fleet Control still needs unallocated treasury money to hold each call's
+maximum.
+
 ## INSTALLED: bc19e05 in production (Group B, funding), 26 Oct 14:08:59–14:10:56Z
 
 Approved by the owner: commit `bc19e05890773199b794a7a4345ed1c77a6467e1`, build `721bb15dfa906bb6e1e37af92b6c8425a64a8bbf8d3f87cdd5d24b6b54ca9ee8`.
@@ -1209,8 +1250,8 @@ autonomous customer fulfilment.
    - the 100p rolling-24-hour ceiling, when Agent-1's real work is approved;
    - and your choice on the treasury's unallocated balance (fund about £1.20, or accept unbooked Fleet Control charges).
 4. **S1 (Group D):** the frozen terms above (360p, hold 401,032,421 µ¢), using the recovery key for that run only.
-5. **Still your decision before agents work on promotional credit:** how promotional-funded use is treated (an internal
-   agent charge or none, and the owner payable it creates). It needs a later migration.
+5. ~~Still your decision… a later migration~~ — superseded by v118 (installed 26 Oct): promotional use is charged to no one
+   and owed to no one; no internal agent charge is approved.
 
 Not authorised by this package: any provider activation, paid call, budget change, credit posting, agent resume or
 database restore.

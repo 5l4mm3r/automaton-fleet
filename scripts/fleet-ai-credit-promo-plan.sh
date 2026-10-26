@@ -61,6 +61,7 @@ SELECT jsonb_pretty(jsonb_build_object(
      'evidence', (SELECT to_jsonb(p) ->> 'draw_order_evidence' FROM fleet_ai_credit_policy p WHERE p.provider = 'anthropic'),
      'note', 'v116: the provider''s published rule, included credit first (soonest expiry first), then purchased; before v116 is installed this reads null'),
   'notPartOfThisPlan', jsonb_build_array(
-     'any internal agent charge or treatment of promotional use (owner decision; a later migration)', 'any provider call, top-up or posting')
+     'any internal agent charge for promotional use: none is approved; since v118 promotional use is charged to no one and owed to no one (a charge would need a separately approved policy and migration)',
+     'any provider call, top-up or posting')
 )) FROM c;
 SQL
