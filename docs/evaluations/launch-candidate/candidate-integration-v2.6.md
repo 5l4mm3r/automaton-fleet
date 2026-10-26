@@ -423,6 +423,57 @@ tokens** on each warm step, at 20 µ¢ a token. So the tool definitions cost lit
   **Rerun:** services rehearsal (controller code changed), founder-upgrade rehearsal (runtime changed; it also exercises
   the 4,000-token request against the fake Anthropic API) and the revision rehearsal (the target). All non-billable.
 
+## Group A on bc19e05 (26 Oct, 13:58–14:20Z): PASSED; production unchanged
+
+Approved by the owner, renewed Group A for code candidate `bc19e05890773199b794a7a4345ed1c77a6467e1`.
+- **Docs head** `114801870ae3dcdc8fb49e6bb457c00062c53967`. `git diff --name-only bc19e05 1148018` lists only
+  `docs/evaluations/launch-candidate/candidate-integration-v2.6.md`, so the changes after the code candidate are
+  documentation only. Kit `~/rlc135`.
+
+| Step | Result |
+|---|---|
+| Push | `fleet/funding-v116` new branch, no force; remote head `1148018` |
+| Build (VPS, `fleet-deploy-release.sh build`) | Pass 1 read the identity; the pins were written from its output; pass 2 verified: **build `721bb15dfa906bb6e1e37af92b6c8425a64a8bbf8d3f87cdd5d24b6b54ca9ee8`**, lockfile `1df54e35…` (unchanged) |
+| Side-install | `/opt/automaton-fleet/releases/bc19e05…`, identity re-verified; `current` stayed 5ee36d4 |
+| Data rehearsal `fleet-rollout.sh rehearse 115 → 118` | **PASSED 14:01:33Z.** Restore row counts identical; migrate-check applies only 116, 117, 118; privilege audit; ledger head unchanged; reconciliation OK (1,117 journals; history preserved); verify true; re-run applies nothing; rollback dump restores 115 with the same head |
+| Services rehearsal `fleet-upgrade-rehearsal.sh 115 → 118` | **PASSED 14:02:29Z.** Candidate controller, Operator API and dashboard ready on 118; 5ee36d4 refuses 118 (rollback = database restore); restore gives 115 with the same head and 5ee36d4 ready; production PIDs untouched |
+| Credit-source checks, own disposable copy (`credit-check.sh`, then dropped) | Schema 118; `draw_order = promotional_first` with Anthropic's rule as evidence; T2 cache read 10; control_reserved 0; the credit-source lookup is in `svc_cognition_routed_record`, `svc_cognition_record` and `fleet_control_ai_settle_internal`; expiring promotional credit is counted as held; privilege audit PASS |
+| Entries 1 and 2, on the copy only | Entry 1 restored 45,820,070 µ¢ to the lots; entry 2 recorded the $100 grant (displayed dates; `assumed_cutoff` note). **Recorded 11,722,000,000 µ¢ = Console total**; owner payable 1,081 → 1,081; ledger head unchanged (no journal); verify true |
+| A Fleet Control call on promotional credit, on the copy only (copy-only funding of 500p for the hold) | Reserve held 3p; settle at $0.02: drawn from promotional, **posted 0p, hold released 3p**; unallocated and owner payable unchanged; status reports it under `promotional.fleetControlCalls` |
+| Production before and after (13:58:12Z / after) | Identical: schema 115, ledger head 1176 `e214852e…` (verify true), agents and runtimes (Agent-1 5ee36d4, Agent-2 b60e262, both paused), state, founder cognition, units, unit files, PIDs (Agent-1 2004178, Agent-2 866408), packages, tools; **all settings groups identical**; permanent history 333 events, same digest. Total events 3,427 → 3,411: production's own 7-day retention of temporary events, plus 1 `session_opened`. Only `automaton_fleet` and `postgres` databases exist; `current` is 5ee36d4 |
+
+**Carried forward, not rerun (runtime unchanged):** the founder-upgrade rehearsal (27/27) and the revision rehearsal (19/19)
+of 24 Oct on 5ee36d4. bc19e05 changes no founder-runtime file:
+- the diff 5ee36d4..bc19e05 touches only `src/fleet/postgres`, `src/fleet/spend`, `src/fleet/experiments/relevance.ts`,
+  `src/fleet/eval/routing-verify.ts`, `src/fleet/hub`, scripts, tests and docs;
+- Agent-1 stays on runtime 5ee36d4.
+
+**Test status, stated in full:**
+- the 24 targeted files pass (216 tests);
+- cognition hardening 16/16, cognition accounting 11/11, conversations v62 8/8 and founder upgrade 12/12 pass;
+- **4 known failures remain in `fleet-cognition-anthropic` (13/17 pass)**, all `FLEET_INFERENCE_LOCAL_ONLY` from the test
+  fixture's local-only profile, as before this candidate:
+  1. two founders loop through the native adapter with signed thinking handed back unchanged; per-founder accounting;
+     forbidden tools refused;
+  2. billing exhaustion through FleetController: classified, charged nothing, no provider text or key anywhere, history kept;
+  3. forged thinking gains nothing: dropped at a new turn, rejected by the provider inside a tool loop, charged nothing;
+  4. v16 charge rule: cache tokens charged by category with conservative fallbacks; the TS mirror equals the database.
+
+The test set is therefore **not** entirely clean.
+
+**Fleet's allocation versus Anthropic's billing.** Which lot a call draws (promotional first, by soonest expiry; a grant
+treated as expired at Fleet's assumed 00:00Z cutoff; a late result drawn when it is recorded) is **Fleet's conservative
+allocation** under Anthropic's published rule. It is not evidence of which balance Anthropic actually charged:
+- Anthropic's timing is its own (end of billing cycle, its timezone).
+- A call recorded late, or near the expiry, may be billed by Anthropic against the other balance.
+
+The Console's promotional and purchased balances are the authority. Each reconciliation compares Fleet's recorded split with
+the Console's two balances. Any difference is shown as a discrepancy with its likely cause (expiry boundary, late recording),
+corrected by the owner's reconciliation entry, and never assumed away.
+
+**Not done:** no cutover, credit entry, key or provider activation, budget change, paid evaluation, agent resume or
+database restore. Agent-2 unchanged.
+
 ## Funding candidate bc19e05: option A repair (prepared 26 Oct ~15Z; local; for renewed Group A approval)
 
 Commit `bc19e05890773199b794a7a4345ed1c77a6467e1`, branch `fleet/funding-v116`, LOCAL. Schema 115 → 118. No founder runtime or UI
