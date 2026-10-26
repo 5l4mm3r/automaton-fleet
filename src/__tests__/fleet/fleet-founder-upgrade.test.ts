@@ -400,13 +400,13 @@ describe.skipIf(!PG_BIN)("schema v23 runtime-upgrade registry guarantees (Postgr
     const w = await call("T2", "claude-sonnet-5-5", "task_step", { cacheWriteTokens: 3_574 }, { promptCache: "prefix", cacheReason: "T2 stable prefix: reuse expected" });
     expect(w).toMatchObject({ ok: true, cacheSavingMicrocents: -3_574 * (250 - 200) }); // the write premium
     const r = await call("T2", "claude-sonnet-5-5", "task_step", { cacheReadTokens: 3_574 }, { promptCache: "prefix", cacheReason: "T2 stable prefix: reuse expected" });
-    expect(r).toMatchObject({ ok: true, cacheSavingMicrocents: 3_574 * (200 - 20) });
+    expect(r).toMatchObject({ ok: true, cacheSavingMicrocents: 3_574 * (200 - 10) });   // v116: published T2 cache-read price
     await call("T1", "claude-haiku-4-5-20251001", "task_step", {}, { promptCache: "off", cacheReason: "T1 routine: compact, never padded" });
     await call("T3", "claude-opus-5-5", "question", {}, { promptCache: "off", cacheReason: "one-off escalation: no write premium" });
     const rows = await q(`SELECT tier, cache_policy, cache_saving_microcents::int AS s, reasoning ->> 'cacheReason' AS why, router_decision ->> 'scope' AS scope FROM fleet.fleet_cognition_log WHERE agent_id = $1 ORDER BY seq`, [a]);
     expect(rows).toEqual([
       { tier: "T2", cache_policy: "prefix", s: -178_700, why: "T2 stable prefix: reuse expected", scope: "task_step" },
-      { tier: "T2", cache_policy: "prefix", s: 643_320, why: "T2 stable prefix: reuse expected", scope: "task_step" },
+      { tier: "T2", cache_policy: "prefix", s: 679_060, why: "T2 stable prefix: reuse expected", scope: "task_step" },
       { tier: "T1", cache_policy: "off", s: 0, why: "T1 routine: compact, never padded", scope: "task_step" },
       { tier: "T3", cache_policy: "off", s: 0, why: "one-off escalation: no write premium", scope: "question" },
     ]);
@@ -414,7 +414,7 @@ describe.skipIf(!PG_BIN)("schema v23 runtime-upgrade registry guarantees (Postgr
     expect(await svc.cognitionRoutingState(a)).toMatchObject({ lastModel: "claude-opus-5-5", conversationModel: "claude-sonnet-5-5" });
     const report = (await genesis.cognitionReport(new Date(Date.now() - 3_600_000))) as { rows: Array<Record<string, unknown>> };
     const t2 = report.rows.find((x) => x.tier === "T2")!;
-    expect(t2).toMatchObject({ calls: 2, cached_calls: 2, cache_saving_microcents: 643_320 - 178_700, cache_read_tokens: 3_574, cache_write_tokens: 3_574 });
+    expect(t2).toMatchObject({ calls: 2, cached_calls: 2, cache_saving_microcents: 679_060 - 178_700, cache_read_tokens: 3_574, cache_write_tokens: 3_574 });
     expect(report.rows.find((x) => x.tier === "T3")).toMatchObject({ cached_calls: 0, cache_saving_microcents: 0 });
     expect((await ledger.verify()).ok).toBe(true);
     expect((await store.auditPrivileges()).problems).toEqual([]);

@@ -162,7 +162,8 @@ ALTER TABLE fleet_control_ai_reservations
   ADD COLUMN held_minor            bigint NOT NULL DEFAULT 0 CHECK (held_minor >= 0),
   ADD COLUMN actual_usd_microcents bigint CHECK (actual_usd_microcents >= 0),
   ADD COLUMN posted_minor          bigint CHECK (posted_minor >= 0),
-  ADD COLUMN charged_micro         bigint CHECK (charged_micro >= 0),   -- the GBP micro this call added to its kind's accrual (v118 reverses the promotional part)
+  ADD COLUMN charged_micro         bigint CHECK (charged_micro >= 0),   -- the GBP micro this call added to its kind's accrual (purchased part only)
+  ADD COLUMN promotional_usd_microcents bigint CHECK (promotional_usd_microcents >= 0),   -- what promotional credit paid (no charge)
   ADD COLUMN status                text   NOT NULL DEFAULT 'open' CHECK (status IN ('open','unknown','settled','legacy')),
   ADD COLUMN unknown_at            timestamptz,
   ADD COLUMN settled_by            text   CHECK (settled_by ~ '^(controller|operator:[A-Za-z0-9._-]{1,64})$'),
@@ -247,7 +248,7 @@ END $$;
 CREATE FUNCTION fleet_control_ai_settle_internal(p_reservation uuid, p_usd bigint, p_ref text, p_actor text) RETURNS jsonb LANGUAGE plpgsql
 SET search_path = @@SCHEMA@@, pg_temp AS $$
 DECLARE x fleet_control_ai_reservations; v_usd bigint; v_micro bigint; v_unposted bigint; v_total bigint; v_charge bigint; v_funded bigint;
-        v_from_unalloc bigint; v_cash bigint; v_release bigint; v_kind text; v_lines jsonb; v_was text;
+        v_from_unalloc bigint; v_cash bigint; v_release bigint; v_kind text; v_lines jsonb; v_was text; v_promo bigint;
 BEGIN
   SELECT * INTO x FROM fleet_control_ai_reservations WHERE reservation_id = p_reservation FOR UPDATE;
   IF NOT FOUND THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_NOT_FOUND'); END IF;
@@ -272,7 +273,10 @@ BEGIN
   -- The provider-credit record is the actual (written once, by whichever path came first).
   v_usd := COALESCE((SELECT -usd_microcents FROM fleet_provider_credit_events WHERE request_id = x.request_id AND kind = 'consumption'), p_usd);
   v_kind := ${KIND_CASE("x.kind")};
-  v_micro := CEIL(v_usd::numeric * COALESCE(${RATE}, 1000000) / 1000000)::bigint;
+  -- Which credit paid is known now (the draw ran with the consumption, above): promotional credit is charged to no one and
+  -- owed to no one; only the purchased part is posted (v118).
+  v_promo := LEAST(fleet_ai_credit_promotional_drawn(x.request_id), v_usd);
+  v_micro := CEIL((v_usd - v_promo)::numeric * COALESCE(${RATE}, 1000000) / 1000000)::bigint;
   SELECT unposted_microcents INTO v_unposted FROM fleet_control_accrual WHERE kind = v_kind FOR UPDATE;
   v_total := v_unposted + v_micro;
   v_charge := v_total / 1000000;
@@ -297,7 +301,7 @@ BEGIN
   END IF;
   UPDATE fleet_control_accrual SET unposted_microcents = v_total - v_charge * 1000000, updated_at = now() WHERE kind = v_kind;
   UPDATE fleet_control_ai_reservations SET status = 'settled', actual_usd_microcents = v_usd, actual_minor = fleet_usd_microcents_minor(v_usd), posted_minor = v_charge,
-         charged_micro = v_micro,
+         charged_micro = v_micro, promotional_usd_microcents = v_promo,
          settled_at = now(), settled_by = CASE WHEN p_actor ~ '^operator:' THEN p_actor ELSE 'controller' END
    WHERE reservation_id = x.reservation_id RETURNING * INTO x;
   IF v_usd > x.max_usd_microcents OR v_charge > x.held_minor THEN
@@ -310,7 +314,7 @@ BEGIN
     PERFORM fleet_event('fleet_control_ai_reconciled', NULL, COALESCE(NULLIF(p_actor, 'controller'), 'fleet_control'), jsonb_build_object('reservationId', x.reservation_id,
       'kind', x.kind, 'actualUsdMicrocents', v_usd, 'postedMinor', v_charge, 'ref', p_ref));
   END IF;
-  RETURN jsonb_build_object('ok', true, 'status', 'settled', 'actualUsdMicrocents', v_usd, 'actualMinor', x.actual_minor, 'maxMinor', x.max_minor,
+  RETURN jsonb_build_object('ok', true, 'status', 'settled', 'actualUsdMicrocents', v_usd, 'promotionalUsdMicrocents', v_promo, 'actualMinor', x.actual_minor, 'maxMinor', x.max_minor,
     'postedMinor', v_charge, 'releasedMinor', GREATEST(v_release, 0));
 END $$;
 

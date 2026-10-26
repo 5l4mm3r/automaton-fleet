@@ -1,172 +1,128 @@
 /**
- * Schema v118 — promotional credit used by Fleet costs nothing and is owed to no one (owner correction, 2026-10-26: "Promotional
- * credit must not create an owner-reimbursement payable merely because Fleet consumed it … Keep separate: promotional credit
- * consumed; purchased credit consumed and its evidenced reimbursement; any proposed internal charge to agents. No new internal
- * charging policy is approved.").
+ * Schema v118 — the credit that pays is known before the charge is posted (owner, 2026-10-26, option A: "determine the
+ * credit source before posting the charge, within the same transaction. Promotional-funded usage should never temporarily
+ * drain an agent's wallet").
  *
- * The path until now: every AI charge is posted when the call is recorded, before anyone knows which credit the provider
- * drew — agent inference D agent_expense / C agent_cash, an owner conversation or a Fleet Control review D fleet:expense /
- * C treasury — and always with the v69 legs D fleet:treasury:owner_reimbursable / C fleet:owner:payable. The consumption
- * then draws lots (v116: promotional first). For a promotional lot nothing corrected the charge, so free credit became a
- * cost to the agent (or the treasury) AND a debt to the owner, although nobody paid for it.
+ * Until now a model call's charge was posted first (agent inference: the agent's cash; an owner conversation: the treasury;
+ * always owed to the owner, v69) and its provider-credit consumption — which draws the lots (v116: promotional first) — was
+ * written after it. A promotional draw therefore charged the payer and created an owner payable for credit nobody bought.
+ * A delayed reversal (the first v118 draft, never deployed) left a window in which a promotional charge could exhaust — and
+ * kill — an agent, raised false notices, aborted concurrent settlement passes and could refund an uncollectable charge.
  *
- * Now the minutely settlement reverses, for each draw from a promotional lot, exactly the part of the call's charge that
- * the draw covers (the call's own GBP charge × promotional USD / the call's USD):
- *   D fleet:owner:payable  /  C fleet:treasury:owner_reimbursable        (not owed to the owner: he paid nothing for it)
- *   D the payer's cash     /  C the payer's expense                       (agent: agent_cash / agent_expense;
- *                                                                          treasury or Fleet Control: unallocated / fleet:expense)
- * accrued per payer in GBP micro and posted in whole pence, never beyond what that payer was charged. Purchased credit is
- * untouched: its draws keep the v69 legs (owed to the owner, the evidenced reimbursement). Engineering runs post no GBP charge,
- * so their promotional use is recorded only (provider credit and draw). A draw whose charge cannot be found within an hour is
- * recorded as unattributed and Fleet Command is told; an owner-conversation call the treasury could not fund in full is held
- * for the owner (no reversal is posted for a charge that was never booked).
+ * Now, in the recording transaction itself:
+ *  1. the consumption is written FIRST (the lots are drawn under their row locks; concurrent calls serialise there);
+ *  2. what this request drew from promotional lots is read back (fleet_ai_credit_promotional_drawn);
+ *  3. only the purchased part is charged: the intended charge × purchased USD ÷ the call's USD, rounded up; the v111
+ *     overrun exception likewise covers only the purchased part. A call wholly on promotional credit charges no one, owes
+ *     no one and leaves no exception; purchased-only calls are unchanged.
+ *  4. the call log keeps the intended charge (charged_intended_microcents), what promotional credit paid
+ *     (promotional_usd_microcents), the purchased charge before any shortfall (charged_microcents) and what was posted
+ *     (charged_cents); an uncollectable shortfall stays a cost exception of the purchased part.
+ * Fleet Control's settlement does the same (v117, amended). The minutely settlement does nothing for promotional use.
  *
- * The three are reported separately (fleet_ai_credit_status): promotional consumed (USD, by payer, GBP reversed), purchased
- * consumed (owed to the owner), and the internal charge to agents for promotional use — none: no policy is approved; any
- * such charge needs a separate, approved policy and migration. The migration posts nothing.
+ * Reservations never rely on promotional credit: an agent's authorisation still needs its own cash for the full estimate
+ * (the promotional credit may be spent by a competing call or expire before the call is recorded), and promotional credit
+ * expiring within the hour no longer counts as available provider credit for new reservations (fleet_provider_credit_held).
+ * Wallet-zero death is unchanged. Nothing here posts, refunds or rewrites history.
  */
-import { V117_SQL } from "./migrations-phase117.js";
+import { V111_SQL } from "./migrations-phase111.js";
 import { V116_SQL } from "./migrations-phase116.js";
-import { OWNER_PAYABLE_ACCOUNT, REIMBURSABLE_ACCOUNT } from "./migrations-phase69.js";
+import { V117_SQL } from "./migrations-phase117.js";
 import { restate } from "./migrations-phase42.js";
 
 const q = (xs: readonly string[]) => xs.map((x) => `'${x}'`).join(",");
-export const PROMOTIONAL_USE_KIND = "ai_credit_promotional_use";
-export const PROMOTIONAL_PAYERS = ["agent", "treasury", "fleet_control", "none"] as const;
-/** A promotional draw whose charge is not found after this long is recorded as unattributed. */
-export const PROMOTIONAL_ATTRIBUTE_WITHIN_MINUTES = 60;
-export const EVENT_ROUTES_V118 = Object.freeze({ P2_IMPORTANT: ["ai_credit_promotional_unattributed"] });
+/** Promotional credit expiring within this window is not counted as available for a new reservation. */
+export const PROMOTIONAL_EXPIRY_MARGIN_MINUTES = 60;
+export const EVENT_ROUTES_V118 = Object.freeze({ P3_SUMMARY: ["cognition_overrun_promotional"] });
 
-const SETTLE = restate(V117_SQL, "svc_ai_credit_settle", [
-  [`  v_detect := v_detect || jsonb_build_object('fleetControlSweep', fleet_control_ai_sweep());`,
-   `  v_detect := v_detect || jsonb_build_object('fleetControlSweep', fleet_control_ai_sweep());
-  v_detect := v_detect || jsonb_build_object('promotionalUse', fleet_ai_credit_promotional_use_settle());`],
+const CONSUME_FIRST = (provider: string) => `  -- v118: the consumption first — the lots are drawn now, so the credit that pays is known before anything is charged.
+  IF v_used_usd > 0 THEN
+    INSERT INTO fleet_provider_credit_events (provider, kind, usd_microcents, request_id, recorded_by)
+      VALUES (${provider}, 'consumption', -v_used_usd, p_request, 'controller');
+  END IF;
+  v_promo_usd := LEAST(fleet_ai_credit_promotional_drawn(p_request), v_used_usd);
+  v_intended := v_micro;
+  v_micro := fleet_ai_credit_purchased_part(v_micro, v_used_usd, v_promo_usd);
+`;
+
+const ROUTED = restate(V111_SQL, "svc_cognition_routed_record", [
+  [`        v_unposted bigint; v_total bigint; v_rate bigint; v_acct text; v_saving bigint; v_avail bigint; v_unfunded bigint := 0;`,
+   `        v_unposted bigint; v_total bigint; v_rate bigint; v_acct text; v_saving bigint; v_avail bigint; v_unfunded bigint := 0;
+        v_promo_usd bigint := 0; v_intended bigint; v_over_full bigint := 0;`],
+  [`  IF i.payer = 'treasury' THEN
+    -- v62: an owner conversation turn: the treasury pays (fleet operating expense), never the Agent.`,
+   `${CONSUME_FIRST("i.route_provider")}  v_over_full := v_over;
+  v_over := fleet_ai_credit_purchased_part(v_over, v_used_usd, v_promo_usd);
+  v_over_usd := fleet_ai_credit_purchased_part(v_over_usd, v_used_usd, v_promo_usd);
+  IF i.payer = 'treasury' THEN
+    -- v62: an owner conversation turn: the treasury pays (fleet operating expense), never the Agent.`],
+  [`  IF v_used_usd > 0 THEN
+    INSERT INTO fleet_provider_credit_events (provider, kind, usd_microcents, request_id, recorded_by)
+      VALUES (i.route_provider, 'consumption', -v_used_usd, p_request, 'controller');
+  END IF;
+  -- v111: only this call's reservation`, `  -- v111: only this call's reservation`],
+  [`      cache_policy, cache_saving_microcents)`, `      cache_policy, cache_saving_microcents, promotional_usd_microcents, charged_intended_microcents)`],
+  [`THEN v_obs ->> 'promptCache' END, v_saving);`, `THEN v_obs ->> 'promptCache' END, v_saving, v_promo_usd, v_intended);`],
+  [`  IF v_short > 0 THEN`, `  IF v_over = 0 AND v_over_full > 0 THEN
+    PERFORM fleet_event('cognition_overrun_promotional', p_agent, 'controller', jsonb_build_object('requestId', p_request, 'ledgerMicro', v_over_full,
+      'note', 'a model call cost more than its reservation, but promotional credit paid it: nothing to charge or allocate; the estimate was low'));
+  END IF;
+  IF v_short > 0 THEN`],
+  [`'chargedCents', v_charge, 'chargedMicrocents', v_micro,`, `'chargedCents', v_charge, 'chargedMicrocents', v_micro, 'chargedIntendedMicrocents', v_intended, 'promotionalUsdMicrocents', v_promo_usd,`],
+]);
+
+const LEGACY = restate(V111_SQL, "svc_cognition_record", [
+  [`DECLARE i fleet_cognition_inflight; p fleet_cognition_policy; v_cost bigint; v_used_usd bigint; v_cost_l bigint; v_micro bigint; v_charge bigint; v_j uuid;`,
+   `DECLARE i fleet_cognition_inflight; p fleet_cognition_policy; v_cost bigint; v_used_usd bigint; v_cost_l bigint; v_micro bigint; v_charge bigint; v_j uuid;
+        v_promo_usd bigint := 0; v_intended bigint;`],
+  [`  IF v_used_usd > 0 THEN
+    INSERT INTO fleet_provider_credit_events (provider, kind, usd_microcents, request_id, recorded_by)
+      VALUES (p.provider, 'consumption', -v_used_usd, p_request, 'controller');
+  END IF;
+`, ``],
+  [`  INSERT INTO fleet_cognition_accrual (agent_id) VALUES (p_agent) ON CONFLICT (agent_id) DO NOTHING;`,
+   `${CONSUME_FIRST("p.provider")}  INSERT INTO fleet_cognition_accrual (agent_id) VALUES (p_agent) ON CONFLICT (agent_id) DO NOTHING;`],
+  [`      ledger_currency, fx_rate_id, fx_rate_micro, provider_usd_microcents)`, `      ledger_currency, fx_rate_id, fx_rate_micro, provider_usd_microcents, promotional_usd_microcents, charged_intended_microcents)`],
+  [`      v_acct, i.fx_rate_id, v_rate, v_used_usd);`, `      v_acct, i.fx_rate_id, v_rate, v_used_usd, v_promo_usd, v_intended);`],
+  [`'chargedCents', v_charge, 'chargedMicrocents', v_micro,`, `'chargedCents', v_charge, 'chargedMicrocents', v_micro, 'chargedIntendedMicrocents', v_intended, 'promotionalUsdMicrocents', v_promo_usd,`],
+]);
+
+// Provider credit not available for a new reservation: engineering holds, unsettled Fleet Control calls (v117), and
+// promotional credit expiring within the margin (it may be gone before the call is recorded).
+const HELD = restate(V117_SQL, "fleet_provider_credit_held", [
+  [`       + (SELECT COALESCE(sum(max_usd_microcents), 0) FROM fleet_control_ai_reservations WHERE provider = p_provider AND status IN ('open','unknown'))::bigint;`,
+   `       + (SELECT COALESCE(sum(max_usd_microcents), 0) FROM fleet_control_ai_reservations WHERE provider = p_provider AND status IN ('open','unknown'))::bigint
+       + (SELECT COALESCE(sum(usd_remaining), 0) FROM fleet_ai_credit_lots WHERE provider = p_provider AND source = 'promotional' AND usd_remaining > 0
+            AND expires_at > now() AND expires_at <= now() + interval '${PROMOTIONAL_EXPIRY_MARGIN_MINUTES} minutes')::bigint;`],
 ]);
 
 const STATUS = restate(V116_SQL, "fleet_ai_credit_status", [
   [`    'promotionalTreatment', 'not decided: promotional use has no cash cost, but each charge still posts as today (the agent''s cost, made owed to the owner by the v69 default); fleetUse above is that use, at charge rates. Nothing else is posted.',`,
-   `    'promotionalTreatment', 'no cost (v118): promotional use is owed to no one and charged to no one — the charge each call posted is reversed for the part promotional credit covered. No internal charge to agents for promotional use is approved; one would need a separate policy and migration.',
+   `    'promotionalTreatment', 'no cost (v118): the credit that pays is known before a charge is posted; promotional use is charged to no one and owed to no one. No internal charge to agents for promotional use is approved; one would need a separate policy and migration.',
     'consumed', jsonb_build_object(
-      'promotional', (SELECT jsonb_build_object('usdMicrocents', COALESCE(sum(d.usd), 0), 'calls', count(DISTINCT d.request_id),
-          'byPayer', COALESCE((SELECT jsonb_object_agg(payer, jsonb_build_object('usdMicrocents', usd, 'gbpMicroReversible', micro))
-                                 FROM (SELECT payer, sum(usd) AS usd, sum(gbp_micro) AS micro FROM fleet_ai_credit_promotional_uses GROUP BY payer) p), '{}'::jsonb),
-          'unattributedDraws', (SELECT count(*) FROM fleet_ai_credit_promotional_uses WHERE payer = 'none' AND basis = 'unattributed'),
-          'pendingDraws', (SELECT count(*) FROM fleet_ai_credit_draws d2 JOIN fleet_ai_credit_lots l2 ON l2.lot_id = d2.lot_id
-                            WHERE l2.source = 'promotional' AND d2.cause = 'consumption'
-                              AND NOT EXISTS (SELECT 1 FROM fleet_ai_credit_promotional_uses u WHERE u.draw_id = d2.draw_id)),
-          'reversedMinor', (SELECT COALESCE(sum(posted_minor), 0) FROM fleet_ai_credit_promotional_accrual))
-        FROM fleet_ai_credit_draws d JOIN fleet_ai_credit_lots l ON l.lot_id = d.lot_id WHERE l.source = 'promotional' AND d.cause = 'consumption'),
-      'purchased', (SELECT jsonb_build_object('usdMicrocents', COALESCE(sum(d.usd), 0), 'ownerPayableMinor', fleet_ledger_balance('${OWNER_PAYABLE_ACCOUNT}'),
-          'note', 'owner-bought lots: their use is owed to the owner (v69), the evidenced reimbursement; treasury-bought lots are reclassified (v70)')
-        FROM fleet_ai_credit_draws d JOIN fleet_ai_credit_lots l ON l.lot_id = d.lot_id WHERE l.source IN ('owner','treasury') AND d.cause = 'consumption'),
+      'promotional', jsonb_build_object(
+        'usdMicrocents', (SELECT COALESCE(sum(d.usd), 0) FROM fleet_ai_credit_draws d JOIN fleet_ai_credit_lots l ON l.lot_id = d.lot_id WHERE l.source = 'promotional' AND d.cause = 'consumption'),
+        'agentCalls', (SELECT jsonb_build_object('calls', count(*), 'usdMicrocents', COALESCE(sum(promotional_usd_microcents), 0)) FROM fleet_cognition_log WHERE payer = 'agent' AND promotional_usd_microcents > 0),
+        'treasuryCalls', (SELECT jsonb_build_object('calls', count(*), 'usdMicrocents', COALESCE(sum(promotional_usd_microcents), 0)) FROM fleet_cognition_log WHERE payer = 'treasury' AND promotional_usd_microcents > 0),
+        'fleetControlCalls', (SELECT jsonb_build_object('calls', count(*), 'usdMicrocents', COALESCE(sum(promotional_usd_microcents), 0)) FROM fleet_control_ai_reservations WHERE promotional_usd_microcents > 0),
+        'chargedMinor', 0, 'owedToOwnerMinor', 0),
+      'purchased', jsonb_build_object(
+        'usdMicrocents', (SELECT COALESCE(sum(d.usd), 0) FROM fleet_ai_credit_draws d JOIN fleet_ai_credit_lots l ON l.lot_id = d.lot_id WHERE l.source IN ('owner','treasury') AND d.cause = 'consumption'),
+        'ownerPayableMinor', fleet_ledger_balance('fleet:owner:payable'),
+        'note', 'owner-bought lots: their use is owed to the owner (v69), the evidenced reimbursement; treasury-bought lots are reclassified (v70)'),
       'internalChargeToAgentsForPromotional', jsonb_build_object('policy', 'none approved', 'postedMinor', 0)),`],
 ]);
 
 export const V118_SQL = `
-INSERT INTO fleet_ledger_kinds (kind, requires_external_ref, allowed_sources, multi_agent, description, provenance) VALUES
-  ('${PROMOTIONAL_USE_KIND}', false, ARRAY['controller'], false,
-   'AI use covered by promotional (free) provider credit: the call''s charge reversed for that part — owed to no one, charged to no one', 'correction');
-INSERT INTO fleet_ledger_rules (kind, class, side) VALUES
-  ('${PROMOTIONAL_USE_KIND}','owner_payable','D'), ('${PROMOTIONAL_USE_KIND}','treasury_cash','C'),
-  ('${PROMOTIONAL_USE_KIND}','agent_cash','D'), ('${PROMOTIONAL_USE_KIND}','agent_expense','C'),
-  ('${PROMOTIONAL_USE_KIND}','treasury_cash','D'), ('${PROMOTIONAL_USE_KIND}','fleet_expense','C');
+ALTER TABLE fleet_cognition_log
+  ADD COLUMN promotional_usd_microcents bigint CHECK (promotional_usd_microcents >= 0),
+  ADD COLUMN charged_intended_microcents bigint CHECK (charged_intended_microcents >= 0);
 
--- One row per promotional draw: whose charge it covered and how much of it (GBP micro), once.
-CREATE TABLE fleet_ai_credit_promotional_uses (
-  draw_id     bigint      PRIMARY KEY REFERENCES fleet_ai_credit_draws(draw_id),
-  request_id  uuid,
-  payer       text        NOT NULL CHECK (payer IN (${q(PROMOTIONAL_PAYERS)})),
-  agent_id    text        REFERENCES fleet_agents(agent_id),
-  usd         bigint      NOT NULL CHECK (usd > 0),
-  gbp_micro   bigint      NOT NULL CHECK (gbp_micro >= 0),
-  basis       text        NOT NULL CHECK (basis IN ('charge','no_gbp_charge','unattributed','unfunded_owner_review')),
-  at          timestamptz NOT NULL DEFAULT now(),
-  CHECK ((payer = 'agent') = (agent_id IS NOT NULL)),
-  CHECK (payer <> 'none' OR gbp_micro = 0)
-);
-CREATE TRIGGER fleet_ai_credit_promotional_uses_no_change BEFORE UPDATE OR DELETE ON fleet_ai_credit_promotional_uses FOR EACH ROW EXECUTE FUNCTION fleet_history_immutable();
+${ROUTED}
 
--- Per payer account: GBP micro to reverse, and whole pence reversed so far.
-CREATE TABLE fleet_ai_credit_promotional_accrual (
-  cash_account    text        PRIMARY KEY,
-  expense_account text        NOT NULL,
-  agent_id        text        REFERENCES fleet_agents(agent_id),
-  micro           bigint      NOT NULL DEFAULT 0 CHECK (micro >= 0),
-  posted_minor    bigint      NOT NULL DEFAULT 0 CHECK (posted_minor >= 0),
-  updated_at      timestamptz NOT NULL DEFAULT now(),
-  CHECK (posted_minor * 1000000 <= micro)
-);
-CREATE TRIGGER fleet_ai_credit_promotional_accrual_no_delete BEFORE DELETE ON fleet_ai_credit_promotional_accrual FOR EACH ROW EXECUTE FUNCTION fleet_history_immutable();
+${LEGACY}
 
--- Minutely: attribute new promotional draws to the charge they covered, then reverse whole pence per payer.
-CREATE FUNCTION fleet_ai_credit_promotional_use_settle() RETURNS jsonb LANGUAGE plpgsql
-SET search_path = @@SCHEMA@@, pg_temp AS $$
-DECLARE d record; c fleet_cognition_log; x fleet_control_ai_reservations; v_call_usd bigint; v_micro bigint; v_payer text; v_basis text;
-        v_cash text; v_exp text; v_agent text; a fleet_ai_credit_promotional_accrual; v_post bigint; v_room bigint;
-        v_new integer := 0; v_posted bigint := 0; v_unattributed integer := 0;
-BEGIN
-  FOR d IN SELECT dr.* FROM fleet_ai_credit_draws dr JOIN fleet_ai_credit_lots l ON l.lot_id = dr.lot_id
-            WHERE l.source = 'promotional' AND dr.cause = 'consumption'
-              AND NOT EXISTS (SELECT 1 FROM fleet_ai_credit_promotional_uses u WHERE u.draw_id = dr.draw_id)
-            ORDER BY dr.draw_id LIMIT 500 LOOP
-    v_payer := NULL; v_micro := 0; v_agent := NULL; v_cash := NULL; v_exp := NULL; v_basis := 'charge';
-    v_call_usd := (SELECT -usd_microcents FROM fleet_provider_credit_events WHERE request_id = d.request_id AND kind = 'consumption');
-    SELECT * INTO c FROM fleet_cognition_log WHERE request_id = d.request_id;
-    IF c.request_id IS NOT NULL THEN
-      IF c.payer = 'agent' THEN
-        v_payer := 'agent'; v_agent := c.agent_id;
-        v_cash := fleet_ledger_account(c.agent_id, 'agent_cash'); v_exp := fleet_ledger_account(c.agent_id, 'agent_expense');
-      ELSE
-        v_payer := 'treasury'; v_cash := 'fleet:treasury:unallocated'; v_exp := 'fleet:expense';
-        IF COALESCE((SELECT unfunded_cents FROM fleet_conversation_turns WHERE turn_id = c.conversation_turn), 0) > 0 THEN v_basis := 'unfunded_owner_review'; END IF;
-      END IF;
-      v_micro := CASE WHEN v_basis = 'charge' THEN (COALESCE(c.charged_microcents, 0)::numeric * d.usd / GREATEST(v_call_usd, d.usd))::bigint ELSE 0 END;
-    ELSE
-      SELECT * INTO x FROM fleet_control_ai_reservations WHERE request_id = d.request_id AND status = 'settled';
-      IF x.reservation_id IS NOT NULL THEN
-        v_payer := 'fleet_control'; v_cash := 'fleet:treasury:unallocated'; v_exp := 'fleet:expense';
-        v_micro := (COALESCE(x.charged_micro, 0)::numeric * d.usd / GREATEST(x.actual_usd_microcents, d.usd))::bigint;
-      ELSIF EXISTS (SELECT 1 FROM fleet_engineering_cognition_calls WHERE call_id = d.request_id) THEN
-        v_payer := 'none'; v_basis := 'no_gbp_charge';
-      ELSIF d.at < now() - interval '${PROMOTIONAL_ATTRIBUTE_WITHIN_MINUTES} minutes' THEN
-        v_payer := 'none'; v_basis := 'unattributed';
-      ELSE
-        CONTINUE;   -- its charge is not recorded yet (an open reservation, a call still being recorded): next pass
-      END IF;
-    END IF;
-    IF v_payer = 'fleet_control' AND x.reservation_id IS NULL THEN CONTINUE; END IF;
-    INSERT INTO fleet_ai_credit_promotional_uses (draw_id, request_id, payer, agent_id, usd, gbp_micro, basis)
-      VALUES (d.draw_id, d.request_id, v_payer, v_agent, d.usd, CASE WHEN v_payer = 'none' THEN 0 ELSE v_micro END, v_basis);
-    v_new := v_new + 1;
-    IF v_basis IN ('unattributed','unfunded_owner_review') THEN
-      v_unattributed := v_unattributed + 1;
-      PERFORM fleet_event('ai_credit_promotional_unattributed', v_agent, 'controller', jsonb_build_object('drawId', d.draw_id, 'requestId', d.request_id,
-        'usdMicrocents', d.usd, 'basis', v_basis, 'note', CASE WHEN v_basis = 'unattributed'
-          THEN 'promotional credit was drawn for a call whose charge Fleet cannot find: nothing is reversed or owed; the use is recorded'
-          ELSE 'promotional credit covered an owner-conversation call the treasury could not fund in full: nothing is reversed automatically; review it' END));
-    ELSIF v_micro > 0 THEN
-      INSERT INTO fleet_ai_credit_promotional_accrual (cash_account, expense_account, agent_id, micro) VALUES (v_cash, v_exp, v_agent, v_micro)
-        ON CONFLICT (cash_account) DO UPDATE SET micro = fleet_ai_credit_promotional_accrual.micro + EXCLUDED.micro, updated_at = now();
-    END IF;
-  END LOOP;
-  -- Whole pence per payer, never beyond what was owed to the owner and held for him.
-  FOR a IN SELECT * FROM fleet_ai_credit_promotional_accrual WHERE micro / 1000000 > posted_minor ORDER BY cash_account FOR UPDATE SKIP LOCKED LOOP
-    v_room := LEAST(fleet_ledger_balance('${OWNER_PAYABLE_ACCOUNT}'), fleet_ledger_balance('${REIMBURSABLE_ACCOUNT}'));
-    v_post := LEAST(a.micro / 1000000 - a.posted_minor, GREATEST(v_room, 0));
-    CONTINUE WHEN v_post <= 0;
-    PERFORM fleet_ledger_post('${PROMOTIONAL_USE_KIND}', 'ai-credit-promotional:' || a.cash_account || ':' || (a.posted_minor + v_post), 'controller',
-      'AI use covered by promotional credit: owed to no one, charged to no one', 'controller', a.agent_id, NULL, NULL, NULL, NULL, now(), jsonb_build_array(
-        jsonb_build_object('account', '${OWNER_PAYABLE_ACCOUNT}', 'side', 'D', 'amount', v_post),
-        jsonb_build_object('account', '${REIMBURSABLE_ACCOUNT}', 'side', 'C', 'amount', v_post),
-        jsonb_build_object('account', a.cash_account, 'side', 'D', 'amount', v_post),
-        jsonb_build_object('account', a.expense_account, 'side', 'C', 'amount', v_post)));
-    UPDATE fleet_ai_credit_promotional_accrual SET posted_minor = posted_minor + v_post, updated_at = now() WHERE cash_account = a.cash_account;
-    v_posted := v_posted + v_post;
-  END LOOP;
-  RETURN jsonb_build_object('attributed', v_new, 'reversedMinor', v_posted, 'unattributed', v_unattributed);
-END $$;
-
-${SETTLE}
+${HELD}
 
 ${STATUS}
 

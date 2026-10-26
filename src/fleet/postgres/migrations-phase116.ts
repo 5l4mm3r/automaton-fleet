@@ -162,6 +162,19 @@ BEGIN
     'recordedBalanceUsdMicrocents', fleet_provider_credit_balance(p_provider));
 END $$;
 
+-- v118: what a request drew from promotional lots (its consumption's draws, written by the trigger in the same transaction).
+CREATE FUNCTION fleet_ai_credit_promotional_drawn(p_request uuid) RETURNS bigint LANGUAGE sql STABLE
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+  SELECT COALESCE(sum(d.usd), 0)::bigint FROM fleet_ai_credit_draws d JOIN fleet_ai_credit_lots l ON l.lot_id = d.lot_id
+   WHERE d.request_id = p_request AND d.cause = 'consumption' AND l.source = 'promotional'
+$$;
+-- v118: the purchased part of an amount for a call of p_usd of which p_promo was promotional (rounded up: never under-charged).
+CREATE FUNCTION fleet_ai_credit_purchased_part(p_amount bigint, p_usd bigint, p_promo bigint) RETURNS bigint LANGUAGE sql IMMUTABLE AS $$
+  SELECT CASE WHEN COALESCE(p_promo, 0) <= 0 OR COALESCE(p_usd, 0) <= 0 THEN p_amount
+              WHEN p_promo >= p_usd THEN 0
+              ELSE CEIL(p_amount::numeric * (p_usd - p_promo) / p_usd)::bigint END
+$$;
+
 -- Expired promotional credit stops being credit: what is left is drawn (no posting; the grant was never an asset).
 CREATE FUNCTION fleet_ai_credit_promotional_expire() RETURNS jsonb LANGUAGE plpgsql
 SET search_path = @@SCHEMA@@, pg_temp AS $$

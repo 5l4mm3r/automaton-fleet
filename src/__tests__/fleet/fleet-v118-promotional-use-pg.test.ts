@@ -1,18 +1,17 @@
 /**
- * Schema v118 — promotional credit used by Fleet costs nothing and is owed to no one (PostgreSQL; the real charge paths:
- * routed agent inference and a Fleet Control reservation; no provider, no network).
+ * Schema v118 — the credit that pays is known before the charge is posted (PostgreSQL; the real charge paths: routed agent
+ * inference and a Fleet Control settlement; no provider, no network).
  *
- * Proven here, with amounts:
- *  - a call fully covered by promotional credit leaves the owner payable, the agent's cash and expense exactly where they were;
- *  - a call split across promotional and purchased credit owes the owner only the purchased part (the evidenced reimbursement);
+ * Proven here, with amounts, at the moment the call is recorded (no later pass needed):
+ *  - a call wholly on promotional credit charges no one and owes no one: every balance is unchanged;
+ *  - a call split across promotional and purchased credit charges, and owes the owner, the purchased part only;
  *  - a call on purchased credit alone keeps the v69 legs unchanged;
- *  - a Fleet Control call on promotional credit costs the treasury nothing; settling again changes nothing (no double reversal);
- *  - a promotional draw whose charge cannot be found is recorded, reversed for no one, and reported;
- *  - the status keeps promotional consumed, purchased consumed and any internal agent charge (none approved) separate.
+ *  - a Fleet Control call on promotional credit posts nothing; its hold is released whole;
+ *  - the log keeps intended, promotional, purchased and posted amounts apart; the status keeps promotional consumed,
+ *    purchased consumed and any internal agent charge (none approved) separate; the minutely pass does nothing for it.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import crypto from "crypto";
-import pg from "pg";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
 import { startEconomyRegistry, OWNER, type EconomyRegistry } from "./fixtures/economy-registry.js";
 import { PgFleetStore, type CognitionRecord } from "../../fleet/postgres/store.js";
@@ -26,29 +25,24 @@ const route = { tier: "T2", provider: "anthropic", model: "claude-sonnet-5-5", t
 const rec = (): CognitionRecord => ({ outcome: "ok", inputTokens: 200_000, outputTokens: 20_000, promptSha256: "a".repeat(64), responseSha256: "b".repeat(64),
   toolCalls: [], errorCode: null, usageSource: "provider", attempts: 1 });
 
-describe.skipIf(!PG_BIN)("v118: promotional use is owed to no one and charged to no one (PostgreSQL)", { timeout: 300_000 }, () => {
+describe.skipIf(!PG_BIN)("v118: the credit that pays is known before the charge (PostgreSQL)", { timeout: 300_000 }, () => {
   let R: EconomyRegistry;
   let svc: PgFleetStore;
   let A: string;
-  let su: pg.Pool;
-  const asSuper = async (sql: string, params: unknown[] = []) => {
-    const c = await su.connect();
-    try { await c.query("SET session_replication_role = replica"); return (await c.query(sql, params)).rows; } finally { await c.query("RESET session_replication_role"); c.release(); }
-  };
   const books = async () => ({ payable: await R.balance(OWNER_PAYABLE_ACCOUNT), reimbursable: await R.balance(REIMBURSABLE_ACCOUNT),
     cash: await R.balance(`agent:${A}:cash`), agentExpense: await R.balance(`agent:${A}:expense`), unallocated: await R.balance("fleet:treasury:unallocated"),
-    expense: await R.balance("fleet:expense") });
-  const settle = () => R.one<Record<string, any>>(`fleet.svc_ai_credit_settle(20)`);
+    expense: await R.balance("fleet:expense"), reserved: await R.balance("fleet:treasury:control_reserved") });
   const infer = async () => {
     const a = await svc.cognitionRoutedAuthorize(A, 100, route, "c".repeat(64));
     expect(a, JSON.stringify(a)).toMatchObject({ ok: true });
     const r = await svc.cognitionRoutedRecord(A, String(a.requestId), rec(), {});
     expect(r, JSON.stringify(r)).toMatchObject({ ok: true });
-    return { id: String(a.requestId), chargedCents: Number(r.chargedCents) };
+    return { id: String(a.requestId), r };
   };
   const draws = async (id: string) => (await R.q(`SELECT l.source, d.usd FROM fleet.fleet_ai_credit_draws d JOIN fleet.fleet_ai_credit_lots l ON l.lot_id = d.lot_id
     WHERE d.request_id = $1 ORDER BY d.draw_id`, [id])).map((r) => `${r.source}:${Number(r.usd) / USD}`);
-  const charged = async (id: string) => Number((await R.q(`SELECT charged_microcents FROM fleet.fleet_cognition_log WHERE request_id = $1`, [id]))[0].charged_microcents);
+  const log = async (id: string) => (await R.q(`SELECT promotional_usd_microcents::text AS promo, charged_intended_microcents::text AS intended,
+    charged_microcents::text AS purchased, charged_cents::text AS posted FROM fleet.fleet_cognition_log WHERE request_id = $1`, [id]))[0];
   const grant = (ref: string, cents: number) => R.one(`fleet.fleet_admin_ai_credit_promotional_grant('anthropic', $1, $2, $2, now() - interval '1 day', now() + interval '20 days',
     'assumed_cutoff', 'test display', 'test console', $3)`, [ref, cents, OWNER]);
 
@@ -57,7 +51,6 @@ describe.skipIf(!PG_BIN)("v118: promotional use is owed to no one and charged to
     A = R.founders[0].id;
     await R.store.grantServiceRole();
     svc = new PgFleetStore({ connectionString: R.pgc.serviceUrl });
-    su = new pg.Pool({ connectionString: R.pgc.superUrl.replace(/\/postgres$/, `/${R.pgc.dbname}`), max: 1 });
     await R.genesis.setCognitionPolicy({ enabled: true, provider: "anthropic", model: "claude-opus-5-5", maxOutputTokens: 4_000, actor: OWNER,
       inputMicrocents: 400, outputMicrocents: 2_000, cacheWriteMicrocents: 500, cacheReadMicrocents: 20 });
     await R.genesis.setFounderCognition(A, { enabled: true, maxTurnsPerHour: 3_600, dailyBudgetCents: 10_000, reason: "t", actor: OWNER });
@@ -69,63 +62,57 @@ describe.skipIf(!PG_BIN)("v118: promotional use is owed to no one and charged to
     await R.genesis.founderRoutingSet(A, true, OWNER);
     await grant("promo-a", 100);                                                          // $1.00 of promotional credit
   }, 300_000);
-  afterAll(async () => { await svc?.close(); await su?.end(); await R?.close(); });
+  afterAll(async () => { await svc?.close(); await R?.close(); });
 
   it("migrates to v118 with a clean audit; the status keeps the three apart", async () => {
     expect(FLEET_PG_SCHEMA_VERSION).toBeGreaterThanOrEqual(118);
     const audit = (await R.store.auditPrivileges()).problems;
     expect(audit, JSON.stringify(audit)).toEqual([]);
-    expect(await R.one(`fleet.fleet_event_route('ai_credit_promotional_unattributed', '{}'::jsonb)`)).toBe("P2_IMPORTANT");
     const st = await R.one<Record<string, any>>(`fleet.fleet_ai_credit_status()`);
     expect(st.consumed.internalChargeToAgentsForPromotional).toEqual({ policy: "none approved", postedMinor: 0 });
-    expect(String(st.promotionalTreatment)).toMatch(/owed to no one and charged to no one/);
+    expect(st.consumed.promotional).toMatchObject({ chargedMinor: 0, owedToOwnerMinor: 0 });
+    expect(String(st.promotionalTreatment)).toMatch(/charged to no one and owed to no one/);
   });
 
-  it("a call covered by promotional credit: no owner payable, the agent pays nothing, the use is recorded", async () => {
+  it("a call wholly on promotional credit charges no one and owes no one — at once", async () => {
     const b0 = await books();
     const c = await infer();
     expect(await draws(c.id)).toEqual(["promotional:0.6"]);
-    expect(c.chargedCents).toBeGreaterThan(0);
-    const b1 = await books();
-    expect(b1.payable - b0.payable).toBe(c.chargedCents);                                // the charge path posts the v69 legs first…
-    const s = await settle();
-    expect(s.detection.promotionalUse).toMatchObject({ attributed: 1, reversedMinor: c.chargedCents });
-    expect(await books()).toEqual(b0);                                                    // …and the settlement takes them back exactly
-    expect(await R.q(`SELECT payer, agent_id, usd::text, gbp_micro::text, basis FROM fleet.fleet_ai_credit_promotional_uses WHERE request_id = $1`, [c.id]))
-      .toEqual([{ payer: "agent", agent_id: A, usd: String(0.6 * USD), gbp_micro: String(await charged(c.id)), basis: "charge" }]);
-    expect((await settle()).detection.promotionalUse).toEqual({ attributed: 0, reversedMinor: 0, unattributed: 0 });   // no double reversal
-    expect(await books()).toEqual(b0);
+    expect(c.r).toMatchObject({ chargedCents: 0, chargedMicrocents: 0, promotionalUsdMicrocents: 0.6 * USD });
+    expect(Number(c.r.chargedIntendedMicrocents)).toBeGreaterThan(0);
+    expect(await books()).toEqual(b0);                                                    // nothing moved, no pass needed
+    expect(await log(c.id)).toEqual({ promo: String(0.6 * USD), intended: String(c.r.chargedIntendedMicrocents), purchased: "0", posted: "0" });
   });
 
-  it("a call split across promotional and purchased credit owes the owner only the purchased part", async () => {
+  it("a call split across promotional and purchased credit charges, and owes, the purchased part only", async () => {
     const b0 = await books();
-    const posted0 = Number(await R.one(`(SELECT COALESCE(sum(posted_minor), 0) FROM fleet.fleet_ai_credit_promotional_accrual)`));
-    const micro0 = Number(await R.one(`(SELECT COALESCE(sum(micro), 0) FROM fleet.fleet_ai_credit_promotional_accrual)`));
+    const carry0 = Number(await R.one(`(SELECT unposted_microcents FROM fleet.fleet_cognition_accrual WHERE agent_id = $1)`, [A]));
     const c = await infer();
     expect(await draws(c.id)).toEqual(["promotional:0.4", "owner:0.2"]);                  // $0.40 of the grant left, then purchased
-    await settle();
-    const promoMicro = Number(await R.one(`(SELECT gbp_micro FROM fleet.fleet_ai_credit_promotional_uses WHERE request_id = $1)`, [c.id]));
-    expect(promoMicro).toBe(Math.round(await charged(c.id) * 0.4 / 0.6));                 // the charge × promotional / the call's USD
-    const reversed = Math.floor((micro0 + promoMicro) / 1_000_000) - posted0;
+    const intended = Number(c.r.chargedIntendedMicrocents);
+    const purchased = Math.ceil(intended * 0.2 / 0.6);                                    // the intended charge × purchased ÷ total, rounded up
+    expect(Number(c.r.chargedMicrocents)).toBe(purchased);
+    const posted = Math.floor((carry0 + purchased) / 1_000_000);
+    expect(Number(c.r.chargedCents)).toBe(posted);
     const b1 = await books();
-    expect(b1.payable - b0.payable).toBe(c.chargedCents - reversed);                     // owed: the purchased part only
-    expect(b1.reimbursable - b0.reimbursable).toBe(c.chargedCents - reversed);
-    expect(b0.cash - b1.cash).toBe(c.chargedCents - reversed);                           // the agent pays the purchased part (v69, unchanged)
-    expect(b1.agentExpense - b0.agentExpense).toBe(c.chargedCents - reversed);
+    expect(b1.payable - b0.payable).toBe(posted);                                         // owed: the purchased part only
+    expect(b1.reimbursable - b0.reimbursable).toBe(posted);
+    expect(b0.cash - b1.cash).toBe(posted);
+    expect(b1.agentExpense - b0.agentExpense).toBe(posted);
+    expect(await log(c.id)).toEqual({ promo: String(0.4 * USD), intended: String(intended), purchased: String(purchased), posted: String(posted) });
   });
 
   it("a call on purchased credit alone keeps the v69 legs unchanged", async () => {
     const b0 = await books();
     const c = await infer();
     expect(await draws(c.id)).toEqual(["owner:0.6"]);
-    const s = await settle();
-    expect(s.detection.promotionalUse.attributed).toBe(0);
+    expect(Number(c.r.chargedMicrocents)).toBe(Number(c.r.chargedIntendedMicrocents));
     const b1 = await books();
-    expect(b1.payable - b0.payable).toBe(c.chargedCents);
-    expect(b0.cash - b1.cash).toBe(c.chargedCents);
+    expect(b1.payable - b0.payable).toBe(Number(c.r.chargedCents));
+    expect(b0.cash - b1.cash).toBe(Number(c.r.chargedCents));
   });
 
-  it("a Fleet Control call on promotional credit costs the treasury nothing and is owed to no one; settling twice changes nothing", async () => {
+  it("a Fleet Control call on promotional credit posts nothing; its hold is released whole", async () => {
     await grant("promo-b", 100);
     await R.one(`fleet.fleet_admin_fleet_control_ai_budget(100000, 'test budget', $1)`, [OWNER]);
     const b0 = await books();
@@ -134,48 +121,20 @@ describe.skipIf(!PG_BIN)("v118: promotional use is owed to no one and charged to
     expect(r).toMatchObject({ ok: true });
     const s = await R.one<Record<string, any>>(`fleet.svc_fleet_control_ai_settle($1::uuid, 8000000)`, [r.reservationId]);   // $0.08
     expect(await draws(req)).toEqual(["promotional:0.08"]);
-    const posted = Number(s.postedMinor);
-    expect(posted).toBeGreaterThan(0);
-    const before = await books();
-    expect(before.payable - b0.payable).toBe(posted);
-    const j0 = Number(await R.one(`(SELECT count(*) FROM fleet.fleet_ledger_journal)`));
-    await settle();
-    const after = await books();
-    // Reversed in whole pence per payer (the treasury's carry stays as accrued micro, never posted beyond what was charged).
-    const acc = (await R.q(`SELECT micro::bigint AS m, posted_minor::bigint AS p FROM fleet.fleet_ai_credit_promotional_accrual WHERE cash_account = 'fleet:treasury:unallocated'`))[0];
-    expect(Number(acc.p)).toBe(Math.floor(Number(acc.m) / 1_000_000));
-    expect(after.payable).toBe(b0.payable + posted - (Number(acc.p)));
-    expect(after.unallocated).toBe(b0.unallocated - posted + Number(acc.p));
-    expect(after.expense).toBe(b0.expense + posted - Number(acc.p));
-    expect(Number(acc.p)).toBe(posted);                                                   // here the whole charge came back
-    expect(after).toEqual(b0);
-    const j1 = Number(await R.one(`(SELECT count(*) FROM fleet.fleet_ledger_journal)`));
-    await settle();
-    expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_ledger_journal)`))).toBe(j1);   // no double reversal
-    expect(j1).toBe(j0 + 1);
+    expect(s).toMatchObject({ ok: true, postedMinor: 0, promotionalUsdMicrocents: 8_000_000, releasedMinor: Number(r.heldMinor) });
+    expect(await books()).toEqual(b0);
     expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_provider_credit_events WHERE request_id = $1)`, [req]))).toBe(1);
   });
 
-  it("a promotional draw whose charge cannot be found is recorded and reported, reversed for no one", async () => {
-    const b0 = await books();
-    const req = crypto.randomUUID();
-    await R.q(`INSERT INTO fleet.fleet_provider_credit_events (provider, kind, usd_microcents, request_id, recorded_by) VALUES ('anthropic', 'consumption', -1000000, $1, 'controller')`, [req]);
-    expect(await draws(req)).toEqual(["promotional:0.01"]);
-    expect((await settle()).detection.promotionalUse.attributed).toBe(0);                // not yet: its charge may still be recorded
-    await asSuper(`UPDATE fleet.fleet_ai_credit_draws SET at = now() - interval '61 minutes' WHERE request_id = $1`, [req]);
-    expect((await settle()).detection.promotionalUse).toMatchObject({ attributed: 1, reversedMinor: 0, unattributed: 1 });
-    expect(await R.q(`SELECT payer, gbp_micro::text, basis FROM fleet.fleet_ai_credit_promotional_uses WHERE request_id = $1`, [req]))
-      .toEqual([{ payer: "none", gbp_micro: "0", basis: "unattributed" }]);
-    expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_events WHERE event_type = 'ai_credit_promotional_unattributed')`))).toBe(1);
-    expect(await books()).toEqual(b0);
-  });
-
-  it("reports the three separately; the books verify", async () => {
+  it("the minutely pass does nothing for promotional use; the status reports it apart; the books verify", async () => {
+    const j0 = Number(await R.one(`(SELECT count(*) FROM fleet.fleet_ledger_journal)`));
+    const s = await R.one<Record<string, any>>(`fleet.svc_ai_credit_settle(20)`);
+    expect(s.detection.promotionalUse).toBeUndefined();
+    expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_ledger_journal)`))).toBe(j0);
     const st = await R.one<Record<string, any>>(`fleet.fleet_ai_credit_status()`);
-    expect(st.consumed.promotional).toMatchObject({ usdMicrocents: 0.6 * USD + 0.4 * USD + 0.08 * USD + 0.01 * USD, calls: 4, unattributedDraws: 1, pendingDraws: 0 });
-    expect(Object.keys(st.consumed.promotional.byPayer).sort()).toEqual(["agent", "fleet_control", "none"]);
+    expect(st.consumed.promotional).toMatchObject({ usdMicrocents: 0.6 * USD + 0.4 * USD + 0.08 * USD,
+      agentCalls: { calls: 2, usdMicrocents: 1 * USD }, fleetControlCalls: { calls: 1, usdMicrocents: 0.08 * USD } });
     expect(st.consumed.purchased.usdMicrocents).toBe(0.2 * USD + 0.6 * USD);
-    expect(st.consumed.internalChargeToAgentsForPromotional.postedMinor).toBe(0);
     expect(await R.one(`fleet.fleet_ledger_verify() ->> 'ok'`)).toBe("true");
   });
 });
