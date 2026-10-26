@@ -423,6 +423,67 @@ tokens** on each warm step, at 20 µ¢ a token. So the tool definitions cost lit
   **Rerun:** services rehearsal (controller code changed), founder-upgrade rehearsal (runtime changed; it also exercises
   the 4,000-token request against the fake Anthropic API) and the revision rehearsal (the target). All non-billable.
 
+## Group A on 81e1ae5 (26 Oct, 15:56–16:01Z): PASSED; production unchanged — and the Group B package (prepared, not run)
+
+Approved by the owner, Group A for code commit `81e1ae5e6a2928797ec9f69e59317c40e7e1c760`.
+- **Docs head** `212e76c3435eeca3b2bfa827d237fa45a78dd7bd`. `git diff --name-only 81e1ae5 212e76c` lists only
+  `docs/evaluations/launch-candidate/candidate-integration-v2.6.md`, so the changes after the code commit are documentation only.
+- **Approval-record wording (owner):** **$15 is an authorisation ceiling based on reserved estimates, not an unconditional
+  provider-billing guarantee.** An underestimated call (provider cost above its estimate) can exceed it; that is recorded and
+  becomes a cost exception that stops further agent calls.
+
+| Step | Result |
+|---|---|
+| Push | `fleet/canary-prep`, new branch, no force; remote head `212e76c`; 12 commits beyond the pushed `fleet/funding-v116` |
+| Build (VPS) | Pass 1 read the identity; pins written from its output (`~/rlc136/pins.txt`); pass 2 verified: **build `23c34147046d33a36cbdb42d4afed56ebc4e6b7314b09b3a46cf67f00fff49eb`**, lockfile `1df54e35…` (unchanged) |
+| Side-install | `/opt/automaton-fleet/releases/81e1ae5…`, identity re-verified; `current` stayed bc19e05 |
+| Data rehearsal `fleet-rollout.sh rehearse 118 → 119` | **PASSED 15:59:08Z.** Row counts identical; only 119 applies; privilege audit; ledger head unchanged; reconciliation OK (1,117 journals; history preserved); verify true; re-run applies nothing; rollback restores 118 with the same head |
+| Services rehearsal `fleet-upgrade-rehearsal.sh 118 → 119` | **PASSED 15:59:51Z.** Candidate controller, Operator API and dashboard ready on 119; bc19e05 refuses 119 (rollback = database restore); restore to 118 with the same head; bc19e05 ready; production PIDs untouched |
+| Disposable copy (`copy-check.sh`, then dropped) | Schema 119. **Shared in-flight figure:** `fleet_provider_credit_held` includes model-call reservations; no authorisation or the engineering hold subtracts them separately (0). A 25-cent in-flight reservation raised held by exactly 25,000,000 µ¢ (once). With 5¢ free, Fleet Control was **refused 7¢** (`FLEET_CONTROL_AI_BUDGET_UNFUNDED`) and **got exactly 5¢**; free then 0. **Release guard dry run:** `fleet-canary.sh check --dry-run` (deadline passed) printed the safe stop and **kept the ceiling hold** ("2 reservation(s) still open"). Copy state (journals, events, paused flags, sales, open holds, Fleet Control ceiling, offer status) identical before/after; **0 files written** |
+| Production before/after (15:56:11Z / after) | Identical: schema 118; ledger head 1176 `e214852e…` (verify true); agents (Agent-1 5ee36d4 PID 2004178, Agent-2 b60e262 PID 866408, both paused); state; founder cognition; units; unit files; PIDs; packages; tools; **all settings groups**; events 3,420 → 3,420 (no new event); permanent history 339, same digest. `current` bc19e05; inference off (policy f, provider none); Fleet Control unset; sales closed; no open credit hold; only the `automaton_fleet` and `postgres` databases |
+
+**Carried forward:** the founder-upgrade (27/27) and revision (19/19) rehearsals of 24 Oct. No founder-runtime, cognition
+gateway or package file changed since 5ee36d4; Agent-1 stays on 5ee36d4. No paid run.
+
+### Group B: installation package (prepared; NOT run; needs your approval)
+- **Script:** `install-81e1ae5.sh` beside this record, sha256 `4500e9b5cde132e50d2989c3d41dd1c7a4bc1e3cc403bf39dbdb7290ed0b57b4`.
+  Staged identically as `~/rlc136/install.sh`.
+- **Run:** `bash ~/rlc136/install.sh`.
+- **Pins:** commit `81e1ae5e6a2928797ec9f69e59317c40e7e1c760`, build `23c34147046d33a36cbdb42d4afed56ebc4e6b7314b09b3a46cf67f00fff49eb`,
+  lockfile `1df54e3526cb39c847d18fec14f1d4e3595557e34d94040c5b774f9b2f2a21c1`. UI 0.26.2 unchanged (reused).
+- **Gates (all must hold before any change):**
+  - the pins;
+  - both rehearsals passed, of 81e1ae5, < 24 h old;
+  - UI checksum;
+  - the side-installed release present;
+  - both agents paused on 5ee36d4 / b60e262;
+  - inference off;
+  - permissions closed;
+  - the four safety flags false;
+  - live schema 118 on bc19e05;
+  - **no open provider-credit hold**;
+  - **no canary unit installed**;
+  - the founder unit template unchanged;
+  - `FLEET_ROLLOUT_AUTO_RESTORE` unset.
+- **Pre-install backup:** a full dump, kept and never restored by the script.
+- **Release:** `fleet-release.sh` 118 → 119, about 45 s controller outage. **No founder restart, no runtime change.**
+- **Verification:**
+  - readyz 200;
+  - both agents paused, same runtimes and **same PIDs**;
+  - inference off; tiers unchanged;
+  - ledger head unchanged (v119 posts nothing); credit balance and owner payable unchanged;
+  - draw order promotional first; T2 cache read 10;
+  - control_reserved 0, and the promotional lots exactly the recorded grant;
+  - credit-source lookup in the 3 paths;
+  - **v119:** held includes open reservations, no path subtracts them twice, `fleet_cognition_state` reports usage, and held
+    is 0 after install;
+  - the release contains the guard script and SQL;
+  - **no canary unit installed; the installed unit files are unchanged**;
+  - safety flags false; permissions closed; ledger verifies.
+- **Not done by it:** no credit entry, credit hold, timer, Fleet Control budget, provider activation, agent resume or restore.
+- **Rollback:** bc19e05 refuses schema 119, so going back is a restore of the pre-install backup. That is **your decision
+  only; none is authorised.** Fix forward is preferred.
+
 ## FINAL canary candidate 81e1ae5 (26 Oct ~15:55Z; local; for Group A approval; supersedes a0cb8c8 below where they differ)
 
 Commit `81e1ae5e6a2928797ec9f69e59317c40e7e1c760`, branch `fleet/canary-prep`, local, not pushed, on a0cb8c8 / 0fa9534 /
