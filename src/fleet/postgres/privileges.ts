@@ -942,6 +942,8 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
     fleet_fx_rates: new Set(["fleet_fx_insert"]),
     fleet_provider_credit_events: new Set(["fleet_provider_credits_record", "fleet_admin_engineering_calls_import", "svc_cognition_record", "svc_cognition_routed_record", "svc_experiment_relevance_record", "svc_relevance_call_failed", "fleet_relevance_call_reconcile",
       "fleet_spend_review_charge", "fleet_control_charge",
+      // v117: a Fleet Control call's consumption is written by its (single) settlement.
+      "fleet_control_ai_settle_internal",
       // v70: a treasury-funded AI-credit purchase records its USD purchase.
       "fleet_admin_ai_credit_treasury_purchase",
       // v71: a confirmed purchase records its USD purchase (observations never do).
@@ -1316,7 +1318,7 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_spend_review_accrual: new Set(["fleet_spend_review_charge"]),
     // v65: shared-lesson reviews (state by the claim / record / failure path), Fleet Control review costs, channel unlocks.
     fleet_knowledge_review_state: new Set(["svc_knowledge_proposals_claim", "svc_knowledge_review_failed", "svc_knowledge_review_record", "fleet_knowledge_review_failed_internal"]),
-    fleet_control_accrual: new Set(["fleet_control_charge"]),
+    fleet_control_accrual: new Set(["fleet_control_charge", "fleet_control_ai_settle_internal"]),   // v117: the settlement accrues
     fleet_channel_unlocks: new Set(["fleet_channel_unlocked"]),
     // v66: backings of the existing capital only by the owner's backing function.
     fleet_capital_backings: new Set(["fleet_admin_capital_back", "fleet_admin_location_contribution"]), // v91: a bank deposit backs capital
@@ -1455,7 +1457,9 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     // v108: the owner's supported customer geography (owner only).
     fleet_sales_geography: new Set(["fleet_admin_sales_geography"]),
     fleet_control_ai_budget: new Set(["fleet_admin_fleet_control_ai_budget", "fleet_admin_fleet_control_ai_budget_clear"]),
-    fleet_control_ai_reservations: new Set(["svc_fleet_control_ai_reserve", "svc_fleet_control_ai_settle"]),
+    fleet_control_ai_reservations: new Set(["svc_fleet_control_ai_reserve", "svc_fleet_control_ai_settle",
+      // v117: settled once (worker, record path, sweep, owner); a reported call without one gets one (recorded in full).
+      "fleet_control_ai_settle_internal", "fleet_control_ai_record_calls"]),
     // v111: cost exceptions only by the routed record (overrun / uncollectable) and the owner's allocation.
     fleet_cognition_cost_exceptions: new Set(["svc_cognition_routed_record", "fleet_admin_cognition_exception_allocate"]),
     fleet_engineering_cognition_calls: new Set(["fleet_admin_engineering_calls_import"]),

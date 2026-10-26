@@ -189,7 +189,11 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
       c.release();
     }
   };
-  const ledgerHead = async () => (await q(`SELECT head_seq::text AS s, head_hash AS h, (SELECT count(*)::int FROM fleet.fleet_ledger_journal) AS j FROM fleet.fleet_ledger_head`))[0];
+  // v117: Fleet Control's own AI overhead (the relevance assessor's cost, held then posted, owed to the owner) is booked like
+  // every other Fleet Control review; "the books never moved" means nothing else did — no journal of any other kind.
+  const OVERHEAD = ["fleet_control_ai_hold", "fleet_control_ai_release", "evidence_relevance_charge"];
+  const ledgerHead = async () => (await q(`SELECT count(*)::int AS j, (SELECT max(seq)::text FROM fleet.fleet_ledger_journal WHERE NOT kind = ANY($1)) AS s
+    FROM fleet.fleet_ledger_journal WHERE NOT kind = ANY($1)`, [OVERHEAD]))[0];
   /** Realized external revenue of a founder recorded by the owner (a real ledger journal; returns its id). */
   const revenue = async (agent: string, amount: number) => (await q(`SELECT fleet.fleet_admin_record_external('external_revenue', $1, $2, $3, $4, $5, $6) AS j`,
     [agent, amount, `stripe:${crypto.randomUUID()}`, crypto.createHash("sha256").update(`customer:${crypto.randomUUID()}`).digest("hex"), OWNER, `rev:${crypto.randomUUID()}`]))[0].j as string;
@@ -832,6 +836,7 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
     await setup(1_500);
     const repro0 = (await q(`SELECT fleet.fleet_reproduction_eligibility($1) AS r`, [F.id]))[0].r;
     const eco0 = await ledger.economics(F.id);
+    const u0 = Number((await q(`SELECT fleet.fleet_ledger_balance('fleet:treasury:unallocated') AS b`))[0].b);
     // Two identical experiments; the founder reports a very different simulated spend for each.
     const a = await proposeAssessed(F, proposal({ opportunityKey: "roi-a", evidence: [await page(F.id, "ra-1.example"), await page(F.id, "ra-2.example")] }));
     const aid = exp(a).experimentId as string;
@@ -863,7 +868,11 @@ describe.skipIf(!PG_BIN)("R24 opportunity → experiment pipeline (schema v24, P
     expect(pick(exp(fb))).toEqual(pick(exp(fa)));
     // Books, economics and reproduction eligibility never saw it.
     expect(await ledger.economics(F.id)).toEqual(eco0);
-    expect((await q(`SELECT fleet.fleet_reproduction_eligibility($1) AS r`, [F.id]))[0].r).toEqual(repro0);
+    // (v117: the treasury figure moves only by Fleet Control's relevance overhead, exactly what was posted for it.)
+    const u1 = Number((await q(`SELECT fleet.fleet_ledger_balance('fleet:treasury:unallocated') AS b`))[0].b);
+    expect(Number((await q(`SELECT fleet.fleet_ledger_balance('fleet:treasury:control_reserved') AS b`))[0].b)).toBe(0);
+    expect((await q(`SELECT fleet.fleet_reproduction_eligibility($1) AS r`, [F.id]))[0].r)
+      .toEqual({ ...repro0, inputs: { ...repro0.inputs, treasuryCents: repro0.inputs.treasuryCents - (u0 - u1) } });
     // Structurally: only the recording and reporting functions may name simulated ROI; a new reader fails the audit.
     expect((await store.auditPrivileges()).problems).toEqual([]);
     await q(`CREATE FUNCTION fleet.fleet_rank_founders_by_roi(p text) RETURNS numeric LANGUAGE sql AS $$ SELECT max(simulated_roi) FROM fleet.fleet_strategy_registry WHERE agent_id = p $$`);

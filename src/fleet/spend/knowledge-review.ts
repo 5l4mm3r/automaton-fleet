@@ -103,7 +103,7 @@ export class KnowledgeReviewer {
     const prompt = knowledgePrompt(job);
     const maxTokens = Math.min(c.maxOutputTokens, 800);
     // v96: the call's bounded maximum is reserved against Fleet Control's daily ceiling first; no room, no call.
-    const budget = await reserveControlAi(this.o.ports, "knowledge_review", job.proposalId, maxCallUsdMicrocents(c, KNOWLEDGE_REVIEW_SYSTEM, [prompt], maxTokens));
+    const budget = await reserveControlAi(this.o.ports, "knowledge_review", job.proposalId, maxCallUsdMicrocents(c, KNOWLEDGE_REVIEW_SYSTEM, [prompt], maxTokens), requestId, c.provider);
     if (!budget.ok) return { error: budget.reason, calls: [] };
     try {
       const res = await this.o.providerFactory(c, null, "off").chat({ agentId: "controller", system: KNOWLEDGE_REVIEW_SYSTEM,

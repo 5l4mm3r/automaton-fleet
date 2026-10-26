@@ -164,7 +164,7 @@ export class SpendReviewer {
     const prompt = spendReviewPrompt(job);
     const maxTokens = Math.min(c.maxOutputTokens, 1_500);
     // v96: the call's bounded maximum is reserved against Fleet Control's daily ceiling first; no room, no call.
-    const budget = await reserveControlAi(this.o.ports, "spend_review", job.reviewId, maxCallUsdMicrocents(c, SPEND_REVIEW_SYSTEM, [prompt], maxTokens));
+    const budget = await reserveControlAi(this.o.ports, "spend_review", job.reviewId, maxCallUsdMicrocents(c, SPEND_REVIEW_SYSTEM, [prompt], maxTokens), requestId, c.provider);
     if (!budget.ok) return { error: budget.reason, calls: [] };
     const costOf = (u: { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number }) => Math.max(0, Math.round(
       u.inputTokens * c.prices.inputMicrocentsPerToken + u.outputTokens * c.prices.outputMicrocentsPerToken

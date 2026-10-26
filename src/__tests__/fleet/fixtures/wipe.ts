@@ -87,7 +87,7 @@ export async function wipeRegistry(c: PoolClient, schema: string): Promise<void>
         max_output_tokens = s.max_out, input_microcents_per_token = s.i, output_microcents_per_token = s.o, cache_write_microcents_per_token = s.cw,
         cache_read_microcents_per_token = s.cr, enabled = false, verified_at = NULL, verified_ref = NULL, updated_by = 'migration'
       FROM (VALUES ('T1', 'claude-haiku-4-5-20251001', NULL, NULL, 2000, 100, 500, 125, 10),
-                   ('T2', 'claude-sonnet-5-5', 'adaptive', 'medium', 8000, 200, 1000, 250, 20),
+                   ('T2', 'claude-sonnet-5-5', 'adaptive', 'medium', 8000, 200, 1000, 250, 10),   /* v116: published cache-read price */
                    ('T3', 'claude-opus-5-5', 'adaptive', 'medium', 16000, 400, 2000, 500, 20)) /* v102: 16000 */ AS s(tier, model, thinking, effort, max_out, i, o, cw, cr)
       WHERE t.tier = s.tier`);
   }

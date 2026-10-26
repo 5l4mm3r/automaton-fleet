@@ -7,7 +7,7 @@ import { SPEND_REVIEW_SYSTEM, spendReviewPrompt } from "../src/fleet/spend/revie
 import { KNOWLEDGE_REVIEW_SYSTEM, knowledgePrompt } from "../src/fleet/spend/knowledge-review.js";
 import { MESSAGE_CHECK_SYSTEM, messageCheckPrompt } from "../src/fleet/spend/message-check.js";
 import { RELEVANCE_SYSTEM, relevancePrompt } from "../src/fleet/experiments/relevance.js";
-const T2 = { prices: { inputMicrocentsPerToken: 200, outputMicrocentsPerToken: 1000, cacheWriteMicrocentsPerToken: 250, cacheReadMicrocentsPerToken: 20 } } as never;
+const T2 = { prices: { inputMicrocentsPerToken: 200, outputMicrocentsPerToken: 1000, cacheWriteMicrocentsPerToken: 250, cacheReadMicrocentsPerToken: 10 } } as never;
 const T3 = { prices: { inputMicrocentsPerToken: 400, outputMicrocentsPerToken: 2000, cacheWriteMicrocentsPerToken: 500, cacheReadMicrocentsPerToken: 20 } } as never;
 const FX = 748039n, ACQ_NUM = 4955n * 1_000_000n, ACQ_DEN = 4129000000n;
 const pence = (usd: number) => { const n = BigInt(usd) * FX; const d = 1_000_000n * 1_000_000n; return (n + d - 1n) / d; };

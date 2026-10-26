@@ -9,7 +9,8 @@
  *  - a material or suspicious one is reserved at once and waits only for its review; the issuer will not pay it before;
  *  - the reviewer's approval clears it; a hold (category + evidence) releases the funds, tells Fleet Command (P1) and the
  *    agent's conversation; a hold without evidence, or an unusable answer, is recorded as cleared (uncertainty never blocks);
- *  - a failed / unfunded reviewer retries with backoff and then stays visibly pending (stalled) — never approved by default;
+ *  - a failed reviewer retries with backoff and then stays visibly pending (stalled) — never approved by default; an
+ *    unfunded one (v117) waits without using an attempt;
  *    the owner may approve, hold or retry it, or allow a held action to be resubmitted once (integrity checks run again);
  *  - reviews are treasury-paid overhead (spend_review_charge), recorded as provider-credit consumption;
  *  - revalidation immediately before execution refuses a stale order (held agent, uncleared review, mismatched instruction).
@@ -220,17 +221,17 @@ describe.skipIf(!PG_BIN)("v64: autonomous spending with Fleet Control review (Po
     }
   });
 
-  it("an unfunded treasury never turns into an approval: the review waits", async () => {
+  it("an unfunded treasury never turns into an approval: the review waits (v117: no attempt used; Fleet Command told)", async () => {
     const t = await R.balance("fleet:treasury:unallocated");
     await asSuper(`UPDATE fleet.fleet_spend_review_policy SET estimate_usd_microcents = $1`, [String((t + 1) * 1_000_000 * 1_000_000)]);
     try {
       const r = await spend(40_000, payee, "more stock");
       expect(r.order.reviewStatus).toBe("pending");
       const n = prompts.length;
-      await reviewer().tick();
+      await reviewer().tick(); await reviewer().tick();
       expect(prompts.length).toBe(n); // no call was made
-      expect(await review(r.order.reviewId)).toMatchObject({ status: "pending", attempts: 1 });
-      expect((await review(r.order.reviewId)).last_error).toMatch(/TREASURY_INSUFFICIENT/);
+      expect(await review(r.order.reviewId)).toMatchObject({ status: "pending", attempts: 0, stalled_at: null });
+      expect(await events("fleet_control_ai_unfunded")).toBe(1);
       expect((await order(r.order.orderId)).review_status).toBe("pending");
     } finally {
       await asSuper(`UPDATE fleet.fleet_spend_review_policy SET estimate_usd_microcents = 3000000`);
@@ -254,7 +255,7 @@ describe.skipIf(!PG_BIN)("v64: autonomous spending with Fleet Control review (Po
       expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_events WHERE event_type = 'fleet_control_ai_budget_reached')`))).toBe(1);   // told once
       // Set, but smaller than one call's bounded maximum: the reservation is refused; no call.
       await R.one(`fleet.fleet_admin_fleet_control_ai_budget(1, 'test: too small for one call', $1)`, [OWNER]);
-      expect(await R.one(`fleet.svc_fleet_control_ai_reserve('spend_review', 'probe', 5000000000)`)).toMatchObject({ ok: false, code: "FLEET_CONTROL_AI_BUDGET" });
+      expect(await R.one(`fleet.svc_fleet_control_ai_reserve('spend_review', 'probe', 5000000000, gen_random_uuid(), 'anthropic')`)).toMatchObject({ ok: false, code: "FLEET_CONTROL_AI_BUDGET" });
       // Room: the review call reserves its maximum first and settles at its actual cost (never above the maximum).
       await R.one(`fleet.fleet_admin_fleet_control_ai_budget(100000, 'test budget', $1)`, [OWNER]);
       await reviewer().tick();
@@ -266,13 +267,14 @@ describe.skipIf(!PG_BIN)("v64: autonomous spending with Fleet Control review (Po
       // Two reservations at once against room for only one maximum: exactly one is made (the budget row's lock).
       const st = await R.one(`fleet.fleet_control_ai_state()`);
       await R.one(`fleet.fleet_admin_fleet_control_ai_budget($1, 'test: room for one', $2)`, [st.spentMinor + st.inflightMinor + 60, OWNER]);
-      const [a, b] = await Promise.all([1, 2].map((i) => svcStore.controlAiReserve("spend_review", `race-${i}`, 40_000_000))); // 40 US cents (≈ 32p) each: one fits in 60p, two do not
+      const [a, b] = await Promise.all([1, 2].map((i) => svcStore.controlAiReserve("spend_review", `race-${i}`, 40_000_000, crypto.randomUUID(), "anthropic"))); // 40 US cents (≈ 32p) each: one fits in 60p, two do not
       expect([a, b].filter((x: any) => x.ok).length).toBe(1);
+      await svcStore.controlAiSettle([a, b].find((x: any) => x.ok).reservationId, 0);   // v117: the winner's hold is released
       // v110: the owner clears it again (e.g. after a bounded proof) — unset: no paid call; owner only, with a reason.
       expect(await R.code(R.q(`SELECT fleet.fleet_admin_fleet_control_ai_budget_clear('proof ended', 'agent')`))).toBe("FLEET_APPROVAL_REQUIRED");
       expect(await R.code(R.q(`SELECT fleet.fleet_admin_fleet_control_ai_budget_clear('', $1)`, [OWNER]))).toBe("FLEET_BAD_REQUEST");
       expect(await R.one(`fleet.fleet_admin_fleet_control_ai_budget_clear('card proof ended', $1)`, [OWNER])).toMatchObject({ ok: true, set: false, roomMinor: 0 });
-      expect(await R.one(`fleet.svc_fleet_control_ai_reserve('spend_review', 'after-clear', 1000)`)).toMatchObject({ ok: false, code: "FLEET_CONTROL_AI_BUDGET_UNSET" });
+      expect(await R.one(`fleet.svc_fleet_control_ai_reserve('spend_review', 'after-clear', 1000, gen_random_uuid(), 'anthropic')`)).toMatchObject({ ok: false, code: "FLEET_CONTROL_AI_BUDGET_UNSET" });
     } finally {
       await R.one(`fleet.fleet_admin_fleet_control_ai_budget(100000, 'test budget', $1)`, [OWNER]);
     }

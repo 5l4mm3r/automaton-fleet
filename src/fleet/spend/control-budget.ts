@@ -1,7 +1,9 @@
 /**
- * v96: Fleet Control's hard daily AI ceiling. Every paid Fleet Control call (spend review, lesson review, evidence
- * relevance) reserves its BOUNDED MAXIMUM cost before it is made and settles at its actual cost afterwards; the registry
- * checks the reservation atomically against the last 24 hours (svc_fleet_control_ai_reserve). The maximum: every UTF-8 byte
+ * v96: Fleet Control's hard daily AI ceiling. Every paid Fleet Control call (spend review, lesson review, message check,
+ * evidence relevance) reserves its BOUNDED MAXIMUM cost before it is made and settles at its actual cost afterwards; the
+ * registry checks the reservation atomically against the last 24 hours (svc_fleet_control_ai_reserve). v117: the
+ * reservation also HOLDS that maximum in GBP (treasury) and provider credit, keyed by the call's request id — no funding,
+ * no call — and the settlement records the call's usage and posts its cost once. The maximum: every UTF-8 byte
  * of the system prompt and messages counted as one input token (a token is never shorter than a byte) plus a framing
  * allowance, and the call's full output allowance (max_tokens bounds visible and thinking output), at the tier's prices;
  * prompt caching is off for these calls, so no cache price applies.
@@ -9,7 +11,8 @@
 import type { TierCandidate } from "../cognition/router.js";
 
 export interface ControlBudgetPort {
-  controlAiReserve(kind: "spend_review" | "knowledge_review" | "evidence_relevance" | "message_check", ref: string, maxUsdMicrocents: number): Promise<Record<string, unknown>>;
+  controlAiReserve(kind: "spend_review" | "knowledge_review" | "evidence_relevance" | "message_check", ref: string, maxUsdMicrocents: number,
+    requestId: string, provider: string): Promise<Record<string, unknown>>;
   controlAiSettle(reservationId: string, actualUsdMicrocents: number | null): Promise<Record<string, unknown>>;
 }
 
@@ -21,17 +24,21 @@ export function maxCallUsdMicrocents(c: Pick<TierCandidate, "prices">, system: s
   return Math.ceil(inputBound * c.prices.inputMicrocentsPerToken + maxTokens * c.prices.outputMicrocentsPerToken);
 }
 
-/** Reserve before the call. A refusal means no call is made. */
-export async function reserveControlAi(port: ControlBudgetPort, kind: "spend_review" | "knowledge_review" | "evidence_relevance" | "message_check", ref: string, maxUsd: number):
-  Promise<{ ok: true; reservationId: string } | { ok: false; reason: string }> {
+/** Reserve before the call (its request id and provider identify it). A refusal means no call is made. */
+export async function reserveControlAi(port: ControlBudgetPort, kind: "spend_review" | "knowledge_review" | "evidence_relevance" | "message_check", ref: string, maxUsd: number,
+  requestId: string, provider: string): Promise<{ ok: true; reservationId: string } | { ok: false; reason: string }> {
   // Fail closed: an unreachable registry or a missing port is no room.
-  const r: Record<string, unknown> = await Promise.resolve().then(() => port.controlAiReserve(kind, ref, maxUsd))
+  const r: Record<string, unknown> = await Promise.resolve().then(() => port.controlAiReserve(kind, ref, maxUsd, requestId, provider))
     .catch((e: unknown) => ({ ok: false, code: "FLEET_CONTROL_AI_BUDGET", reason: e instanceof Error ? e.message.slice(0, 160) : "unreachable" }));
   if (r.ok === true && typeof r.reservationId === "string") return { ok: true, reservationId: r.reservationId };
   return { ok: false, reason: `${String(r.code ?? "FLEET_CONTROL_AI_BUDGET")}: ${String(r.reason ?? "no room")}` };
 }
 
-/** Settle after the call (null: the cost is unknown and the maximum keeps counting). Never throws. */
-export async function settleControlAi(port: ControlBudgetPort, reservationId: string, actualUsd: number | null): Promise<void> {
-  await port.controlAiSettle(reservationId, actualUsd).catch(() => undefined);
+/** Settle after the call (null: the cost is unknown and the hold stays). Retried briefly; never throws: if it still fails,
+ *  the record path, the registry's sweep or the owner's reconciliation settles the reservation (once). */
+export async function settleControlAi(port: ControlBudgetPort, reservationId: string, actualUsd: number | null, attempts = 3): Promise<void> {
+  for (let i = 0; i < attempts; i++) {
+    const ok = await port.controlAiSettle(reservationId, actualUsd).then((r) => r?.ok === true, () => false);
+    if (ok) return;
+  }
 }

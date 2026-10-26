@@ -562,8 +562,8 @@ describe.skipIf(!PG_BIN)("v100 customer obligations and refusal reasons (Postgre
       expect(await legs("message_check_charge")).toEqual(await legs("knowledge_review_charge"));
       expect((await legs("message_check_charge")).length).toBeGreaterThan(0);
       expect((await R.q(`SELECT 1 FROM fleet.fleet_control_accrual WHERE kind = 'message_check_charge'`)).length).toBe(1);
-      expect(await R.one(`fleet.svc_fleet_control_ai_reserve('message_check', 'x', 100)`)).toMatchObject({ ok: false, code: "FLEET_CONTROL_AI_BUDGET_UNSET" });   // a known kind; no budget set
-      expect(await R.one(`fleet.svc_fleet_control_ai_reserve('mystery', 'x', 100)`)).toMatchObject({ ok: false, code: "FLEET_BAD_REQUEST" });
+      expect(await R.one(`fleet.svc_fleet_control_ai_reserve('message_check', 'x', 100, gen_random_uuid(), 'anthropic')`)).toMatchObject({ ok: false, code: "FLEET_CONTROL_AI_BUDGET_UNSET" });   // a known kind; no budget set
+      expect(await R.one(`fleet.svc_fleet_control_ai_reserve('mystery', 'x', 100, gen_random_uuid(), 'anthropic')`)).toMatchObject({ ok: false, code: "FLEET_BAD_REQUEST" });
       // A recorded check's provider consumption is booked as Fleet Control's, never the agent's.
       const o = await newDeliveredOrder("Charged order");
       const m = await say(o, "Thanks!");

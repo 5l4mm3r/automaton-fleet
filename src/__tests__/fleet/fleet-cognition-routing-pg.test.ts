@@ -21,7 +21,7 @@ import { FLEET_PG_SCHEMA_VERSION } from "../../fleet/postgres/migrations.js";
 const PG_BIN = findPgBin();
 const OWNER = "operator:owner";
 const LEGACY = { inputMicrocentsPerToken: 400, outputMicrocentsPerToken: 2_000, cacheWriteMicrocentsPerToken: 500, cacheReadMicrocentsPerToken: 20 };
-const SONNET = { inputMicrocentsPerToken: 200, outputMicrocentsPerToken: 1_000, cacheWriteMicrocentsPerToken: 250, cacheReadMicrocentsPerToken: 20 };
+const SONNET = { inputMicrocentsPerToken: 200, outputMicrocentsPerToken: 1_000, cacheWriteMicrocentsPerToken: 250, cacheReadMicrocentsPerToken: 10 };   // v116: published cache-read price
 const DST = "dst_01ABCDEFGHJKMNPQRSTVWXYZ01";
 
 describe.skipIf(!PG_BIN)("schema v22 neutral cognition routing (PostgreSQL)", () => {

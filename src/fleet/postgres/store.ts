@@ -2155,11 +2155,13 @@ export class PgFleetStore {
     return this.tx(async (c) => (await c.query("SELECT svc_operations_watch() AS r")).rows[0].r);
   }
 
-  /** v96: Fleet Control's hard daily AI ceiling — reserve a paid call's bounded maximum (USD microcents) before it is made. */
-  async controlAiReserve(kind: "spend_review" | "knowledge_review" | "evidence_relevance" | "message_check", ref: string, maxUsdMicrocents: number): Promise<Record<string, unknown>> {
-    return this.tx(async (c) => (await c.query("SELECT svc_fleet_control_ai_reserve($1, $2, $3) AS r", [kind, ref, Math.ceil(maxUsdMicrocents)])).rows[0].r);
+  /** v96/v117: reserve a paid Fleet Control call's bounded maximum (USD microcents) before it is made: the daily ceiling, and
+   *  its maximum held in GBP (treasury) and provider credit, keyed by the call's request id. */
+  async controlAiReserve(kind: "spend_review" | "knowledge_review" | "evidence_relevance" | "message_check", ref: string, maxUsdMicrocents: number,
+    requestId: string, provider: string): Promise<Record<string, unknown>> {
+    return this.tx(async (c) => (await c.query("SELECT svc_fleet_control_ai_reserve($1, $2, $3, $4, $5) AS r", [kind, ref, Math.ceil(maxUsdMicrocents), requestId, provider])).rows[0].r);
   }
-  /** v96: settle a reservation at the call's actual cost (null: unknown — the maximum keeps counting). */
+  /** v96/v117: settle a reservation once at the call's actual cost (null: unknown — the hold stays until a late result or reconciliation). */
   async controlAiSettle(reservationId: string, actualUsdMicrocents: number | null): Promise<Record<string, unknown>> {
     return this.tx(async (c) => (await c.query("SELECT svc_fleet_control_ai_settle($1, $2) AS r", [reservationId, actualUsdMicrocents === null ? null : Math.ceil(actualUsdMicrocents)])).rows[0].r);
   }

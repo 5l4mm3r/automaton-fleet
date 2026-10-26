@@ -123,9 +123,10 @@ import { V113_SQL } from "./migrations-phase113.js";
 import { V114_SQL } from "./migrations-phase114.js";
 import { V115_SQL } from "./migrations-phase115.js";
 import { V116_SQL } from "./migrations-phase116.js";
+import { V117_SQL } from "./migrations-phase117.js";
 import { V40_SQL } from "./migrations-phase40.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 116;
+export const FLEET_PG_SCHEMA_VERSION = 117;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1337,6 +1338,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 114, name: "correction_obligation_separate", sql: V114_SQL },
   { version: 115, name: "customer_message_classification", sql: V115_SQL },
   { version: 116, name: "ai_credit_promotional_grant", sql: V116_SQL },
+  { version: 117, name: "fleet_control_funded_calls", sql: V117_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1461,7 +1463,8 @@ export const SERVICE_API_FUNCTIONS: readonly string[] = Object.freeze([
   "svc_repo_requests(text, text)",
   "svc_repo_consent(text, text, uuid, text, text, text)",
   // v96: Fleet Control's hard daily AI ceiling — every paid review call reserves its bounded maximum first, then settles.
-  "svc_fleet_control_ai_reserve(text, text, bigint)",
+  // v117: … and holds the call's maximum in GBP and provider credit, keyed by its request id (no funding: no call).
+  "svc_fleet_control_ai_reserve(text, text, bigint, uuid, text)",
   "svc_fleet_control_ai_settle(uuid, bigint)",
 ]);
 

@@ -107,7 +107,7 @@ export class MessageChecker {
     const prompt = messageCheckPrompt(job);
     const maxTokens = Math.min(c.maxOutputTokens, 300);
     // The bounded maximum is reserved against Fleet Control's daily ceiling first; no room, no call (the check is deferred).
-    const budget = await reserveControlAi(this.o.ports, "message_check", job.checkId, maxCallUsdMicrocents(c, MESSAGE_CHECK_SYSTEM, [prompt], maxTokens));
+    const budget = await reserveControlAi(this.o.ports, "message_check", job.checkId, maxCallUsdMicrocents(c, MESSAGE_CHECK_SYSTEM, [prompt], maxTokens), requestId, c.provider);
     if (!budget.ok) return { error: budget.reason, calls: [] };
     try {
       const res = await this.o.providerFactory(c, null, "off").chat({ agentId: "controller", system: MESSAGE_CHECK_SYSTEM,

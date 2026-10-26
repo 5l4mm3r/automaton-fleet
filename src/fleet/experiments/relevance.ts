@@ -224,7 +224,7 @@ export class RelevanceAssessor {
     const prompt = relevancePrompt(job);
     const maxTokens = Math.min(c.maxOutputTokens, 4_000);
     // v96: the call's bounded maximum is reserved against Fleet Control's daily ceiling first; no room, no call.
-    const budget = await reserveControlAi(this.o.ports, "evidence_relevance", job.attemptId, maxCallUsdMicrocents(c, RELEVANCE_SYSTEM, [prompt], maxTokens));
+    const budget = await reserveControlAi(this.o.ports, "evidence_relevance", job.attemptId, maxCallUsdMicrocents(c, RELEVANCE_SYSTEM, [prompt], maxTokens), requestId, c.provider);
     if (!budget.ok) { this.o.audit?.("experiment_relevance_budget", { attemptId: job.attemptId, reason: budget.reason }); return null; }
     const costOf = (u: { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number }) => Math.max(0, Math.round(
       u.inputTokens * c.prices.inputMicrocentsPerToken + u.outputTokens * c.prices.outputMicrocentsPerToken
