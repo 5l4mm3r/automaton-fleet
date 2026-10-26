@@ -423,6 +423,154 @@ tokens** on each warm step, at 20 µ¢ a token. So the tool definitions cost lit
   **Rerun:** services rehearsal (controller code changed), founder-upgrade rehearsal (runtime changed; it also exercises
   the 4,000-token request against the fake Anthropic API) and the revision rehearsal (the target). All non-billable.
 
+## Agent-1 canary: approval package (prepared 26 Oct ~15Z; nothing activated, deployed, spent or authorised)
+
+Basis: production bc19e05 / schema 118, read-only at about 14:50Z. Credit reconciled at $117.22 before the S1+S2 run; Fleet
+records $115.2303348 after it (Console confirmation pending). S1+S2 evidence is above. Agent-2 is excluded and unchanged
+(b60e262, paused).
+
+**S1+S2 verdicts stay as recorded.**
+- S1's harness verdict remains **`incomplete`**.
+- The supplementary evidence (the release grader on the delivered bytes, `ok: true`, and my inspection) is kept separately in
+  `evidence-scen-bc19e05-s1s2/s1-grade-after-run.json`.
+- The harness wiring is fixed locally in commit `0fa9534`, branch `fleet/canary-prep`: the suite passes the agent toolchain's
+  `fleet-python` and refuses before spending if it is missing. It was verified on the saved PDFs with no model call (3/3), and
+  `fleet-eval-scenario-suite` 1/1 passes. **Not pushed, not deployed.**
+
+### A. Starting state (production, read-only)
+| Item | Now |
+|---|---|
+| Agent-1 | runtime 5ee36d4 (founder code identical to the S1+S2 build), paused, PID 2004178 |
+| Agent-1 money | cash **£89.43** (Genesis £100.00 − £10.57 AI costs); spendable £89.43; not exhausted; no revenue yet |
+| AI limits (configured) | **daily budget 754p, 600 turns/hour** (set by operator:ubuntu, 21 Oct 11:06Z); policy defaults 754p / 20 per hour |
+| Offer | "UK Landlord Compliance Tracker (England): gas, EICR, EPC and rent-increase…", product, **£5.00**, status **paused** (by Agent-1, 20 Oct); sale block "not published" |
+| Storefront | brand "LandlordTrack"; support `fleet.treasury@proton.me`, subject "Agent-1 - …"; account: fleet-mail email, verified |
+| Seller | individual, legal name set (17 Oct). **Postal address stored as "…45 Albemarie Street…"**, almost certainly a typo for Albemarle Street: launch-readiness B11 (re-save) is still open |
+| Geography | worldwide, no exclusions (owner, 20 Oct) |
+| Sales | **closed** (`fleet_sales_open()` false) |
+| Payments | PayPal rail b71b3f3c `live / active`, receiving; **money-out off** (no custody activation); no refund authority; no outward release; identity autonomy and card off |
+| Real orders ever | **0** (1 owner proof order) |
+| Inference | policy off, provider `none`; the key is in the recovery folder (retired 23 Oct) |
+| Fleet Control | budget unset; treasury unallocated **£0** (owner payable 1,081p) |
+| Survival protection | **on** (fleet-wide; both agents protected) |
+| Safety flags | the four flags false; cap 2 |
+
+### B. Offer, sales channel, customer acquisition and permissions
+- **Offer:** Agent-1's existing product, as it stands.
+  - It is paused and unpublished; Agent-1 would republish it itself, with a current inspector review (the v96 rule), after it
+    resumes.
+  - Price and wording stay the agent's decisions (owner 10-15 and 10-20); premium Opus work.
+- **Channel:** Fleet's own offer page on `https://api.agentfleet.vip` with PayPal checkout (receiving), delivery by email
+  from the shared support address, and the order-close rule (v108/v110).
+- **Customer acquisition (choose one):**
+  - **(1) Recommended for the first week:**
+    - the offer page, sitemap and search notification (v80) only, plus a link **you** share with a few landlords you know;
+    - no outward authority for the agent.
+    - This tests real buyers and fulfilment without opening agent posting.
+  - **(2)** Additionally, a time-boxed outward release for Agent-1's own channels (your 10-15 decision: agent-chosen
+    channels, no per-post approval), for e.g. 72 h, after week 1.
+- **Permissions, minimal set:**
+  - sales open (your switch);
+  - the offer published (agent);
+  - inference on for Agent-1 only.
+  
+  Kept OFF: money-out / custody, refund authority, card, identity autonomy, real payments, replication, sweeps, and outward
+  release (unless (2)).
+- **Refund route:** money-out is off, so refunds are **made by you by hand in PayPal**. The order then closes as fully refunded
+  under the close rule. A standing refund authority would need custody activation (out of scope).
+
+### C. Agent-1 funds, limits and stop conditions
+- **Starting funds:** its current £89.43; no top-up proposed. One S1-style order cost about 95p of AI.
+- **Daily AI ceiling:** keep **754p/day** (the configured fuse; it stops further calls for the day). Present value, unchanged
+  unless you decide otherwise.
+- **Turns per hour:** **600** is configured (your 18 Oct change). Option: 120/hour for the canary. Your choice, no default
+  change.
+- **Model:** Opus routing as installed; founder steps capped at 4,000 output tokens. Promotional credit is drawn first and
+  charged to no one (v118). Each call still needs Agent-1's own cash for its full estimate.
+- **Automatic stops already in code:**
+  - the daily fuse;
+  - a cost exception (overrun or uncollectable) blocks further paid calls;
+  - insufficient cash refuses a call;
+  - Fleet Control's budget or funding refuses checks (messages then wait);
+  - survival protection stays on, so exhaustion alerts you and never kills.
+- **Canary stop conditions (you or I pause Agent-1 at once):**
+  - any duplicate delivery or message;
+  - a delivered file that fails inspection;
+  - a buyer complaint about quality;
+  - ledger verify false;
+  - any Fleet cost not matching its records;
+  - AI spend > 754p in 24 h, or > £5 in total without a sale;
+  - a P1 event;
+  - any unexpected external action.
+
+### D. Fleet Control funding, budget and the first real message check
+- **Funding:**
+  - a **£5.00** float (recommended; the minimum is £1.00) by `ledger-record-funding 500 <PayPal transfer reference>`;
+  - it must be real money in the PayPal treasury (backing);
+  - each check holds its maximum from it; promotional-funded checks post £0 and release the hold.
+- **Budget:** `economy-fleet-control-ai-budget 100 <reason>`: 100p per rolling 24 h. Per-call maxima: message check 3–6p,
+  knowledge 5–10p, spend review 2–3p.
+- **Bounded first real check, before relying on it:**
+  1. You place one owner-proof order of the offer (£5.00, as in the 20 Oct refund test).
+  2. You reply "Thanks!".
+  3. Agent-1 classifies it as conversation, which creates one message check.
+  
+  **Verified:**
+  - one reservation;
+  - a hold from the float;
+  - a T2 call settled once, with its consumption and draws recorded;
+  - posted £0 if promotional (or the purchased part), the hold released, `fleet_control_ai_state` clean;
+  - the message's verdict recorded.
+  
+  **Then you refund the £5 by hand.** Cost: one check at most 6p of credit, plus the proof order's PayPal fee.
+
+  Unattended customer handling relies on Fleet Control only after this check passes.
+- **Owner conversations stay excluded:** their treasury shortfall gap is disclosed and not fixed.
+
+### E. Activation steps (each yours to approve at the time; none done)
+1. **Fix the seller address:** you re-save it in HQ.
+2. **Fund the Fleet Control float and set the budget (D).**
+3. **Reinstate the key for production inference:**
+   - move the recovery key back to the controller's key file (owner action under `/etc`);
+   - `FLEET_COGNITION_PROVIDER=anthropic`;
+   - enable the cognition policy;
+   - restart the controller (about 45 s; agents stay paused).
+   
+   Agent-2 stays paused and unchanged.
+4. **Resume Agent-1** (founder-cognition unpause). It republishes its offer after its own review.
+5. **Open sales.**
+6. **The first real message check (D),** then your refund of the proof order.
+7. **Acquisition (B-1)** for 7 days.
+
+### F. Success criteria, reporting and a safe stop
+- **The canary runs** for 7 days or until 3 real paid orders, whichever comes first.
+- **Success:**
+  - at least 1 real (non-owner) paid order fulfilled with the correct file (inspected by me), review pass, and nothing owed at
+    close;
+  - every message check reserved, settled and posted correctly;
+  - daily reconciliation of AI credit against the Console (Fleet's promotional/purchased split shown against the Console's,
+    with differences disclosed);
+  - no unbooked cost, no duplicate effect;
+  - the ledger verifies daily;
+  - Agent-1's cash equals its books.
+- **Reporting:**
+  - **daily:** orders, revenue, deliveries, AI cost by credit source, Fleet Control use, events P1–P2, Console comparison;
+  - **immediately:** any stop condition.
+- **Safe stop, in order:**
+  1. pause Agent-1;
+  2. hold the offer (`economy-offer-hold`);
+  3. close sales;
+  4. clear the Fleet Control budget;
+  5. if needed, provider `none` with the key back to recovery (the 23 Oct containment).
+  
+  Open orders are finished or refunded by hand. Nothing is restored from a database.
+
+**What this package asks you to decide:**
+- acquisition (1) or (1)+(2);
+- turns per hour (600 kept, or 120);
+- the £5 float;
+- then each step in E.
+
 ## S1+S2 on bc19e05 with real Anthropic (`scen-bc19e05-s1s2`, 26 Oct 14:24–14:36Z; owner-approved)
 
 **Terms:** `terms-s1s2-bc19e05.json` (sha256 `4c428fa1…`, re-checked before start).
