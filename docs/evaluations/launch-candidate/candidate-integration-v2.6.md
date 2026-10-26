@@ -423,6 +423,187 @@ tokens** on each warm step, at 20 µ¢ a token. So the tool definitions cost lit
   **Rerun:** services rehearsal (controller code changed), founder-upgrade rehearsal (runtime changed; it also exercises
   the 4,000-token request against the fake Anthropic API) and the revision rehearsal (the target). All non-billable.
 
+## Funding candidate 3c4de3d (prepared 26 Oct; for approval; nothing deployed, posted or activated)
+
+Supersedes sections 2 and 3 of the 24 Oct package below where they differ. Branch `fleet/funding-v116`, commit
+`3c4de3d6b615abbcfc9ed271eb7ebd82dec33db1` (LOCAL, not pushed) on bc5ac23 / d96eefc. Schema 115 → 117. No runtime (founder)
+change; no UI change.
+
+### Key and account (done, 26 Oct)
+Console organisation **Kai** (the linked account, which holds the promotional credit): key "Automaton Fleet Production" ending `…KgAA`, created 26 Sep
+2026, last used 23 Oct 2026, no expiry. It matches the recovery key (last four characters read once, as authorised). No provider request.
+
+### Console figures (owner, 26 Oct)
+Promotional $100.00 granted, $100.00 left, shown 10/24/2026 to 11/24/2026, no reference; purchased $17.22.
+
+### Correction 1: the draw order follows the provider's published rule
+- Anthropic: "Included credits are spent first, then any credits you've purchased"; they expire at the end of each billing
+  cycle (platform.claude.com/docs/en/about-claude/api-credits-for-subscribers, read 26 Oct).
+- v116 now defaults to `promotional_first`, soonest expiry first, then purchased lots oldest first. The policy row records that
+  rule as its evidence. An owner override with evidence remains. Expired grants are never drawn.
+- The grant keeps the dates exactly as displayed, and its expiry basis. 2026-11-24T00:00Z is recorded as
+  `assumed_cutoff`: Fleet's conservative operational cutoff, **not** a provider timestamp, because the Console shows a date
+  only. Credit the provider still allows on 24 Nov is reconciled afterwards.
+- Each monthly grant is a new entry. Until it is recorded, Fleet counts only purchased credit, which is the conservative
+  direction.
+
+### The $0.4582007 difference: demonstrated from the records
+`scripts/fleet-ai-credit-discrepancy.sh 4129 1722` (read-only, 26 Oct 12:59Z) recomputes every consumption since the last
+Console reconciliation (event seq 837, 12 Oct) from its own token counts at the published prices:
+
+| Model / source | Calls | Recorded µ¢ | At published µ¢ | Difference |
+|---|---|---|---|---|
+| Opus 5.5, agents | 94 | 650,602,680 | 650,602,680 | 0 |
+| Opus 5.5, engineering (23 Oct) | 205 | 1,248,561,040 | 1,248,561,040 | 0 |
+| Haiku 4.5, engineering | 1 | 42,000 | 42,000 | 0 |
+| **Sonnet 5.5, agents (18–20 Oct)** | 150 | 553,614,350 | 507,193,050 | **46,421,300** |
+
+- No consumption event lacks its call record.
+- **Cause:** Fleet's T2 tier priced Sonnet 5.5 cache reads at 20 µ¢/token ($0.20/MTok). The published price is $0.10/MTok
+  (0.05× input). 4,642,130 cache-read tokens × 10 µ¢ = 46,421,300 µ¢. Every other price matched. **It is not rounding.**
+- **Console precision:** usage implied by the Console is $41.29 − $17.22 = $24.07, at published prices Fleet's is
+  $24.0639877. The residual is **601,230 µ¢ ($0.0060123)**. That is inside the ±$0.01 that two cent-precision Console
+  readings allow, whether the Console rounds or truncates.
+- **Check:** the Console's Cost page should show Sonnet 5.5 about $5.07 for 18–20 Oct (Fleet recorded $5.54).
+- **Fix:** v116 corrects T2 cache read to 10 µ¢. Only a row still at 20 is changed; model and verification are untouched.
+- **£ effect, not posted:** Agent-1 was charged **34.045778p** too much from its own money and **0.765044p** too much from
+  the treasury, at FX 0.749889. Correcting that is your decision (a later entry); it is not a launch blocker.
+
+### Exact entries (not posted; after the install, in this order)
+`scripts/fleet-ai-credit-promo-plan.sh` against production, read-only, 12:58:36Z:
+1. `fleet:admin economy-ai-credit-reconcile anthropic 1722`
+   - Done before the grant exists.
+   - +45,820,070 µ¢ restored to lot 05f4cb13: the Sonnet price difference above, plus $0.0060123 of display precision.
+   - No £ journal (owner-funded lot).
+2. `fleet:admin economy-ai-credit-promotional-grant anthropic max-included-20261024 10000 10000 2026-10-24T00:00:00Z 2026-11-24T00:00:00Z assumed_cutoff "granted 10/24/2026; expires 11/24/2026" Console Billing, Promotional credits`
+   - `max-included-20261024` is Fleet's label, because the Console shows no reference.
+   - No £ journal.
+
+Afterwards Fleet records $117.22, equal to the Console. Blockers: none; no Fleet use since 23 Oct 14:26Z; no holds.
+
+### Correction 2: Fleet Control calls are funded before they run, and every completed call is recorded (v117)
+- **Reserve, before the call, under one lock:**
+  - the daily ceiling, as before;
+  - the call's maximum moved from `fleet:treasury:unallocated` to `fleet:treasury:control_reserved` (one journal);
+  - its maximum held in provider credit (counted in `fleet_provider_credit_held`, so agents, engineering holds and other
+    calls cannot use it).
+  
+  If any of these is missing, the call is refused and not made (`FLEET_CONTROL_AI_BUDGET_UNFUNDED`).
+- **Settle, once per reservation,** by whichever report comes first: the worker, a late result through the record path,
+  the minutely sweep (after 15 min) or the owner.
+  - Consumption is written once per request id.
+  - The charge is posted from the hold with the v69 legs (expense, owed to you), and the rest is released.
+  - Overruns and calls without a reservation are posted in full and flagged; nothing is dropped.
+- **Unknown cost:** the hold stays and Fleet Command is told. A late result settles it, or you do with
+  `economy-fleet-control-ai-reconcile <reservationId> <usdMicrocents> <where the console shows it>`.
+- **Evidence-relevance calls** are now posted in £ like the other reviews (before, only in provider credit).
+- **Claims wait while unfunded:** no attempt is used, nothing stalls, nothing is approved by default, and Fleet Command is
+  told once a day.
+- **No double charging:** one consumption per request id (unique), one settlement per reservation (row lock and status),
+  one hold, charge and release journal each (idempotency keys), and a call counted toward its review once.
+
+### Tests (targeted; tsc clean)
+| Suites | Result |
+|---|---|
+| v117 control-funded calls (new) | 7/7 |
+| v116 promotional (updated) | 5/5 |
+| v64 spend review, r24 experiments, v65, v68, knowledge successor, message check (unit) | all pass |
+| v69, v66, v70, v71, v72, v73, v74, v100, v115 revision review | all pass |
+| cognition routing, launch-checks script, phase4 privilege audit, F2 migration paths | all pass |
+
+Updated tests where behaviour changed by design:
+- v64: an unfunded review waits and uses no attempt.
+- r24: Fleet Control's relevance cost is now booked; its ledger checks exclude only that overhead, and the treasury change
+  equals exactly what was posted.
+- Five-argument reserve: v64 and v100.
+- Sonnet price: routing test and the wipe fixture.
+
+### Fleet Control budget (proposal; not set)
+- **100p rolling 24 h,** unchanged.
+- **Per-call maxima,** recomputed with the corrected table (`scripts/fleet-control-bounds.ts`):
+
+  | Review | Typical | Worst case |
+  |---|---|---|
+  | Message check | 3p | 6p |
+  | Knowledge review | 5p | 10p |
+  | Spend review | 2p | 3p |
+  | Relevance | 5p + 9p | 8p + 16p |
+
+- **New requirement under v117:** treasury unallocated money. Today it is **£0**, so Fleet Control makes no call: buyer
+  messages that need a check wait, and spend reviews wait.
+- **Proposal:** fund a float of at least £1.00 (one day at the ceiling) with
+  `ledger-record-funding <cents> <externalRef>`, backed by real money. **£5.00 recommended.** Each day's charges move
+  into the owner-reimbursable partition, so top it up by what is used. Typical use is about 0.42p per message check.
+
+### Install, verification, rollback (procedure; script staged only after Group A gives the pins)
+1. **Group A:**
+   - push `fleet/funding-v116`, then build on the VPS;
+   - side-install;
+   - data rehearsal 115 → 117 on a throwaway copy: row counts identical, ledger verified, re-run applies nothing,
+     rollback dump restores 115;
+   - services rehearsal on the copy.
+2. **Group B:** `fleet-release.sh` 5ee36d4 → 3c4de3d, schema 115 → 117, about 45 s controller outage. No founder unit
+   restarts. Both agents stay paused; Agent-2's PID is unchanged. `FLEET_ROLLOUT_AUTO_RESTORE` stays unset.
+3. **Verify (read-only):**
+   - readyz 200;
+   - current → 3c4de3d;
+   - schema 117;
+   - `fleet_ai_credit_policy.draw_order` = `promotional_first` with the rule as evidence;
+   - T2 cache read 10;
+   - `fleet:treasury:control_reserved` 0;
+   - inference off: policy f, provider none, Fleet Control ceiling unset;
+   - ledger verify true;
+   - both agents paused, PIDs as before.
+4. **Then entries 1 and 2:** re-run the plan script first; the recorded total must equal the Console's.
+5. **Rollback:**
+   - 5ee36d4 refuses schema 117, so a code-only rollback is impossible.
+   - Before the entries: a restore of the verified pre-migration dump, **your explicit approval only**.
+   - After the entries, or once provider data exists: freeze and fix forward.
+
+### S1, refreshed for this build (Group D; paid; separate approval)
+- **Terms:** `terms-s1-3c4de3d.json`, frozen read-only at 13:01:27Z, sha256
+  `c2e664b8535ed48d65f1dda86d49934f7a4d302016e48f0a4f654ac61c387cc1`, run `scen-3c4de3d-s1`, plan C, S1 only.
+- **Ceiling 360p all-in; hold 401,032,421 µ¢ ($4.01032421),** both by the release's code; identical to the 5ee36d4
+  freeze apart from run id and source.
+- **Re-freeze after the install:** the only expected change is T2 cache read 20 → 10. The ceiling and hold do not depend on
+  tier prices.
+- **Costs:** every model and reviewer call the harness controller makes is metered: founder steps, escalations and the
+  agent's own reviews.
+- **Fleet Control is not exercised.** The throwaway registry has no Fleet Control budget, and the correct S1 path creates
+  no check. S1 therefore does not test Fleet Control.
+- **The 360p is a ceiling, not a forecast.**
+- **Pass:**
+  - the byte check of the actual delivered PDFs;
+  - every delivery reviewed, nothing owed;
+  - I open both files myself.
+- **Afterwards:** import once, release the hold, reconcile against the Console.
+
+### Agent-1 launch blockers (each with evidence and its acceptance condition)
+| # | Blocker | Evidence | Accepted when |
+|---|---|---|---|
+| L1 | Funding change not installed or reconciled | this section; production schema 115 | 3c4de3d installed (A/B), entries 1–2 applied, recorded $117.22 = Console, ledger verified, agents paused |
+| L2 | Fulfilment with the repaired runtime and real Opus unproven | plan C S1 on cf86ab8 was "achieved" but graded infrastructure (candidate-cf86ab8.md:38); never run on 5ee36d4 | `scen-3c4de3d-s1` passes: byte check, my inspection of both PDFs, cost ≤ 360p imported and reconciled |
+| L3 | Interruption recovery not shown on the current runtime | S2 completed on cf86ab8 only (candidate-cf86ab8.md:39). 5ee36d4 changed step handling (4,000 cap, cut-off continuation): a relevant change | S2 on the installed build passes (cap 250p). Recommended: one S1+S2 run, cap 610p, hold recomputed before approval |
+| L4 | Fleet Control cannot run (unallocated £0; budget unset) | balances 26 Oct; v117 refuses unfunded calls | float funded, 100p budget set, and one real message check reserved, settled and posted during the canary |
+| L5 | Spending and activation terms for Agent-1 not approved | v2.6:795-804. Fuses: 754p/day; hourly 600/h (owner 18 Oct; one record still says 20/h). Inference off | your written terms: provider/key switch, Agent-1 resume, fuse values confirmed, Fleet Control budget |
+| L6 | Sales channel closed | sales closed; Agent-1 offer paused since 20 Oct; seller address re-save unconfirmed (launch-readiness B11); refund authority B7 undecided; money-out (custody) off, so refunds cannot be paid automatically | seller address confirmed, refund route decided (authority or owner-manual), offer released, sales opened by you |
+| L7 | Promotional-use treatment | v69 books every agent AI charge as owed to you, including use of the free $100 | your decision: keep (no change) or record promotional use differently (a later migration) |
+
+Already proven, not repeated:
+- PayPal receiving (£1 test, 10 Oct);
+- the refund leg (Agent-1 refunded £5, reconciled 21 Oct);
+- the order-close rule (v108/v110 installed 20–21 Oct);
+- the key and account match.
+
+**Can wait (not blockers):**
+- the 34.81p over-charge correction;
+- Agent-2's b60e262 rehearsal (excluded);
+- `count_tokens`;
+- caching / Haiku efficiency;
+- the harness keeping provider rejection reasons;
+- metering Fleet Control inside S1;
+- the S1 grader reading chat replies.
+
 ## Funding and activation package (prepared 24 Oct ~23Z, for approval; nothing activated, charged or posted)
 
 B and C are complete; production runs 5ee36d4 (schema 115) unchanged since the install. Read 22:4xZ, read-only:
