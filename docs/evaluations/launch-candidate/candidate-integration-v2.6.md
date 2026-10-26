@@ -423,6 +423,87 @@ tokens** on each warm step, at 20 µ¢ a token. So the tool definitions cost lit
   **Rerun:** services rehearsal (controller code changed), founder-upgrade rehearsal (runtime changed; it also exercises
   the 4,000-token request against the fake Anthropic API) and the revision rehearsal (the target). All non-billable.
 
+## FINAL canary candidate 81e1ae5 (26 Oct ~15:55Z; local; for Group A approval; supersedes a0cb8c8 below where they differ)
+
+Commit `81e1ae5e6a2928797ec9f69e59317c40e7e1c760`, branch `fleet/canary-prep`, local, not pushed, on a0cb8c8 / 0fa9534 /
+docs. Schema 118 → 119 (no posting). No founder runtime or UI change. The S1+S2 evidence (`evidence-scen-bc19e05-s1s2/`) is
+unchanged.
+
+### 1. The $15 ceiling is now hard
+- **The gap (a0cb8c8):** Fleet Control's reservation subtracted `fleet_provider_credit_held`, which did not include the agents'
+  open model-call reservations, so it could take credit an agent's call in flight held.
+- **v119 (final):** `fleet_provider_credit_held` = engineering and ceiling holds + open Fleet Control maxima + promotional credit
+  expiring within 60 min + **every open model-call reservation** (live or expired, at its USD estimate).
+  - Agent authorisations (agent- and treasury-paid) and the engineering hold no longer subtract those reservations a second
+    time.
+  - Every consumer reads this one figure under the same `fleet_provider_credits:<provider>` advisory lock.
+- **`fleet-v119-credit-one-figure-pg` 4/4; it fails 4/4 when the fix is removed:**
+  - a reservation is counted once and leaves the figure when recorded;
+  - with $0.30 free and an agent holding $0.25, Fleet Control is refused $0.07, gets exactly $0.05, and another agent is then
+    refused;
+  - 3 agent calls of $0.20 and 2 Fleet Control calls of $0.07 run at once against $0.50 never take more than $0.50, each taken
+    amount counted once;
+  - the engineering hold can take exactly what is free.
+- **Remaining way past it:** a provider cost above a call's own estimate (an overrun). That is recorded, becomes a cost
+  exception, and stops further agent calls.
+
+### 2. The £10 cash threshold, stated honestly
+The hourly guard compares Agent-1's posted charges since the start with £10.00 and stops at the first check above it, so it
+can be overshot between checks.
+
+**Maximum exposure:**
+- a stop up to an hour late, plus the rolling daily limit of 754p, would allow up to **£17.54**;
+- **but** posted charges can never exceed what the calls cost, and Fleet's total cost is capped by the **hard** $15 ceiling:
+  1,500 US cents × 0.748039 = 1,122.0585p, so at most **1,123p (£11.23)**.
+
+So Agent-1's cash exposure over the canary is **at most £11.23**. That applies only if every call were purchased credit; with
+promotional credit drawn first ($98.01 left against a $15 ceiling), the expected cash charge is about £0.
+
+### 3. The duplicate guard detects repeated execution
+`scripts/fleet-canary-measures.sql` (read-only), used by `fleet-canary.sh`:
+- **Repeated delivery:** an order with more than one sent delivery that declares **no** resend reason. Not counted:
+  - revisions and deliberate resends, which declare a reason;
+  - retries (one delivery row, `attempts` > 1);
+  - the same bytes resent for a stated reason.
+- **Repeated message:** an agent message identical to one it sent on the same order **within the previous 30 minutes with no
+  buyer message between**. The same words after the buyer wrote again, or later than that, are not counted.
+- **`fleet-canary-measures-pg` 4/4 (on a real registry):**
+  - empty canary clean;
+  - a retried delivery, a declared revision and a deliberate same-bytes resend → 0;
+  - two undeclared sent deliveries → 1;
+  - repeated words after a buyer message or 110 min apart → 0; replayed a minute later → 1.
+- **`fleet-canary-guard` 10/10** (stub psql/CLI): dry run mutates nothing; each trigger stops once; the end keeps the hold while
+  reservations are open.
+- **Read-only dry run on production** (Agent-1's real history since 18 Oct): repeated deliveries 0, repeated messages 0;
+  nothing written.
+
+### 4. Test totals (exact, all retained)
+| Run | Result |
+|---|---|
+| First full run of a0cb8c8 (33 files) | **31/33 files; 291/299 tests.** Failures: `fleet-cognition-anthropic` 4 (known) and **`fleet-v111-cognition-settlement-pg` 4, caused by v119** (open reservations count toward the daily limit, which refused its first case before the cash rule it tests; the stranded hold failed 3 later cases) |
+| `fleet-v111-cognition-settlement-pg` after setting its daily limit out of the way | **10/10** (separate rerun) |
+| **Final run of 81e1ae5 (35 files)** | **34/35 files; 303/307 tests.** Only failures: **`fleet-cognition-anthropic` 4 known `FLEET_INFERENCE_LOCAL_ONLY`** (13/17), unchanged since before this work |
+
+`tsc --noEmit` is clean.
+
+### 5. Group A for 81e1ae5 (for approval; nothing done)
+1. **Push:** `git push fleet-origin fleet/canary-prep` (new branch, no force), carrying 0fa9534, a0cb8c8, 81e1ae5 and the docs
+   commits on top of the pushed `fleet/funding-v116`.
+2. **VPS build of 81e1ae5:** pins from the build output.
+3. **Side-install** beside production (`current` stays bc19e05).
+4. **Data rehearsal 118 → 119 and services rehearsal** on disposable copies: row counts, privilege audit, ledger head unchanged,
+   re-run no-op, rollback restore; candidate services ready; bc19e05 refuses 119.
+5. **On the copy:**
+   - `fleet_provider_credit_held` includes open reservations;
+   - a guard dry run with the release's script and SQL file writes nothing.
+6. **Production before/after identity.**
+
+Founder-upgrade and revision rehearsals are carried forward (no founder-runtime file changed).
+
+**Then (separate approvals):**
+- **Group B:** bc19e05 → 81e1ae5, schema 118 → 119, no agent restart, inference off.
+- **Activation:** the steps listed in section 4 of the consolidated package.
+
 ## Canary candidate a0cb8c8: v119, canary guard, tracker layout (26 Oct ~15:45Z; local; nothing installed or activated)
 
 Branch `fleet/canary-prep`, local, not pushed. It contains:
