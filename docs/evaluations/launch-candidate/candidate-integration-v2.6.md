@@ -423,6 +423,55 @@ tokens** on each warm step, at 20 µ¢ a token. So the tool definitions cost lit
   **Rerun:** services rehearsal (controller code changed), founder-upgrade rehearsal (runtime changed; it also exercises
   the 4,000-token request against the fake Anthropic API) and the revision rehearsal (the target). All non-billable.
 
+## INSTALLED: 81e1ae5 in production (Group B), 26 Oct 16:04:42–16:06:42Z — and the S1+S2 credit reconciliation CLOSED
+
+Approved by the owner: commit `81e1ae5e6a2928797ec9f69e59317c40e7e1c760`, expected build `23c34147046d33a36cbdb42d4afed56ebc4e6b7314b09b3a46cf67f00fff49eb`.
+
+**Before running:** the staged `~/rlc136/install.sh` and the reviewed `install-81e1ae5.sh` matched in full (sha256
+`4500e9b5cde132e50d2989c3d41dd1c7a4bc1e3cc403bf39dbdb7290ed0b57b4`). Pins: commit and build as approved.
+`FLEET_ROLLOUT_AUTO_RESTORE` unset. All gates passed before any change.
+
+**Install:**
+- **Pre-install backup:** `~/rlc136/baseline-pre-install-81e1ae5-20261026T160444Z` (5,457 dump entries; kept; never restored).
+- **Release:** `fleet-release.sh` 118 → 119. Outage 16:05:46–16:06:32Z (**46 s**). Cutover reconciliation OK (3,422 events
+  preserved). Rollout deployed 16:06:39Z; release deployed 16:06:40Z; root UI 0.26.2 unchanged.
+
+**Verified after the install:**
+- **Identity:** `current` → `releases/81e1ae5…`; the build identity of the installed tree is `23c34147…` / lockfile
+  `1df54e35…`; readyz ready, schema v119, runtime release `@81e1ae5…`.
+- **Ledger:** head 1176 `e214852e…` unchanged; 1,117 journals; verify **true**.
+- **Credit:** total **11,523,033,480 µ¢ ($115.2303348)**: purchased lot 1,722,000,000 ($17.22), promotional lot 9,801,033,480
+  ($98.0103348). Held **0**. Owner payable **1,081p** (unchanged).
+- **Agents:**
+  - Agent-1: runtime 5ee36d4, paused, **PID 2004178** (unchanged), 754p/day, 600 turns/h (unchanged);
+  - Agent-2: b60e262, paused, **PID 866408** (unchanged).
+  - Both heartbeating again at +26 s.
+- **Still off or closed:** inference (policy f, provider none); Fleet Control ceiling unset; sales closed; no credit hold; **no
+  canary unit installed**; authorities closed; safety flags false.
+- **v119 checks (script):**
+  - held includes open reservations;
+  - no path subtracts them twice;
+  - the daily limit reports usage;
+  - held 0;
+  - the release contains the guard; unit files unchanged.
+- **Settings pre-install → post-install:** **0 differences.**
+- **Events since the start:**
+  - `production_deployed` 1, `runtime_approved` 1, role grants;
+  - 2 `api_auth_failed` on `/v1/heartbeat`: the same pair seen at every controller restart.
+- **Not done:** no credit entry, hold, timer, funding, paid call, agent resume or restore.
+
+**Rollback:** 81e1ae5's schema 119 is refused by bc19e05, so going back is a restore of the pre-install backup: **owner
+decision only; none authorised.** Fix forward is preferred.
+
+### S1+S2 credit reconciliation: CLOSED (owner's Console reading, 26 Oct)
+| | Console (Kai) | Fleet records | Difference |
+|---|---|---|---|
+| Promotional | $98.01 | $98.0103348 | $0.0003348, within cent display |
+| Purchased | $17.22 | $17.22 | 0 |
+
+The run cost $1.9896652. The Console's promotional balance fell by $1.99 and its purchased balance did not move, so
+**Anthropic billed this run against the promotional balance, matching Fleet's allocation.** No entry is needed.
+
 ## Group A on 81e1ae5 (26 Oct, 15:56–16:01Z): PASSED; production unchanged — and the Group B package (prepared, not run)
 
 Approved by the owner, Group A for code commit `81e1ae5e6a2928797ec9f69e59317c40e7e1c760`.
