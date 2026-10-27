@@ -3375,3 +3375,138 @@ It posts nothing.
 - **Group B:** `fleet-release.sh` 120 → 121 with UI 0.27.0. No agent runtime change: these are controller and HQ only,
   the founder runtime is unchanged, and Agent-1 stays on 7c194b8.
 - No funding, adjustment or activation is involved.
+
+## Group A on 1116576 (27 Oct, 20:09–20:20Z): PASSED; production unchanged
+
+Approved by the owner for `1116576f3663a9f2289422b226b7e12232ff57ee`, the treasury display fix (v121, read-only) with HQ
+0.27.0. All models were fake or absent: no paid call, no financial posting, no cutover.
+
+| Step | Result |
+|---|---|
+| Push | `fleet/canary-prep` fast-forward `8e30120..1116576`, no force |
+| Build (VPS, two passes) | Pins from pass 1's output (`~/rlc138/pins.txt`). Pass 2 verified **build `2c9907f2ebb809e814dc04183da139407a59c07e7e65ad367a91683a77e4b633`**, lockfile `1df54e35…` (unchanged) |
+| Side-install (sudo) | `/opt/automaton-fleet/releases/1116576…`, identity re-verified; `current` stayed 7c194b8 |
+| Data rehearsal `fleet-rollout.sh rehearse 120 → 121` | **PASSED 20:12:25Z.** Only 121 applies; privilege audit `ok`, no problems; 1,117 journals; ledger verify true; rerun no-op; the rollback dump restores 120 with the same head. "Counts moved while dumping" is informational (the agents' routine session renewals during the dump) |
+| Services rehearsal `fleet-upgrade-rehearsal.sh 120 → 121` | **PASSED 20:13:15Z.** 7c194b8 refuses 121 (rollback = database restore); the candidate controller, Operator API and dashboard were ready on 121; rollback restored 120, and 7c194b8 was ready again; production PIDs unchanged |
+| v121 on a disposable production copy (`copy-check.sh`; dropped) | See below |
+| HQ 0.27.0 | See below |
+| Rendered verification of the real built HQ | See below |
+| Production before / after (20:09:36Z / 20:19:14Z) | See below |
+
+**v121 on the disposable copy:**
+
+- `treasury_position`: PayPal **£0.22 GBP** (fresh), **reconciled** (difference £0.00), available **£0.00**, owed to you
+  £10.81, set aside £10.79, wallets £189.43 (backed at most £0.00), API credit $115.23 (USD, apart);
+- Treasury health and Money states now carry the GBP balance;
+- wealth: actual cash 22, available 0, reconciled; **`treasuryCashMinor` 1,079, unchanged** (= `fleet_treasury_cash()`);
+- journals 1,117 before and after; ledger verify true; `dash_call` knows the read;
+- live head and schema unchanged.
+
+**HQ 0.27.0:**
+
+- Two clean LIVE builds are identical: 52 files, artifact `20c8c13d3b7da2a904f41f9901faacb1354daae533ff59562b2fdb88d698c33c`.
+- **Tarball `ui-0.27.0-1116576.tgz`, sha256 `bccb6e667859dcaa270477e9f00328c61e8c8aeeb089e2f95f24922de8ff2558`.** It
+  has 71 entries, is root-owned with a fixed timestamp, and two packings are identical.
+- Staged at `~/rlc138/`. `fleet-ui-deploy.sh --check`: "UI CHECK OK: 0.27.0 would be new; nothing changed". Production
+  serves 0.26.2.
+
+**Rendered verification of the real built HQ** (`hq-0.27.0-evidence/live-*.png`): HQ 0.27.0's LIVE build and the real
+gateway, against a throwaway registry with **sample data**, signed in with password and authenticator, headless Chrome,
+no page errors. With a GBP row (22) and a newer USD row (0):
+
+- **Overview:** "Available treasury (backed): unknown — reconciliation unresolved"; "PayPal cash (actual): £0.22" (the
+  GBP row, not the USD one).
+- **Treasury headline:** the same.
+- With the sample books reconciled: **Overview** "Available treasury (backed) £9,800.00" beside "PayPal cash (actual)
+  £10,000.00", and the **Treasury headline** £9,800.00.
+- The Treasury position panel agrees with both.
+- **Money & identity:** "○ Bank details: not saved yet" above its form. The section text no longer reads as a status.
+- The production-figure renders of the position panel and the four sealed states are `before.png` / `after.png`.
+
+**Production before / after:**
+
+- identical: schema 120, ledger head 1176 `e214852e…` (verify true), founder cognition, agents, state, units, unit
+  files, packages, tools, settings, and the reconciliation snapshot outside events;
+- both agents paused: Agent-1 7c194b8 PID 2135441, **Agent-2 b60e262 PID 866408**;
+- **events 3,088 → 3,090:** two routine `session_opened` renewals by the paused agents (ids 11409–11410); permanent
+  history 345, same digest;
+- **off and closed:**
+  - inference off (policy disabled, `FLEET_COGNITION_PROVIDER=none`);
+  - Fleet Control budget unset;
+  - sales closed;
+  - no outward release, refund authority, custody activation or credit hold;
+  - owner tasks 0;
+  - the four flags false.
+
+**Unchanged by decision:** replication and insolvency policy. `fleet_replication_health` and `svc_notify_tick` still read
+the legacy book figure `treasuryCashMinor` (the treasury_cash partition sum). This is disclosed, not corrected.
+
+### Stage 1 funding, stated precisely (correcting "Stage 1 needs no funding")
+
+- **Agent-1's own work in Stage 1:** adopting the files, inspecting them, its deliverable review and any
+  `independent_review`. These are its own model calls: Anthropic credit, promotional first, inside 754p/day, 120 turns/h
+  and the $15 hold. **No PayPal money is needed for them.**
+- **Fleet Control's calls are different, and their gate stays:**
+  - spend reviews of material commitments;
+  - lesson (knowledge) reviews if Agent-1 proposes a shared lesson;
+  - evidence relevance;
+  - message checks (none while sales are closed).
+
+  Each must **reserve its maximum in GBP from `fleet:treasury:unallocated` before it runs** (v117), and its provider
+  credit too. With unallocated at £0.00, such a reservation is refused (`FLEET_CONTROL_AI_BUDGET_UNFUNDED`), and the item
+  waits unfunded: no call, nothing charged. That is the designed behaviour and is not removed.
+- **So:** Stage 1's expected path, adopting the files and recording a review, needs no treasury money. Any Fleet Control
+  review that arises during Stage 1 waits until the treasury is funded. The safety gate is intact.
+- **The Stage 2 amount:** about 75p net is the minimum for one controlled order (30p message-check reserve + about 45p
+  proof fee). It is settled, with its assumptions, before Stage 2. **No £5 transfer is justified to repeat the earlier
+  test.**
+
+### Group B package for 1116576 (prepared; NOT run; needs approval)
+
+- **Script:** `install-1116576.sh` beside this record, **sha256
+  `2b9122a123df4afdfd911264fb0793b47373c296216379ef92231b90bb954cf5`**, staged identically as `~/rlc138/install.sh`. It
+  is generated from the 7c194b8 script with only these changes: the pins, Agent-1's current runtime (7c194b8), schema
+  120 → 121, UI 0.27.0, and the v121 checks.
+- **Run:** `bash ~/rlc138/install.sh`.
+- **Pins:**
+  - commit `1116576f3663a9f2289422b226b7e12232ff57ee`;
+  - build `2c9907f2ebb809e814dc04183da139407a59c07e7e65ad367a91683a77e4b633`;
+  - lockfile `1df54e3526cb39c847d18fec14f1d4e3595557e34d94040c5b774f9b2f2a21c1`;
+  - **UI 0.27.0**, `~/rlc138/ui-0.27.0-1116576.tgz`, sha `bccb6e667859dcaa270477e9f00328c61e8c8aeeb089e2f95f24922de8ff2558`.
+- **Gates, checked before any change:**
+  - the pins;
+  - both rehearsals of 1116576 passed and are under 24 h old (**run before 20:12Z on 28 Oct**, else rehearse again);
+  - the UI tarball checksum;
+  - release directory present;
+  - both agents paused, Agent-1 on **7c194b8** and Agent-2 on **b60e262**;
+  - inference off;
+  - permissions closed;
+  - the four flags false;
+  - schema 120 on 7c194b8;
+  - no open credit hold;
+  - no canary unit;
+  - founder unit template identical;
+  - `FLEET_ROLLOUT_AUTO_RESTORE` unset;
+  - a fresh full-dump baseline (TOC checked), kept and never restored by the script.
+- **Change:** `fleet-release.sh … 120 121 0.27.0 <tgz> <sha>`.
+  - Backend cutover: a fresh dump, migrate 121, reconcile, approve the runtime, restart the controller-side units.
+  - UI promotion: only `FLEET_DASHBOARD_STATIC_DIR` changes, to `/opt/automaton-fleet/ui/0.27.0`; rollback restores
+    0.26.2.
+  - Exactly one `production_deployed` or `production_rolled_back` event.
+  - **No founder unit restarts. No agent runtime changes.**
+- **Verification:**
+  - controller ready;
+  - both agents paused with the **same PIDs and runtimes**;
+  - inference off;
+  - tiers, ledger head, credit and owner payable unchanged;
+  - v116–v120 checks still hold (owner tasks 0);
+  - **v121:**
+    - Treasury health shows the GBP balance;
+    - the position reads;
+    - the legacy `treasuryCashMinor` = `fleet_treasury_cash()` (unchanged);
+    - the gateway knows `treasury_position`;
+    - the dashboard serves UI 0.27.0;
+  - unit files unchanged, flags false, permissions closed, ledger verified;
+  - settings captured.
+- **On failure:** no database restore. Controller-side units stop and you decide; the pre-install backup is kept.
+- **Not included:** any task, funding, financial adjustment, credit hold, timer, inference, agent resume or sales opening.
