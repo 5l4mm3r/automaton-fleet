@@ -40,9 +40,12 @@ export const REINSTATABLE_CAUSES = ["health_timeout", "heartbeat_timeout"] as co
 /** How long after death a reinstatement stays possible. */
 export const REINSTATE_WINDOW_DAYS = 14;
 export const UNBACKED_ESTATES_ACCOUNT = "fleet:treasury:unbacked_estates";
+/** The verification hold a reinstatement sets (owner-chosen within these bounds). */
+export const HOLD_MIN_MINUTES = 5;
+export const HOLD_MAX_MINUTES = 120;
 export const EVENT_ROUTES_V122 = Object.freeze({
   P1_HIGH: ["agent_reinstated"],
-  P2_IMPORTANT: ["estate_reverted", "ai_cost_unwound"],
+  P2_IMPORTANT: ["estate_reverted", "ai_cost_unwound", "lifecycle_hold_ended"],
 });
 
 const OWNER_ACTOR = `IF p_actor IS NULL OR p_actor !~ '^operator:[A-Za-z0-9._-]{1,64}$' THEN RAISE EXCEPTION 'FLEET_APPROVAL_REQUIRED: owner actor required'; END IF;
@@ -59,9 +62,27 @@ const ORIGIN_GUARD = restate(V11_SQL, "fleet_agents_origin_guard", [
 ]);
 
 // R2: any reaper gap over REAPER_RESUME_GAP_S restarts the grace window (controller downtime never counts against agents).
+const HOLD_OFF = `(lifecycle_hold_until IS NULL OR lifecycle_hold_until <= now())`;
 const REAP = restate(v4Sql(50), "fleet_reap", [
   [`     OR now() - st.reaper_last_run_at > make_interval(secs => st.heartbeat_unresponsive_s) THEN`,
    `     OR now() - st.reaper_last_run_at > make_interval(secs => LEAST(st.heartbeat_unresponsive_s, ${REAPER_RESUME_GAP_S})) THEN`],
+  // v122: an agent under a bounded lifecycle hold (an owner reinstatement under verification) is neither marked unresponsive
+  // nor terminated for health / heartbeat; after the hold the full grace runs from its end.
+  [`            WHERE status = 'active'
+              AND (GREATEST(COALESCE(last_heartbeat, updated_at), v_grace) < now() - make_interval(secs => st.heartbeat_unresponsive_s)`,
+   `            WHERE status = 'active' AND ${HOLD_OFF}
+              AND (GREATEST(COALESCE(last_heartbeat, updated_at), v_grace) < now() - make_interval(secs => st.heartbeat_unresponsive_s)`],
+  [`            WHERE status = 'unresponsive'
+              AND (GREATEST(COALESCE(last_heartbeat, updated_at), v_grace) < now() - make_interval(secs => st.heartbeat_dead_s)
+                   OR GREATEST(COALESCE(unresponsive_since, updated_at), v_grace) < now() - make_interval(secs => st.termination_grace_s))`,
+   `            WHERE status = 'unresponsive' AND ${HOLD_OFF}
+              AND (GREATEST(COALESCE(last_heartbeat, updated_at), v_grace, COALESCE(lifecycle_hold_until, '-infinity')) < now() - make_interval(secs => st.heartbeat_dead_s)
+                   OR GREATEST(COALESCE(unresponsive_since, updated_at), v_grace, COALESCE(lifecycle_hold_until, '-infinity')) < now() - make_interval(secs => st.termination_grace_s))`],
+]);
+// v122: becoming active ends a lifecycle hold.
+const STAMPS = restate(v4Sql(50), "fleet_agents_lifecycle_stamps", [
+  [`    IF NEW.status = 'active' THEN NEW.unresponsive_since := NULL; END IF;`,
+   `    IF NEW.status = 'active' THEN NEW.unresponsive_since := NULL; NEW.lifecycle_hold_until := NULL; NEW.lifecycle_hold_reason := NULL; END IF;`],
 ]);
 
 // R3: the only way out of a terminal state — an owner incident reinstatement of this very agent, in this transaction.
@@ -122,15 +143,20 @@ const ESTATE_SETTLE = restate(V111_SQL, "fleet_estate_settle_internal", [
       NULL, NULL, NULL, NULL, now(), (
         SELECT jsonb_agg(x) FROM (
           SELECT jsonb_build_object('account', 'fleet:treasury:unallocated', 'side', 'D', 'amount', v_cash) x WHERE v_cash > 0`,
-   `  -- v122: cash up to the still-unbacked starting capital is parked apart from unallocated (it is no money anyone paid in).
-  v_unb := LEAST(v_cash, GREATEST(0, (fleet_capital_backing() ->> 'unbackedMinor')::bigint - fleet_ledger_balance('${UNBACKED_ESTATES_ACCOUNT}')));
+   `  -- v122: the agent's own earnings (external customer revenue it kept: revenue − its treasury contributions) are real money and
+  -- stay backed; only the rest of its cash — capital the fleet gave it — counts as unbacked, capped by the fleet's still-unbacked
+  -- starting capital. That part is parked apart from unallocated (it is no money anyone paid in).
+  v_earn := GREATEST(0, COALESCE((fleet_agent_economics(p_agent) ->> 'externalCustomerRevenue')::bigint, 0)
+                        - COALESCE((fleet_agent_economics(p_agent) ->> 'lifetimeContribution')::bigint, 0));
+  v_unb := LEAST(GREATEST(0, v_cash - v_earn),
+                 GREATEST(0, (fleet_capital_backing() ->> 'unbackedMinor')::bigint - fleet_ledger_balance('${UNBACKED_ESTATES_ACCOUNT}')));
   IF v_cash > 0 OR v_assets > 0 THEN
     PERFORM fleet_ledger_post('estate_transfer', 'estate:transfer:' || p_agent || ${SUFFIX}, p_actor, 'estate: remaining assets to the treasury', 'owner', p_agent,
       NULL, NULL, NULL, NULL, now(), (
         SELECT jsonb_agg(x) FROM (
           SELECT jsonb_build_object('account', '${UNBACKED_ESTATES_ACCOUNT}', 'side', 'D', 'amount', v_unb) x WHERE v_unb > 0
           UNION ALL SELECT jsonb_build_object('account', 'fleet:treasury:unallocated', 'side', 'D', 'amount', v_cash - v_unb) WHERE v_cash - v_unb > 0`],
-  [`DECLARE v_pay bigint;`, `DECLARE v_unb bigint := 0; v_pay bigint;`],
+  [`DECLARE v_pay bigint;`, `DECLARE v_unb bigint := 0; v_earn bigint := 0; v_pay bigint;`],
   [`    'payableRepaid', v_rp, 'payableWrittenOff', v_pwo);`, `    'payableRepaid', v_rp, 'payableWrittenOff', v_pwo, 'cashUnbacked', v_unb);`],
 ]);
 
@@ -145,7 +171,12 @@ const ESTATE_FREEZE = restate(V11_SQL, "fleet_estate_freeze", [
 export const V122_SQL = `
 ${ORIGIN_GUARD}
 
+-- ═══ A bounded lifecycle hold (set only by an owner reinstatement; ends at active, at its time, or by the owner) ═══
+ALTER TABLE fleet_agents ADD COLUMN lifecycle_hold_until timestamptz, ADD COLUMN lifecycle_hold_reason text CHECK (lifecycle_hold_reason IS NULL OR length(lifecycle_hold_reason) <= 300);
+
 ${REAP}
+
+${STAMPS}
 
 ${TRANSITION_GUARD}
 
@@ -179,7 +210,7 @@ ${ESTATE_SETTLE}
 ${ESTATE_FREEZE}
 
 -- ═══ The owner's incident reinstatement (atomic; nothing partial) ═══
-CREATE FUNCTION fleet_admin_incident_reinstate(p_incident text, p_agents text[], p_unwind_journals uuid[], p_actor text) RETURNS jsonb LANGUAGE plpgsql
+CREATE FUNCTION fleet_admin_incident_reinstate(p_incident text, p_agents text[], p_unwind_journals uuid[], p_hold_minutes integer, p_actor text) RETURNS jsonb LANGUAGE plpgsql
 SET search_path = @@SCHEMA@@, pg_temp AS $$
 DECLARE st fleet_state; a fleet_agents; es fleet_estates; j fleet_ledger_journal; v_rev uuid; v_cause text; v_amt bigint; v_lot uuid; v_payer text;
         m text[]; v_out jsonb := '[]'::jsonb; v_unw jsonb := '[]'::jsonb; v_id text; v_tj uuid; v_cred integer;
@@ -187,6 +218,9 @@ BEGIN
   ${OWNER_ACTOR}
   IF p_incident IS NULL OR length(btrim(p_incident)) < 3 THEN RAISE EXCEPTION 'FLEET_BAD_REQUEST: name the incident'; END IF;
   IF p_agents IS NULL OR cardinality(p_agents) = 0 THEN RAISE EXCEPTION 'FLEET_BAD_REQUEST: at least one agent'; END IF;
+  IF p_hold_minutes IS NULL OR p_hold_minutes NOT BETWEEN ${HOLD_MIN_MINUTES} AND ${HOLD_MAX_MINUTES} THEN
+    RAISE EXCEPTION 'FLEET_BAD_REQUEST: a verification hold of ${HOLD_MIN_MINUTES}..${HOLD_MAX_MINUTES} minutes';
+  END IF;
   st := fleet_lock_state();
   -- 1. Acquisition costs that posted only on unbacked estate money: mirrored reversal, back to waiting.
   FOREACH v_rev IN ARRAY COALESCE(p_unwind_journals, '{}') LOOP
@@ -249,6 +283,7 @@ BEGIN
      WHERE agent_id = v_id AND frozen_reason = 'agent dead';
     PERFORM set_config('fleet.reinstate_op', v_id, true);
     UPDATE fleet_agents SET status = 'unresponsive', death_time = NULL, challenge_failures = 0, challenge_requested_at = now(),
+           lifecycle_hold_until = now() + make_interval(mins => p_hold_minutes), lifecycle_hold_reason = left('verification after reinstatement: ' || p_incident, 300),
            status_reason = left('reinstated after incident ' || p_incident || '; active only after a passed health challenge', 500),
            health_reason = 'reinstated: awaiting a passed health challenge', updated_at = now()
      WHERE agent_id = v_id;
@@ -257,13 +292,30 @@ BEGIN
            reason = left('reinstated (paused) after incident ' || p_incident, 300)
      WHERE agent_id = v_id;
     PERFORM fleet_event('agent_reinstated', v_id, p_actor, jsonb_build_object('incident', left(p_incident, 200), 'reversalJournalId', v_rev,
-      'diedAt', a.death_time, 'cause', v_cause, 'status', 'unresponsive', 'paused', true));
+      'diedAt', a.death_time, 'cause', v_cause, 'status', 'unresponsive', 'paused', true, 'holdMinutes', p_hold_minutes));
     v_out := v_out || jsonb_build_object('agentId', v_id, 'reversalJournalId', v_rev, 'diedAt', a.death_time, 'cause', v_cause);
   END LOOP;
   IF fleet_ledger_balance('fleet:treasury:unallocated') < 0 THEN RAISE EXCEPTION 'FLEET_LEDGER_NEGATIVE: unallocated would be negative'; END IF;
   IF (fleet_ledger_verify() ->> 'ok')::boolean IS NOT TRUE THEN RAISE EXCEPTION 'FLEET_LEDGER_INVALID: the ledger does not verify after reinstatement'; END IF;
   RETURN jsonb_build_object('ok', true, 'incident', left(p_incident, 200), 'reinstated', v_out, 'unwound', v_unw,
-    'note', 'agents are unresponsive and paused; each becomes active only by passing the health challenge due at its next heartbeat');
+    'holdUntil', now() + make_interval(mins => p_hold_minutes),
+    'note', 'agents are unresponsive and paused, protected from automatic termination until the hold ends; each becomes active only by passing the health challenge due at its next heartbeat (which ends its hold)');
+END $$;
+
+-- The owner ends a verification hold early (normal lifecycle rules apply again at once; the full grace runs from now).
+CREATE FUNCTION fleet_admin_lifecycle_hold_end(p_agent text, p_reason text, p_actor text) RETURNS jsonb LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE a fleet_agents;
+BEGIN
+  ${OWNER_ACTOR}
+  IF p_reason IS NULL OR length(btrim(p_reason)) < 3 THEN RAISE EXCEPTION 'FLEET_BAD_REQUEST: a reason is required'; END IF;
+  SELECT * INTO a FROM fleet_agents WHERE agent_id = p_agent FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'FLEET_NOT_FOUND: %', p_agent; END IF;
+  IF a.lifecycle_hold_until IS NULL OR a.lifecycle_hold_until <= now() THEN RETURN jsonb_build_object('ok', true, 'replay', true); END IF;
+  UPDATE fleet_agents SET lifecycle_hold_until = now(), lifecycle_hold_reason = NULL, unresponsive_since = CASE WHEN status = 'unresponsive' THEN now() ELSE unresponsive_since END
+   WHERE agent_id = p_agent;
+  PERFORM fleet_event('lifecycle_hold_ended', p_agent, p_actor, jsonb_build_object('reason', left(fleet_scrub(btrim(p_reason)), 300)));
+  RETURN jsonb_build_object('ok', true);
 END $$;
 
 ${restate(V120_SQL, "fleet_event_route", [["    WHEN p_type = 'spend_circuit_breaker_set' THEN",

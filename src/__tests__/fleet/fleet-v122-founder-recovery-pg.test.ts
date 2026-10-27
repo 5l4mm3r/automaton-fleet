@@ -36,6 +36,7 @@ describe.skipIf(!PG_BIN)("v122: founder recovery (PostgreSQL)", { timeout: 300_0
   const err = (p: Promise<unknown>) => p.then(() => "no error", (e: Error) => e.message);
   /** The founder side of a health challenge, exactly as the runtime answers it (its runtime identity, policy canary passed). */
   const passChallenge = async (id: string) => {
+    await R.one(`fleet.fleet_heartbeat($1, $1)`, [id]);                                   // as the runtime: a heartbeat first
     await R.q(`UPDATE fleet.fleet_agents SET challenge_requested_at = now() WHERE agent_id = $1`, [id]);
     const c = await R.store.issueChallenge(id);
     expect(c, "a challenge is issued").not.toBeNull();
@@ -43,8 +44,18 @@ describe.skipIf(!PG_BIN)("v122: founder recovery (PostgreSQL)", { timeout: 300_0
     const a = await agent(id);
     return R.store.answerChallenge(id, { challengeId: c!.challengeId, nonce: c!.nonce, commit: a.runtime_commit ?? null, buildId: rt?.buildId ?? null, policyOk: true });
   };
-  const reinstate = (agents: string[], unwind: string[] = []) =>
-    R.one<Record<string, any>>(`fleet.fleet_admin_incident_reinstate($1, $2::text[], $3::uuid[], $4)`, [INCIDENT, agents, unwind, OWNER]);
+  const reinstate = (agents: string[], unwind: string[] = [], hold = 60) =>
+    R.one<Record<string, any>>(`fleet.fleet_admin_incident_reinstate($1, $2::text[], $3::uuid[], $4, $5)`, [INCIDENT, agents, unwind, hold, OWNER]);
+  /** Everything a refused reinstatement must leave untouched (financial and lifecycle). */
+  const untouched = () => R.one<string>(`(SELECT concat_ws('|', (SELECT head_seq || ':' || head_hash FROM fleet.fleet_ledger_head),
+      (SELECT md5(string_agg(a::text, ',' ORDER BY agent_id)) FROM (SELECT agent_id, status, death_time, lifecycle_hold_until, challenge_requested_at FROM fleet.fleet_agents) a),
+      (SELECT md5(string_agg(c::text, ',' ORDER BY agent_id)) FROM fleet.fleet_agent_credentials c),
+      (SELECT md5(string_agg(w::text, ',' ORDER BY agent_id)) FROM fleet.fleet_wallet_custody w),
+      (SELECT md5(string_agg(e::text, ',' ORDER BY agent_id)) FROM fleet.fleet_estates e),
+      (SELECT md5(string_agg(f::text, ',' ORDER BY agent_id)) FROM fleet.fleet_founder_cognition f),
+      (SELECT md5(string_agg(x::text, ',' ORDER BY lot_id, payer)) FROM fleet.fleet_ai_credit_cost_accrual x),
+      (SELECT count(*) FROM fleet.fleet_estate_reversions), (SELECT max(id) FROM fleet.fleet_events),
+      (SELECT living_agents FROM fleet.fleet_state)))`);
 
   beforeAll(async () => {
     R = await startEconomyRegistry(PG_BIN!, { founders: 2, allocationCents: 10_000, treasuryCents: 100_000, simulatedSettlement: false });
@@ -155,11 +166,18 @@ describe.skipIf(!PG_BIN)("v122: founder recovery (PostgreSQL)", { timeout: 300_0
     expect(Number(accrual1.posted_minor)).toBe(Number(accrual0.posted_minor));
     expect(await R.one(`(fleet.fleet_ledger_verify() ->> 'ok')`)).toBe("true");
     expect(Number(await R.one(`(SELECT living_agents FROM fleet.fleet_state)`))).toBe(2);
+    // The verification hold: aged 9 minutes past unresponsive and 11 minutes without a heartbeat, the reaper ends neither.
+    for (const id of [A, B]) expect(Date.parse((await agent(id)).lifecycle_hold_until)).toBeGreaterThan(Date.now() + 55 * 60_000);
+    await R.q(`UPDATE fleet.fleet_state SET reaper_last_run_at = now() - interval '10 seconds', reaper_grace_from = now() - interval '1 hour'`);
+    await asSuper(`UPDATE fleet.fleet_agents SET unresponsive_since = now() - interval '9 minutes', last_heartbeat = now() - interval '11 minutes' WHERE agent_id = ANY($1)`, [[A, B]]);
+    await reap();
+    for (const id of [A, B]) expect((await agent(id)).status).toBe("unresponsive");
     // A paused, reinstated founder: model calls refused; active only after it passes the challenge due at its next heartbeat.
     expect(await R.one(`fleet.fleet_heartbeat($1, $1)`, [A])).toBe("unresponsive");
     for (const id of [A, B]) {
       expect(await passChallenge(id)).toMatchObject({ ok: true });
       expect((await agent(id)).status).toBe("active");
+      expect((await agent(id)).lifecycle_hold_until).toBeNull();                              // becoming active ends the hold
     }
     expect(await R.one(`(fleet.fleet_ledger_verify() ->> 'ok')`)).toBe("true");
     // Twice: refused (it is no longer dead).
@@ -178,11 +196,102 @@ describe.skipIf(!PG_BIN)("v122: founder recovery (PostgreSQL)", { timeout: 300_0
     expect(await R.one(`(SELECT status FROM fleet.fleet_estates WHERE agent_id = $1)`, [B])).toBe("settled");
     expect(await R.one(`(SELECT count(*)::int FROM fleet.fleet_ledger_journal WHERE kind = 'estate_transfer' AND agent_id = $1)`, [B])).toBe(2);
     expect(await R.one(`(SELECT count(*)::int FROM fleet.fleet_estate_reversions WHERE agent_id = $1)`, [B])).toBe(1);
-    // A non-owner actor.
-    expect(await err(R.one(`fleet.fleet_admin_incident_reinstate($1, ARRAY[$2]::text[], '{}'::uuid[], 'founder:x')`, [INCIDENT, B]))).toMatch(/FLEET_APPROVAL_REQUIRED/);
+    // The cap: a full fleet refuses the reinstatement and the WHOLE transaction rolls back (nothing financial or lifecycle moves).
+    await R.store.setMaxAgents(1, "test: a full fleet");
+    const before = await untouched();
+    expect(await err(reinstate([B]))).toMatch(/FLEET_CAP_EXCEEDED/);
+    expect(await untouched()).toBe(before);
+    await R.store.setMaxAgents(2, "test: cap restored");
+    const before2 = await untouched();
+    // A non-owner actor; an out-of-bounds hold.
+    expect(await err(R.one(`fleet.fleet_admin_incident_reinstate($1, ARRAY[$2]::text[], '{}'::uuid[], 60, 'founder:x')`, [INCIDENT, B]))).toMatch(/FLEET_APPROVAL_REQUIRED/);
+    expect(await err(reinstate([B], [], 600))).toMatch(/FLEET_BAD_REQUEST: a verification hold/);
+    expect(await untouched()).toBe(before2);
     // An economic death (any cause other than a health / heartbeat timeout) is final.
     await asSuper(`UPDATE fleet.fleet_events SET detail = jsonb_set(detail, '{cause}', '"survival_exhausted"') WHERE id = (SELECT max(id) FROM fleet.fleet_events WHERE event_type = 'agent_died' AND agent_id = $1)`, [B]);
     expect(await err(reinstate([B]))).toMatch(/FLEET_REINSTATE_REFUSED: .* died of survival_exhausted/);
     expect(await R.one(`(fleet.fleet_ledger_verify() ->> 'ok')`)).toBe("true");
+  });
+});
+
+describe.skipIf(!PG_BIN)("v122: estate partition keeps backed money backed, mixed balances included; hold end; new event routes", { timeout: 300_000 }, () => {
+  let R: EconomyRegistry;
+  let su: pg.Pool;
+  let X: string, Y: string, Z: string;
+  const asSuper = async (sql: string, params: unknown[] = []) => {
+    const c = await su.connect();
+    try { await c.query("SET session_replication_role = replica"); return (await c.query(sql, params)).rows; } finally { await c.query("RESET session_replication_role"); c.release(); }
+  };
+  const bal = async (a: string) => Number(await R.one(`fleet.fleet_ledger_balance($1)`, [a]));
+  /** An agent's own spending (expense from its cash), as a charge posts it. */
+  const spend = (id: string, pence: number) => R.one(`fleet.fleet_ledger_post('inference_charge', $1, 'controller', 'test spend', 'controller', $2, NULL, NULL, NULL, NULL, now(), $3::jsonb)`,
+    [`test:spend:${crypto.randomUUID()}`, id, JSON.stringify([{ account: `agent:${id}:expense`, side: "D", amount: pence }, { account: `agent:${id}:cash`, side: "C", amount: pence }])]);
+  const die = async (id: string) => {
+    await R.q(`UPDATE fleet.fleet_state SET reaper_last_run_at = now() - interval '10 seconds', reaper_grace_from = now() - interval '1 hour'`);
+    await asSuper(`UPDATE fleet.fleet_agents SET status = 'unresponsive', unresponsive_since = now() - interval '9 minutes', last_heartbeat = now() - interval '20 seconds',
+      last_challenge_ok_at = now() - interval '1 hour', challenge_failures = 3 WHERE agent_id = $1`, [id]);
+    await R.one(`fleet.fleet_reap('reaper')`);
+    await R.one(`fleet.svc_settle_estates(10)`);
+    return R.one<Record<string, any>>(`(SELECT summary FROM fleet.fleet_estates WHERE agent_id = $1)`, [id]);
+  };
+
+  beforeAll(async () => {
+    R = await startEconomyRegistry(PG_BIN!, { founders: 3, allocationCents: 10_000, treasuryCents: 100_000, simulatedSettlement: false });
+    [X, Y, Z] = R.founders.map((f) => f.id);
+    su = new pg.Pool({ connectionString: R.pgc.superUrl.replace(/\/postgres$/, `/${R.pgc.dbname}`), max: 1 });
+    // £100 of the fleet's capital is unbacked (recorded without money); the rest is real.
+    await R.one(`fleet.fleet_admin_record_owner_funding(10000, 'owner-authorized-virtual:test-mixed', $1, 'v122-mixed')`, [OWNER]);
+  }, 300_000);
+  afterAll(async () => { await su?.end(); await R?.close(); });
+
+  it("mixed balance: the agent's kept earnings stay backed (unallocated); only the rest, up to the fleet's unbacked capital, is parked", async () => {
+    await R.ledger.recordRevenue(X, 3_000, `sale:${crypto.randomUUID()}`, "buyer@example.test", OWNER);   // real customer money
+    await spend(X, 1_000);
+    const cash = await bal(`agent:${X}:cash`);                                             // 10,000 + 3,000 − 1,000 = 12,000
+    const u0 = await bal("fleet:treasury:unallocated");
+    const s = await die(X);
+    expect(Number(s.cashToTreasury)).toBe(cash);
+    expect(Number(s.cashUnbacked)).toBe(cash - 3_000);                                     // 9,000 parked
+    expect(await bal("fleet:treasury:unbacked_estates")).toBe(cash - 3_000);
+    expect(await bal("fleet:treasury:unallocated")).toBe(u0 + 3_000);                       // the 3,000 earned stays real treasury money
+  });
+
+  it("the fleet's unbacked capital caps the parking: once it is used up, a later estate's cash is backed (unallocated)", async () => {
+    const cash = await bal(`agent:${Y}:cash`);                                             // 10,000 of capital, no earnings
+    // What is still unbacked: the virtual capital less provider-paid spending (fleet_capital_backing) less what is already parked.
+    const left = Math.max(0, Number(await R.one(`(fleet.fleet_capital_backing() ->> 'unbackedMinor')`)) - await bal("fleet:treasury:unbacked_estates"));
+    const u0 = await bal("fleet:treasury:unallocated");
+    const s = await die(Y);
+    expect(Number(s.cashUnbacked)).toBe(Math.min(cash, left));
+    expect(await bal("fleet:treasury:unallocated")).toBe(u0 + cash - Math.min(cash, left));
+  });
+
+  it("earnings larger than the cash left: nothing is parked", async () => {
+    await R.ledger.recordRevenue(Z, 3_000, `sale:${crypto.randomUUID()}`, "buyer@example.test", OWNER);
+    await spend(Z, 4_000);                                                                 // 10,000 + 3,000 − 4,000 = 9,000; earnings 3,000
+    const p0 = await bal("fleet:treasury:unbacked_estates");
+    const d0 = Number(await R.one(`(fleet.fleet_capital_backing() ->> 'differenceMinor')`) ?? 0);
+    const s = await die(Z);
+    expect(Number(s.cashUnbacked)).toBe(0);                                                // the fleet's unbacked capital is used up
+    expect(await bal("fleet:treasury:unbacked_estates")).toBe(p0);
+    expect(await R.one(`(fleet.fleet_ledger_verify() ->> 'ok')`)).toBe("true");
+    expect(Number(await R.one(`(fleet.fleet_capital_backing() ->> 'differenceMinor')`) ?? 0)).toBe(d0);             // the reconciliation is unchanged by the estate
+  });
+
+  it("the owner ends a hold early: the full grace runs from then (no immediate death)", async () => {
+    const r = await R.one<Record<string, any>>(`fleet.fleet_admin_incident_reinstate('hold-end test', ARRAY[$1]::text[], '{}'::uuid[], 30, $2)`, [Y, OWNER]);
+    expect(r).toMatchObject({ ok: true });
+    await asSuper(`UPDATE fleet.fleet_agents SET unresponsive_since = now() - interval '9 minutes' WHERE agent_id = $1`, [Y]);
+    expect(await R.one<Record<string, any>>(`fleet.fleet_admin_lifecycle_hold_end($1, 'verification abandoned', $2)`, [Y, OWNER])).toMatchObject({ ok: true });
+    await R.q(`UPDATE fleet.fleet_state SET reaper_last_run_at = now() - interval '10 seconds'`);
+    await R.one(`fleet.fleet_reap('reaper')`);
+    expect(await R.one(`(SELECT status FROM fleet.fleet_agents WHERE agent_id = $1)`, [Y])).toBe("unresponsive");   // 480 s from now, not 9 min ago
+  });
+
+  it("the new event types are routed (Fleet Command priorities)", async () => {
+    const route = (t: string) => R.one<string>(`fleet.fleet_event_route($1, '{}'::jsonb)`, [t]);
+    expect(await route("agent_reinstated")).toBe("P1_HIGH");
+    for (const t of ["estate_reverted", "ai_cost_unwound", "lifecycle_hold_ended"]) expect(await route(t)).toBe("P2_IMPORTANT");
+    for (const t of ["owner_task_sent", "owner_task_closed"]) expect(await route(t)).toBe("P3_SUMMARY");
   });
 });

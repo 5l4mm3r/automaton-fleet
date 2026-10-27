@@ -4086,3 +4086,138 @@ minutes).
 - key rotation;
 - Stage 1;
 - changing replication or insolvency policy.
+
+## Recovery checks before reinstatement approval (27 Oct; LOCAL and disposable copies only; production unchanged)
+
+Nothing was pushed, installed, reinstated, restored, rotated or paid. The live database was read only by `pg_dump` into a
+disposable copy (`fleet_recovery_demo`, dropped at the end); the live ledger head stayed 1179 `1e64694cbc6821e781a`, and both
+live founders are still `dead`. The incident history is kept: both `agent_died` events, estates 1177 / 1178 and the
+acquisition cost 1179 remain, and every correction is a mirrored reversal (1180 → 1179, 1181 → 1177, 1182 → 1178) on the
+copy only.
+
+### 1. Real founder processes (synthetic identities, the agents' own runtimes)
+
+`src/__tests__/fleet/fleet-v122-recovery-real-founders.test.ts` runs a real founder process through `ProcessFounderHost`
+from git-archived release trees of **7c194b8c2348…** (Agent-1's runtime) and **b60e262bf739…** (Agent-2's runtime). The
+controller is this candidate's `FleetService` with its real reaper (`startReaper()`, 1 s interval). It uses a synthetic
+Genesis founder (FounderProvisioner), cognition paused, with no provider and no production credential. The health window
+is shortened (`heartbeat_unresponsive_s` 6).
+
+Each runtime passes the same three phases (2 / 2 pass):
+
+1. **Unresponsive → active by its own heartbeat.** It keeps the same process id (R1: a founder recovers instead of being
+   blocked with `FLEET_GENESIS_REQUIRED`).
+2. **A 9 s controller outage.** The founder stays `active` with the same process id. The test checks that the reaper
+   actually ran and resumed (`reaper_resumed` ≥ 2), so this is not a vacuous pass (R2).
+3. **Death, then reinstatement.** The process is stopped and the founder dies by `health_timeout`, and its estate settles.
+   Then `fleet_admin_incident_reinstate(…, 30 min hold)` runs and the process restarts: **heartbeat → challenge → active**.
+   - The hold is cleared and the last challenge passed.
+   - The process id is new; the agent id, credential, accounts and state files are identical; the workspace is intact.
+   - It has 0 `cognition_log` rows and is still paused, and the ledger verifies.
+
+On the production copy (`~/incident-20261027/recovery-demo.sh`, sha256 `db16ed9089cd90ea…`; log `recovery-demo-final.log`
+`c13e7915e3d6f0b5…`; patch `v122.patch` `2f6717269f37bab5…`), both real identities show **heartbeat → unresponsive**, then
+**challenge `{"ok":true}` → active**:
+- policy enabled f, both paused;
+- each hold set until +60 min, and 0 holds left after active;
+- unallocated 0, unbacked_estates 0, capital reconciliation 0;
+- the incident's own numbers (a 106 s reaper gap, heartbeats 126 s old) leave both `active`.
+
+### 2. The cap refusal rolls back the whole transaction
+
+The v122 PG test lowers the cap to 1 (`setMaxAgents(1)`) and asks for a two-agent reinstatement. The result is
+`FLEET_CAP_EXCEEDED`. A full snapshot taken before and after is identical:
+- agent status, death fields, credential revocation, wallet freeze, cognition flags and hold;
+- every ledger balance and the journal count;
+- estates, estate reversions, the accrual (unposted / posted / unwound) and `fleet_events`.
+
+There are no reversals, no unfreeze and no events. The non-owner refusal and the out-of-bounds hold refusal (4 and 121 min)
+are checked against a fresh snapshot in the same way. An economic death is refused, because only `health_timeout` deaths
+from the named incident are eligible.
+
+### 3. The recovery window fails safely (implemented, bounded)
+
+The design avoids automatic termination during verification without relying on a second death:
+
+- The reinstatement sets `lifecycle_hold_until = now() + hold`, with the owner choosing **5–120 min** (anything else is
+  refused). The agent comes back **unresponsive, paused, cognition enabled but with no inference**.
+- While held, the reaper neither marks the agent unresponsive nor terminates it for heartbeat or health. Both clauses are
+  in `fleet_reap` behind `lifecycle_hold_until IS NULL OR lifecycle_hold_until <= now()`.
+- Once the hold ends, the full grace window counts **from the end of the hold**, not from the death or the reinstatement.
+- A passed challenge (→ active) clears the hold through the stamps trigger.
+- `fleet_admin_lifecycle_hold_end` (owner only) ends the hold early with a P2 event; the full grace then runs from that
+  moment (tested: an agent unresponsive for 9 min is not killed at once).
+- Only an owner reinstatement can set a hold. The hold does not affect economic rules, the owner's own kill, spending
+  freezes or the paused cognition.
+
+The test shows that an agent held and aged 9 min (and 11 min) past its unresponsive start does not die; the ordinary grace
+applies again only after the hold.
+
+**Remaining fallback, stated plainly:** if verification fails and the owner neither finishes nor extends it, the agent
+returns to normal rules once the hold lapses. It would then die after the normal grace. That second death keeps the
+original evidence and opens a new estate with a distinct key (tested), but it is not the recovery plan. The procedure
+avoids it as follows:
+- start both founder processes before the reinstatement transaction;
+- reinstate with **60 min**;
+- verify;
+- if the challenge has not passed within 30 min, **stop and report** before the hold lapses.
+
+**Proposed for approval (NOT built):** `fleet_admin_lifecycle_hold_extend(agent, minutes, reason, actor)`.
+- Owner only, and only on an agent already under a reinstatement hold.
+- Each extension is 5–120 min, with at most 24 h in total since the reinstatement.
+- Each extension emits a P2 `lifecycle_hold_extended` event.
+
+This would let a slow verification continue without a death and without an unbounded "immortal" state. Without your
+approval it is not added, and the 120 min ceiling stands.
+
+### 4. The estate partition: real funds stay backed; only unbacked capital is parked
+
+Per agent at death:
+- `earnings = GREATEST(0, external customer revenue − its treasury contributions)` stays in `unallocated`.
+- `parked = LEAST(GREATEST(0, cash − earnings), fleet unbacked capital − already parked)` goes to
+  `fleet:treasury:unbacked_estates`, which is treasury cash, so the capital reconciliation does not change.
+
+| Case (PG test) | Cash | Kept (unallocated) | Parked |
+|---|---|---|---|
+| Unbacked capital only (the incident) | wallet | 0 | all, up to the fleet's unbacked capital |
+| **Mixed**: 10,000 capital + 3,000 customer revenue − 1,000 spend | 12,000 | **3,000** | **9,000** |
+| The fleet's unbacked capital is already used up | cash | cash − left | `left` = capital-backing unbacked − parked |
+| Earnings exceed the cash left (3,000 revenue, 4,000 spend) | 9,000 | 9,000 | **0**; reconciliation unchanged |
+
+A reinstatement reverses the estate with a mirrored journal and records `fleet_estate_reversions`. A later death opens a
+new estate under a reversion-suffixed key.
+
+### Event routing: new coverage vs the pre-existing failure
+
+- **New in this candidate (4):** `agent_reinstated` (P1), and `estate_reverted`, `ai_cost_unwound`,
+  `lifecycle_hold_ended` (P2). All four are routed in the database, and the v122 PG test proves it through
+  `fleet_event_route`.
+- **Pre-existing:** the static check in `fleet-event-routing-pg` ("routes every event type the code emits") imports route
+  tables only up to v74. Run against 1116576 (production), it already finds **81** emitted types it cannot see, including
+  v106 `owner_claim_waits` and v120 `owner_task_sent` / `owner_task_closed`. On the candidate it finds **85**: the 81 plus
+  the 4 above.
+- The other 12 tests in that file pass. The test was not changed or weakened. Fixing it means importing the v75+ route
+  tables, which is separate work.
+
+### Test results (candidate, targeted)
+
+| Suite | Tests | Result |
+|---|---|---|
+| v122 founder recovery PG | 11 | pass |
+| v122 recovery with real founder processes (7c194b8, b60e262) | 2 | pass |
+| d31 18, phase4 53, genesis 25, survival v55 4, v111 10, static audit 6, v72 5, v120 6, v121 5, projects 21, births 4, migration paths 2 | 159 | pass |
+| event routing PG | 13 | 12 pass; 1 pre-existing failure (above) |
+| `tsc --noEmit` | — | clean |
+
+### Group A scope for this candidate (proposed; NOT authorised)
+
+1. Push the candidate to fleet-origin, without force.
+2. Two-pass build on the VPS; take the pins from its output.
+3. Side-install, not cut over.
+4. Data and service rehearsals 121 → 122 on disposable copies.
+5. Rerun the recovery demonstration on a fresh production dump using the release's own tooling:
+   `founder-reinstate "<incident>" <ids> <unwindIds> 60`, plus `founder-hold-end`.
+6. Founder upgrade and revision rehearsals with the fake provider.
+7. Check that production is identical before and after.
+
+Not in Group A: install, reinstatement, the hold extension, key rotation, funding, activation, resume or any paid call.
