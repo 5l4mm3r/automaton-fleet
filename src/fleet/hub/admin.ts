@@ -193,6 +193,10 @@ export class PgHubAdmin {
   ownerTaskClose(taskId: string, reason: string, actor: string) {
     return this.one(`SELECT fleet_admin_owner_task_close($1::uuid, $2, $3) AS r`, [taskId, reason, actor]);
   }
+  /** v122: owner incident reinstatement (atomic; mirrored reversals; paused; active only after a passed challenge). */
+  incidentReinstate(incident: string, agentIds: string[], unwindJournals: string[], actor: string) {
+    return this.one(`SELECT fleet_admin_incident_reinstate($1, $2::text[], $3::uuid[], $4) AS r`, [incident, agentIds, unwindJournals, actor]);
+  }
   ownerTasks(agentId: string | null) {
     return this.one(`SELECT fleet_admin_owner_tasks($1) AS r`, [agentId]);
   }

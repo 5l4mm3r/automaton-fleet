@@ -110,6 +110,9 @@
  *   founder-task <agentId> "<title>" <task…>                                (v120) an owner task: shown to the agent in its ordinary working turns
  *                                               (its own wallet and limits) until you close it; changes no setting, approves nothing
  *   founder-task-close <taskId> <reason…> | hub-owner-tasks [agentId]
+ *   founder-reinstate "<incident>" <agentId[,agentId]> [unwindJournalId[,…]|-]   (v122) owner incident reinstatement of founders that died of a
+ *                                               health / heartbeat timeout with a cash-only estate: atomic; mirrored reversals; paused; active
+ *                                               only after a passed challenge — start their units within 8 minutes
  *   hub-cognition-settlement                                                  (v111) model-call reservations without a result past their time, and cost exceptions
  *   economy-cognition-resolve <requestId> <billed|not_billed> <evidence…>     (v111) resolve a call that never reported back, from provider evidence
  *   economy-cognition-exception-allocate <exceptionId> <agent|treasury> <reason…>  (v111) allocate a cost exception (the owner's decision)
@@ -264,7 +267,7 @@ export const HUB_COMMANDS = new Set([
   "economy-estate-assign", "economy-estate-release", "economy-notification-ack", "economy-notification-policy",
   "hub-comms", "hub-reveal-log", "hub-broker-key", "owner-identity-upload", "hub-reveal", "hub-browser", "hub-dashboard-enroll", "hub-dashboard-totp-reset",
   "economy-custody-activate", "economy-custody-deactivate", "economy-wallet-limits", "economy-card-charge", "economy-card-confirm", "economy-card-repay",
-  "economy-card-receipt", "economy-card-resolve", "hub-paypal-disputes", "economy-paypal-dispute-resolve", "economy-card-credit-return", "economy-order-refund", "economy-refund-authority-grant", "economy-refund-authority-end", "economy-owner-claim-wait", "economy-owner-claim-wait-end", "economy-sales-geography", "economy-order-correction-withdrawn", "hub-refund-authorities", "hub-paypal-reconciliation", "economy-paypal-reconciliation-resolve", "economy-paypal-order-retire", "economy-offer-hold", "economy-offer-release", "economy-fleet-control-ai-budget", "founder-task", "founder-task-close", "hub-owner-tasks", "economy-fleet-control-ai-reconcile", "hub-fleet-control-ai", "hub-cognition-settlement", "economy-cognition-resolve", "economy-cognition-exception-allocate", "economy-engineering-calls-import", "economy-engineering-credit-hold", "economy-engineering-credit-release", "economy-paypal-debit-classify", "hub-card", "hub-treasury-health", "hub-paypal", "hub-treasury-tx", "economy-paypal-attribute",
+  "economy-card-receipt", "economy-card-resolve", "hub-paypal-disputes", "economy-paypal-dispute-resolve", "economy-card-credit-return", "economy-order-refund", "economy-refund-authority-grant", "economy-refund-authority-end", "economy-owner-claim-wait", "economy-owner-claim-wait-end", "economy-sales-geography", "economy-order-correction-withdrawn", "hub-refund-authorities", "hub-paypal-reconciliation", "economy-paypal-reconciliation-resolve", "economy-paypal-order-retire", "economy-offer-hold", "economy-offer-release", "economy-fleet-control-ai-budget", "founder-task", "founder-task-close", "hub-owner-tasks", "founder-reinstate", "economy-fleet-control-ai-reconcile", "hub-fleet-control-ai", "hub-cognition-settlement", "economy-cognition-resolve", "economy-cognition-exception-allocate", "economy-engineering-calls-import", "economy-engineering-credit-hold", "economy-engineering-credit-release", "economy-paypal-debit-classify", "hub-card", "hub-treasury-health", "hub-paypal", "hub-treasury-tx", "economy-paypal-attribute",
   // v66 – v72 (missing until 2026-10-12: these were unreachable from fleet:admin)
   "economy-capital-backing", "economy-capital-back", "economy-spend-breaker", "economy-ai-credits", "economy-ai-credit-purchase", "economy-ai-credit-policy",
   "economy-ai-credit-confirm", "economy-ai-credit-reconcile", "economy-ai-credit-lot-cost", "economy-ai-credit-reject", "economy-ai-credit-promotional-grant", "economy-ai-credit-draw-order", "economy-ai-credit-opening",
@@ -435,6 +438,13 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
       return h.ownerTaskClose(p[0], p.slice(1).join(" "), actor);
     case "hub-owner-tasks":
       return h.ownerTasks(p[0] ?? null);
+    case "founder-reinstate": {
+      const ids = (p[1] ?? "").split(",").filter(Boolean), unwind = (p[2] ?? "-") === "-" ? [] : p[2].split(",").filter(Boolean);
+      if (!p[0] || ids.length === 0 || ids.some((x) => !/^[0-9A-HJKMNP-TV-Z]{26}$/.test(x)) || unwind.some((x) => !/^[0-9a-f-]{36}$/.test(x))) {
+        throw new Error('usage: founder-reinstate "<incident>" <agentId[,agentId]> [unwindJournalId[,…]|-]');
+      }
+      return h.incidentReinstate(p[0], ids, unwind, actor);
+    }
     case "hub-fleet-control-ai":
       return h.fleetControlAi();
     case "economy-fleet-control-ai-reconcile":

@@ -3894,3 +3894,195 @@ approval.
 Recovery is demonstrated only on a disposable copy: the same identities, memory and workspaces, compensating entries
 rather than deleted history, and fresh challenges passing. If no supported path exists, the smallest tested procedure
 comes for explicit approval.
+
+### Containment RUN (27 Oct 21:37:57–21:37:59Z, owner-approved; `contain.sh` sha256 78f6f1c6…8f71 verified first)
+
+- Fleet Control budget **off** (event 11479); spend circuit breaker **tripped** (event 11480).
+- Verified afterwards:
+  - inference disabled, provider `none`, no key-file line;
+  - sales, outward release, refund authority and custody closed;
+  - ledger 1179 unchanged and verifying;
+  - credit hold 10,023,033,480 µ¢ and key file (`01a24123…`) unchanged;
+  - agents still `dead`.
+- Evidence intact (9 files).
+
+### Investigation results
+
+1. **Why heartbeating founders failed every challenge (R1).**
+   - At 21:15:31 the founders' **heartbeat itself** returned 400 `FLEET_GENESIS_REQUIRED`. `fleet_heartbeat` correctly tried to
+     restore them to `active` (last passed challenge 21:12:31, inside the 300 s health grace), and `fleet_agents_origin_guard`
+     aborted it, so the founders exited (code 3).
+   - After the restart every `svc_answer_challenge` hit the same guard on its `unresponsive → active` update and was rolled
+     back (400). Failures accumulated to 3, then death.
+   - With R1 repaired, the 21:15:31 heartbeat alone would have recovered both.
+2. **Why downtime counted (R2).**
+   - `fleet_reap` restarts its grace window only after a reaper gap of more than `heartbeat_unresponsive_s` (120 s). The
+     outage gap was about 106 s, so there was no `reaper_resumed`.
+   - The founders' last heartbeat (21:13:01) was more than 120 s old at the reaper's first pass after the restart.
+   - Survival protection covers economic exhaustion only. `fleet_begin_termination` has no protection check.
+3. **Journals 1177–1179.**
+   - 1177 / 1178: `estate_transfer`, each wallet's book cash (8,943 / 10,000) to `unallocated`.
+   - 1179: the waiting **treasury** AI-credit acquisition cost (accrual `05f4cb13…:treasury`, 186p), which `fleet_ai_credit_cost_pass`
+     posts only when `unallocated` covers it. It posted the moment the estates put money there.
+4. **Unbacked estate money passed treasury gates.** Yes: `unallocated` became 18,757p of unbacked book money, which every
+   `unallocated`-keyed gate would accept (Fleet Control reservations, owner turns, acquisition costs, refund bookings).
+5. **The expired operator credential and the failed preflight.**
+   - The `bridge-claude` key expired on 25 Oct 15:38Z, unmonitored; rotating it is `fleet:bridge key rotate-prepare` plus the
+     owner's registration (not done).
+   - The activation preflight never checked `FLEET_INFERENCE_PROFILE` (the 23 Oct local-only directive, 17019f2).
+
+**Effects of each death, from a diff of the pre-incident (20:24Z) and incident (21:32Z) dumps:**
+
+- `fleet_agents` → dead, `death_time`;
+- credentials revoked;
+- `fleet_founder_cognition` enabled=false;
+- wallet `spending_frozen` "agent dead";
+- `fleet_estates` settled (cash only);
+- `living_agents` 2 → 0;
+- journals 1177–1179;
+- history: events, feed, challenges.
+
+Identity, ledger accounts, memory and workspace files were not touched.
+
+### v122 founder recovery (local candidate; NOT deployed)
+
+`src/fleet/postgres/migrations-phase122.ts`:
+
+- **R1:** the founder guard allows exactly `unresponsive → active`. Every other founder advance still needs Genesis.
+- **R2:** a reaper gap of more than **45 s** (three 15 s periods) restarts the grace window.
+- **R3:** `fleet_admin_incident_reinstate(incident, agents[], unwindJournals[], actor)`, owner and `fleet_genesis` approver;
+  **atomic**.
+  - **Refuses:**
+    - anything but a dead founder without a sandbox that died within 14 days of a **health or heartbeat timeout**;
+    - an estate that moved more than cash, or that received money after settling;
+    - a credential not revoked at death;
+    - the cap.
+  - **Does:**
+    - **mirrored reversals** of the acquisition cost (back to waiting; `unwound_minor` records it, so keys never repeat) and of
+      each estate transfer;
+    - estate `reverted`, with an append-only `fleet_estate_reversions` record;
+    - dead → `unresponsive` under a reinstatement-only, same-agent allowance;
+    - only the credential and wallet freeze from death restored;
+    - cognition enabled but **paused**;
+    - a challenge due at the next heartbeat;
+    - `agent_reinstated` / `estate_reverted` / `ai_cost_unwound` events.
+  - The ledger must verify and `unallocated` must stay non-negative, or it all rolls back.
+- **R4:**
+  - Estate cash up to the still-unbacked starting capital goes to `fleet:treasury:unbacked_estates` (treasury_cash; the
+    reconciliation is unchanged), never `unallocated`.
+  - The estate freeze reopens a reverted estate.
+  - Estate journal keys carry a suffix after a reversion.
+- CLI `founder-reinstate "<incident>" <ids> [<unwind ids>|-]`.
+
+**Tests (local):**
+
+- `tsc` clean.
+- **New** `fleet-v122-founder-recovery-pg` **6/6**:
+  - clean audit;
+  - R2 with the incident's 106 s / 126 s;
+  - R1 heartbeat recovery inside the health grace, and challenge recovery after it;
+  - the incident replayed (death at 480 s while heartbeating; estates settle; R4 keeps unbacked cash out of `unallocated`;
+    a dead agent refuses an ordinary move even for a superuser);
+  - reinstatement (same credential rows, mirrored reversals, cost back to waiting, paused, active only after a passed
+    challenge, ledger verifies, refused twice);
+  - re-death opens and settles a new estate (2 transfers, 1 reversion);
+  - refusals for a non-owner and an economic death.
+- **Rerun:**
+  - d31-hardening 18/18;
+  - v111 10/10;
+  - static audit 6/6;
+  - v72 5/5;
+  - v120 6/6;
+  - phase4 53/53;
+  - genesis 25/25;
+  - v121 5/5;
+  - survival protection 4/4.
+- **Pre-existing, disclosed:** `fleet-event-routing-pg` "routes every event type" fails with 84 unrouted types. 79 predate
+  this work (the test imports route tables only up to v74; e.g. v106's `owner_claim_waits`, 597acc1). The other 5 are v120's
+  `owner_task_*` and v122's three events, all routed in the database by their migrations.
+
+### Demonstration on a disposable copy of production after the deaths (27 Oct ~21:58Z; `recovery-demo.sh`, `recovery-demo.log`)
+
+The incident dump was restored into `fleet_recovery_demo`, with candidate tooling 1116576 + `v122.patch` in `/var/tmp`.
+There were no providers or credentials, and **the live database was not touched** (head 1179 `1e64694c…` before and after).
+The copy was dropped.
+
+**Before:** schema 121; both `dead`; living 0; unallocated 18,757; head 1179.
+
+**Steps:**
+
+1. Migrate to 122; privilege audit `true []`.
+2. **The exact proposed call:**
+   `fleet_admin_incident_reinstate('INCIDENT 2026-10-27 controller outage', [Agent-1, Agent-2], [1179 3cb79f23…], 'operator:ubuntu')`
+   returned `ok`. It unwound 1179 (186p) and reinstated both (cause `health_timeout`).
+
+**After:**
+
+- Both `unresponsive`, paused, cognition enabled, credentials valid, wallets unfrozen, estates `reverted`, cash 8,943 /
+  10,000.
+- **Identity unchanged** (agent id + credential token hash; wallets).
+- Living 2 / cap 2. **Unallocated 0**, unbacked_estates 0, owner payable 1,081, set aside 1,079.
+- **Mirrored corrections:** 1180 reverses 1179, 1181 reverses 1177, 1182 reverses 1178. The originals and both `agent_died`
+  events are kept.
+- The cost is back to waiting (unposted 186,873,308 µ¢, posted 190, unwound 186).
+- **Ledger verifies; capital reconciliation 0.**
+
+**Fresh challenges:**
+
+- Each founder heartbeats (`unresponsive`), then answers the challenge with its real runtime identity: `{"ok":true}` →
+  **`active`**.
+- This used the controller's own issue / answer functions at registry level; no founder process or credential was used.
+- Policy disabled, both **paused**, ledger verifies.
+
+**Downtime cannot repeat this:** with the incident's numbers (106 s reaper gap, heartbeats 126 s old), both stay
+**`active`** (`reaper_resumed` 1).
+
+**Memory and workspaces:** the live state directories are **byte-identical** to the incident-time archive (Agent-1 1,089
+files `33ce2404…`, Agent-2 15 files `e27bc48f…`). The recovery does not touch them.
+
+### Proposed production recovery procedure (for explicit approval; NOT authorised)
+
+**Approval 1: release v122 (Group A, then Group B).**
+
+- **Group A:** push, two-pass build, side-install, data and services rehearsals 121 → 122, and this demonstration rerun on a
+  **fresh** dump with the release's own tooling, including the CLI `founder-reinstate`.
+- **Group B:** the install.
+- The controller restart is safe for founders: both are dead, and R1/R2 make future restarts survivable.
+- No agent runtime change.
+
+**Approval 2: the reinstatement window** (after Group B; preflight first, then one call, then the founder units within 8
+minutes).
+
+1. **Preflight (read-only).** Stop on any mismatch.
+   - schema 122;
+   - both `dead`, cause `health_timeout`;
+   - estates settled, cash-only;
+   - 1179 unreversed;
+   - living 0 / cap 2;
+   - containment in force (breaker tripped, Fleet Control off, inference off, provider none);
+   - founder state digests equal the incident archive;
+   - founder units `failed` (not running);
+   - a fresh full dump plus SHA256SUMS.
+2. **Reinstate:**
+   `founder-reinstate "INCIDENT 2026-10-27 controller outage" 01M3F50SH7PNX2E3GST13J52AS,01M4C4NXT786Q4E9725N5A15KV 3cb79f23-c4fa-4aaa-a090-a5dfe1a2c0fd`
+   (atomic; either everything or nothing).
+3. **Within 8 minutes:** `systemctl reset-failed` and `start` both founder units. The runtimes are unchanged: Agent-1
+   7c194b8, Agent-2 b60e262. Each heartbeats, receives the due challenge, answers it, and becomes `active`.
+4. **Verify:**
+   - both `active` and **paused**;
+   - inference off;
+   - journals 1180–1182 are the three mirrored reversals;
+   - unallocated 0; ledger verifies; reconciliation 0;
+   - breaker tripped; Fleet Control off; hold and key unchanged.
+5. **If a founder is not `active` within 5 minutes:** report. The agent stays protected for the remaining grace. A second
+   death would leave it reinstatable again (the re-death path is tested), but nothing is retried automatically.
+
+**Not included:**
+
+- funding;
+- inference;
+- an agent resume;
+- releasing the hold;
+- key rotation;
+- Stage 1;
+- changing replication or insolvency policy.

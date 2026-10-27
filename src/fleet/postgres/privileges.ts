@@ -908,7 +908,9 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
     fleet_cognition_log: new Set(["svc_cognition_record", "svc_cognition_routed_record"]),
     // v112: the inference profile returning to local_only disables cloud policy and tiers.
     fleet_cognition_policy: new Set(["fleet_cognition_set_policy", "fleet_admin_inference_profile_set"]),
-    fleet_founder_cognition: new Set(["fleet_founder_cognition_set", "fleet_agents_cognition_stop"]),
+    fleet_founder_cognition: new Set(["fleet_founder_cognition_set", "fleet_agents_cognition_stop",
+      // v122: an incident reinstatement re-enables the founder's cognition, PAUSED.
+      "fleet_admin_incident_reinstate"]),
     fleet_cognition_accrual: new Set(["svc_cognition_record", "svc_cognition_routed_record"]),
     // v22 routing: policy data only through the owner functions; action links only through the boundary check.
     fleet_cognition_routing: new Set(["fleet_cognition_routing_set"]),
@@ -1343,7 +1345,7 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_ai_credit_debit_notices: new Set(["fleet_ai_credit_match"]),
     // v72: acquisition cost pricing and accrual; console reconciliations.
     fleet_ai_credit_draw_costs: new Set(["fleet_ai_credit_cost_pass"]),
-    fleet_ai_credit_cost_accrual: new Set(["fleet_ai_credit_cost_pass",
+    fleet_ai_credit_cost_accrual: new Set(["fleet_ai_credit_cost_pass", "fleet_admin_incident_reinstate" /* v122: an unwound cost back to waiting */,
       // v73: the one-time historical correction adds each historical charge's share to the opening pool's accrual.
       "fleet_admin_ai_credit_historical_cost",
       // v74: the pre-launch write-off waives the sub-penny tax still carried for pre-launch usage.
