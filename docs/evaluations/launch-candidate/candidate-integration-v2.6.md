@@ -3797,3 +3797,100 @@ approval.
 - It ships in the release, because the units run the installed `scripts/fleet-canary.sh`. That means Group A/B, scripts
   only, schema unchanged.
 - The 7-day deadline then stays as approved.
+
+## INCIDENT 2026-10-27: both founders died after a controller outage during Stage 1 (launch suspended)
+
+### Timeline (UTC)
+
+1. **21:12:45–21:12:47** — Stage 1 steps 1–3:
+   - Agent-1 at 120 calls/h (paused);
+   - Fleet Control 30p/day;
+   - hold `canary-agent1-ceiling` 10,023,033,480 µ¢ ($15 free).
+2. **21:13:03** — Step 4:
+   - key copied to `/etc/automaton-fleet/cognition.key` (0600 service user; byte-identical; never displayed);
+   - `service.env` backed up (`service.env.pre-stage1-20261027T211303Z`);
+   - `FLEET_COGNITION_PROVIDER=anthropic` and the key-file line added.
+3. **21:13:19** — `cognition-enable` (21:13:20), then the controller restart. **The controller refused to start:** a cloud
+   provider needs `FLEET_INFERENCE_PROFILE=cloud_allowed` (the 23 Oct local-only directive, 17019f2). Crash loop, then
+   systemd gave up.
+4. **21:15:05** — `service.env` restored from the backup (the failed one is kept as
+   `service.env.failed-stage1-20261027T2114Z`). Controller up (PID 2198059). Policy disabled at 21:15:34.
+5. **21:15:07** — The reaper marked **both** founders `unresponsive` (last heartbeat 21:13:01, more than 120 s earlier).
+   **21:15:31** — Both founders exited by design (exit 3: "no longer accepts this founder").
+6. **21:19:21** — Founder units restarted by the owner. They heartbeated, but **every health-challenge answer was refused**
+   (`POST /v1/health/challenge` 400 `FLEET_GENESIS_REQUIRED: a founder advances only through its Genesis state machine`).
+   Challenges expired at 21:20:23, 21:21:23 and 21:22:24.
+7. **21:21** — Operator challenge request refused: `KEY_EXPIRED` (the bridge key expired on 25 Oct).
+8. **21:23:07** — The reaper ended both: `agent_died` cause `health_timeout` ("unresponsive (unhealthy) for more than
+   480 s"); estates frozen and settled; slots released. **Living agents: 0.**
+
+### Root causes
+
+- **R1 (latent since v11): a Genesis founder can never recover from `unresponsive`.**
+  - `fleet_agents_origin_guard` forbids a founder's status changing to `active` outside a Genesis operation.
+  - Recovery (`fleet_heartbeat`'s unresponsive → active after a passed challenge) is exactly that change, so the challenge
+    transaction raised and was rolled back. Nothing was recorded as passed.
+  - Any outage of over 120 s therefore kills every founder within 8 minutes.
+- **R2: the controller outage counted against the agents.**
+  - The reaper resets its grace window only when it has itself been idle for more than 120 s (`reaper_resumed`).
+  - The outage was about 106 s, so no grace applied. The agents' last heartbeat (21:13:01) was more than 120 s old when it
+    resumed.
+  - Survival protection covers economic exhaustion, not health timeouts. `fleet_begin_termination` has no hold or
+    protection check, and an agent without a sandbox goes straight to `dead`.
+- **R3 (mine): the activation preflight missed the inference profile.**
+  - The Stage 1 package and preflight never checked `FLEET_INFERENCE_PROFILE`.
+  - I restarted a production controller with live agents attached without confirming every startup precondition.
+- **R4: the operator recovery path was unavailable.** The `bridge-claude` key expired on 25 Oct 15:38Z, unnoticed.
+
+### Effects (production, read-only)
+
+- Agents dead:
+  - Agent-1 (7c194b8, health "challenge expired unanswered", 3 failures);
+  - Agent-2 (b60e262, same).
+- Both founder units `failed`. Cognition rows still `paused=true`.
+- **Journal 1177:** `estate_transfer`, Agent-1 cash 8,943 → `fleet:treasury:unallocated`.
+- **Journal 1178:** `estate_transfer`, Agent-2 cash 10,000 → `fleet:treasury:unallocated`.
+- **Journal 1179:** `ai_credit_acquisition_cost`, 186p. D `fleet:expense` / D owner_reimbursable; C `fleet:owner:payable`
+  / C unallocated (key `ai-credit-cost:05f4cb13…:treasury:190`).
+  - Treasury-paid acquisition cost had been waiting because `unallocated` was 0.
+  - It posted the moment the estates moved **unbacked** wallet money into `unallocated`.
+  - **Unallocated is now 18,757p of book money that is unbacked.** Every gate keyed on that balance would pass on virtual
+    money: Fleet Control reservations, owner conversations, refund bookings, acquisition costs.
+- Ledger 1179, verify true. Credit $115.23; hold 10,023,033,480 µ¢ still held; nothing in flight; no open Fleet Control
+  reservation or cost exception.
+- Founder state intact: Agent-1 1,089 files / 30 MB, Agent-2 15 files. Release, flags and cap unchanged.
+
+### Evidence (`~/incident-20261027/`, `SHA256SUMS`)
+
+- database dump `db-20261027T213204Z.dump` (5,475 entries);
+- controller and founder journals 20:20–21:30;
+- sudo log;
+- config checksums;
+- both founder state directories (`state-<id>-*.tgz`);
+- the upgrade backup `/var/lib/automaton-fleet-upgrades/cc7e1df3…` (28 MB) is kept.
+
+**No teardown or cleanup.**
+
+### Containment (prepared, NOT run; needs approval)
+
+`~/incident-20261027/contain.sh`, sha256 `78f6f1c6279f79444443c675ba962040c32418b266f705a0904525ec0b6b8f71`.
+
+- **Two reversible, audited actions:**
+  - Fleet Control budget **off**;
+  - spend circuit breaker **tripped**.
+- **Assertions:**
+  - evidence intact;
+  - cognition disabled and provider `none`, with no key-file line;
+  - 0 living;
+  - nothing in flight;
+  - sales closed;
+  - flags false.
+- **Kept:** the credit hold (until no unresolved calls or spending paths remain, verified separately) and the key file
+  (unused).
+- No posting, no lifecycle change, no restore.
+
+### Next (not authorised yet)
+
+Recovery is demonstrated only on a disposable copy: the same identities, memory and workspaces, compensating entries
+rather than deleted history, and fresh challenges passing. If no supported path exists, the smallest tested procedure
+comes for explicit approval.
