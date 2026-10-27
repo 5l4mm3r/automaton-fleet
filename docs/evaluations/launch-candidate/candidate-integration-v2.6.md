@@ -3568,3 +3568,168 @@ exists, but a database restore needs your explicit approval.
 **Owner confirmation (27 Oct):** the saved vault address matches (checked through the passkey Show; the value was not
 shared), and the corrected Overview, Treasury and sealed-item screens look correct on production. The display fix is
 complete.
+
+## Separate improvement (proposed; NOT implemented): authenticator at sign-in, password for routine confirmations
+
+Owner, 27 Oct: "the authenticator is a bit of an overkill once signed in — authenticator should be used for sign-in and
+anything else after that only needs a password — authenticator for every stage is getting frustrating."
+
+**Today:** all 74 step-up operations (`SENSITIVE_OPS`) need a fresh password + authenticator code (`/api/stepup/password`),
+or a passkey, bound to that one operation and its arguments.
+
+**Proposed for review (no authentication change until you approve):**
+
+**1. Keep the authenticator (or passkey) for a short high-risk list (21 operations):**
+
+| Group | Operations |
+|---|---|
+| Money leaving, or payment authority | `owner_withdrawal`, `custody_activate`, `order_refund`, `destination_paypal_link`, `location_transfer`, `identity_autonomy_set` (standing authority to fill your card / facts), `card_slot_set`, `location_bind_card`, `outward_release` |
+| Your sign-in and alerts | `passkey_revoke`, `totp_reset`, `push_device_add` |
+| Secrets in or out | `reveal_request` (Show), `owner_vault_upload`, `custody_credential_upload`, `custody_credential_revoke`, `provider_secret_upload`, `identity_documents_set` |
+| Irreversible agent life | `agent_kill`, `birth`, `reseed` |
+
+**2. Password only for the other 53**, after an authenticator sign-in in the same session. These are policies, limits,
+holds, reviews, card records and statements, attributions, consents, survival protection, the seller details, channels,
+locations and so on. They remain step-up operations, bound to the operation, audited and rate-limited, but the code is
+not asked for again.
+
+**3. A reuse window, optionally combined with 1–2:**
+
+- After an authenticator (or passkey) confirmation, high-risk operations in the **same session** accept the password
+  alone for **15 minutes**.
+- The window is never extended by password-only confirmations, and it ends at sign-out or on a failed attempt.
+- `totp_reset`, `passkey_revoke` and `owner_withdrawal` always ask for a fresh code.
+
+**Implementation, when approved:**
+
+- the gateway accepts a password-only step-up only for the approved list, or within the window;
+- the client asks for the code only when needed;
+- tests for each class, the window's expiry and the failure reset;
+- the usual Group A/B.
+
+## Stage 1: FINAL approval package (27 Oct; NOT activated; needs your approval)
+
+Agent-1 only. **Agent-2 unchanged:** b60e262, PID 866408, paused, 3,000p/day, 60 turns/h, no task. Sales and every
+outward authority stay closed.
+
+### Preconditions, read-only, checked again immediately before step 1
+
+- release 1116576, schema 121, HQ 0.27.0;
+- both agents paused (Agent-1 7c194b8, PID 2135441);
+- inference off (policy disabled, `FLEET_COGNITION_PROVIDER=none`);
+- Fleet Control budget unset;
+- sales closed;
+- no outward release, refund authority, custody activation, card or identity autonomy;
+- no credit hold;
+- no canary unit;
+- owner tasks 0;
+- ledger verifies (head 1176).
+
+### Exact settings
+
+| Setting | Now | Stage 1 | Enforced by |
+|---|---|---|---|
+| Agent-1 rolling 24 h AI usage | 754p | **754p** (unchanged) | controller refusal (v119: usage from every credit source + open reservations) |
+| Agent-1 model calls per hour | 600 | **120** | controller refusal |
+| Provider-credit ceiling | none | **hold `canary-agent1-ceiling` = balance − held − 1,500,000,000 µ¢** (now 11,523,033,480 − 0 − 1,500,000,000 = **10,023,033,480 µ¢**, recomputed by SQL just before) → exactly **$15.00 free** | controller refusal for every consumer (v119 one figure) |
+| Fleet Control AI budget | unset | **30p/day** | its reservation **plus the existing funding gate**: unallocated treasury is £0.00, so every Fleet Control reservation is refused (`FLEET_CONTROL_AI_BUDGET_UNFUNDED`) and the review **waits** (no call, no charge) |
+| Deadline | none | **ENDS_AT = STARTED_AT + exactly 7 days** (STARTED_AT = the resume in step 8; e.g. resumed 28 Oct 10:00:00Z → ends 4 Nov 10:00:00Z) | `automaton-fleet-canary-end.timer` (drop-in `OnCalendar=` ENDS_AT) and the hourly check after ENDS_AT |
+| Hourly guard | none | cash charges > 1,000p, credit consumed > $15, ledger verification failure, repeated delivery or message, past ENDS_AT → **safe stop once** | `automaton-fleet-canary-check.timer` |
+
+**Approval wording, kept verbatim:** $15 is an authorisation ceiling based on reserved estimates, not an unconditional
+provider-billing guarantee; an underestimated call could exceed it and trigger a cost exception.
+
+**Cash exposure at today's FX** (0.750296, by code): at most **£11.26 (1,126p)**, all of it Anthropic credit (promotional
+first, $98.01). No PayPal money moves.
+
+### Steps (one approval covers 1–8; sudo, `/etc` and the controller restart are named here)
+
+1. `founder-cognition 01M3F50SH7PNX2E3GST13J52AS pause --turns-per-hour 120 "canary stage 1: 120 calls/h"`. Read back
+   754p / 120 / paused.
+2. `economy-fleet-control-ai-budget 30 "canary stage 1: Fleet Control 30p/day; unfunded calls wait"`.
+3. Recompute by SQL, then
+   `economy-engineering-credit-hold canary-agent1-ceiling anthropic <balance − held − 1500000000> "canary stage 1: exactly $15 free"`.
+   Verify free = 1,500,000,000.
+4. **Inference on.** The key is copied root to root, never displayed, printed or logged:
+   - `/etc/automaton-fleet/recovery/cognition.key.20261023T142625Z` → `/etc/automaton-fleet/cognition.key`, 0600,
+     owner automaton-fleet-service;
+   - service.env: `FLEET_COGNITION_PROVIDER=none` → `anthropic`, plus
+     `FLEET_COGNITION_API_KEY_FILE=/etc/automaton-fleet/cognition.key` (model, thinking, effort and timeouts
+     unchanged);
+   - `cognition-enable anthropic claude-opus-5-5 --max-output 4000 --in-microcents 400 --out-microcents 2000`, then read
+     back all four prices (cache 20 / 500 unchanged) and the tiers (T1 / T2 / T3 enabled, verified);
+   - `systemctl restart automaton-fleet`, then readyz 200.
+   - Verify: both agents still paused, Agent-2 identical.
+5. **Guard:**
+   - `~/canary/canary.conf`: CANARY_ID=agent1-c1, AGENT=01M3F50SH7PNX2E3GST13J52AS,
+     OFFER_SLUG=uk-landlord-compliance-tracker-england-g-a9ddde, STARTED_AT / ENDS_AT (set in step 8),
+     CASH_CEILING_MINOR=1000, CREDIT_CEILING_USD_MICRO=1500000000, HOLD_RUN=canary-agent1-ceiling;
+   - the four units from the release, and the end-timer drop-in;
+   - `fleet-canary.sh check --dry-run` and `end --dry-run` must write nothing;
+   - `systemctl enable --now` on both timers, after step 8 has fixed ENDS_AT.
+6. **Files:** copy the candidate (xlsx `7793dff2084dd7968019041e7579ecdedafd73529190c14b8a85a39820bc69b5`, README
+   `4494dff2…`) into Agent-1's `workspace/…/from-owner/tracker-v6/`, owner fnd-01M3F50SH7PNX2E3GST13J52AS, 0600, with
+   hashes verified after copying. The live offer's files are not touched.
+7. **Owner task** (`founder-task`, about 1,000 characters; shown in every working turn until closed):
+
+   > **Title:** Adopt the corrected tracker files and review them
+   >
+   > Adopt the corrected files for your offer "UK Landlord Compliance Tracker (England)" (offer d7063a0a, slug
+   > uk-landlord-compliance-tracker-england-g-a9ddde). The corrected workbook is in your workspace at
+   > from-owner/tracker-v6/Landlord_Compliance_Tracker.xlsx
+   > (sha256 7793dff2084dd7968019041e7579ecdedafd73529190c14b8a85a39820bc69b5). It fixes printing: columns were cut off
+   > on printed pages. 1) offer file remove: tracker.zip (the September CSV version, 10adb667…) and
+   > Landlord_Compliance_Tracker.xlsx (f45c3d00…). Keep README.txt (4494dff2…, unchanged). 2) offer file: attach the
+   > corrected workbook as a deliverable. 3) deliverable inspect both files with your acceptance cases, and look at the
+   > printed pages. 4) deliverable review, subject offer, of exactly those two files. If you find a defect, fix it and
+   > review your fixed file instead. **Do not publish:** sales stay closed until the owner's next step. When the review
+   > is recorded, stop work on this offer and wait (sleep, naming the review), and do not start other paid work. If
+   > something blocks you, record the blocker once and wait.
+
+8. **Resume:** `founder-cognition 01M3F50SH7PNX2E3GST13J52AS resume "canary agent1-c1 stage 1"`. Its timestamp is
+   **STARTED_AT**, and ENDS_AT = +7 days is written to canary.conf and the end timer before the timers are enabled.
+
+### When the task finishes
+
+Stage 1 passes when:
+
+- the offer's deliverables are exactly the two files;
+- a fleet-qa-3 offer review passes with files_digest `f3e6193aafe44a8d5cf55809082cd7efb1aa8c9abd7c8514e4f3ceb7710d6c69`
+  (or a re-quoted digest if Agent-1 fixed the file itself);
+- the offer is **not** published;
+- no stop fired, and the ledger verifies.
+
+Then, to avoid any further paid wake:
+
+1. **Pause Agent-1 first** (`founder-cognition … pause "stage 1 complete"`). A paused agent makes no model call.
+2. **Then close the task** (`founder-task-close <taskId> "review <id> recorded"`). Closing changes the task digest, which
+   would wake a running agent; paused, it costs nothing.
+
+The hold, the 30p budget and the timers stay as they are until Stage 2 is approved, or until ENDS_AT runs the safe stop
+and releases the hold (only when no reservation is open).
+
+Even before the pause, a finished agent that declares its wait makes **no** model call until something relevant changes:
+the production runtime has no timed safety re-check. An undeclared rest is capped at a few full re-checks a day, inside
+754p/day.
+
+### When the task is blocked
+
+- **A Fleet Control review is needed** (for example a spend review): the reservation is refused while the treasury is
+  unfunded. Only that item waits; Agent-1 is told and can declare its wait. Nothing is charged and nothing retries in a
+  paid loop.
+- **A tool or inspection fails repeatedly:** the loop guard remembers the refusal across wakes and restarts, so it is not
+  retried unchanged. A stalled founder gets **one** assessment turn, then waits with **zero** inference until a
+  relevant change.
+- **No passing review within 24 h of STARTED_AT**, or a recorded blocker:
+  - pause Agent-1;
+  - report the evidence (its turns, usage, blocker);
+  - you decide (fix, adjust the task, or end).
+
+  No automatic retry.
+- **Automatic stops still apply:** 754p/day, 120 calls/h and the $15 hold refuse further calls, and the hourly guard runs
+  the safe stop once on a breach (pause, offer hold, sales closed, Fleet Control budget off).
+
+### Not in this approval
+
+Funding or any financial entry; Stage 2 (sales, the proof order, the refund); Stage 3 (public acquisition, which needs
+Agent-1's evidence-backed offer first); publishing; Agent-2; any authentication change.
