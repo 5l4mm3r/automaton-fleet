@@ -13,6 +13,8 @@ import { money } from "../model";
 import { Panel, button, input } from "../ui";
 import { displayAgentName } from "../naming";
 import { credentialName, eventTitle } from "../copy";
+import { LiveReveal } from "../live/reveal-dialog";
+import { addressProblem, bankProblem, factProblem, vaultItemState, type VaultItemState } from "./vault-view";
 
 type Row = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 type AgentRef = { id: string; name: string };
@@ -73,17 +75,26 @@ function KeySet({ c, client, call }: { c: Row; client: GatewayClient; call: (op:
 /**
  * 0.13.2: one look for everything already stored — "✓ Saved" (or "Saved and encrypted" for sealed secrets), when, any live
  * status, and Change. The form appears only when nothing is stored yet or the owner chooses Change; a successful save
- * closes it again. Sealed values are never shown back.
+ * closes it again.
+ * 0.27.0 (owner, 2026-10-26): while what is stored is still being read, or could not be read, no entry form is shown (an
+ * empty form looked like "not set up"); "not saved yet" is said in words; a sealed value can be shown through the existing
+ * passkey-confirmed Reveal (60 seconds, logged, never stored) where a reveal target is given.
  */
-function SavedOr({ saved, what, encrypted, at, detail, form, label }: { saved: boolean; what: string; encrypted?: boolean; at?: unknown; detail?: ReactNode;
-  form: (close: () => void) => ReactNode; label?: string | null }) {
-  const [edit, setEdit] = useState(false);
-  if (!saved || edit) return <>{saved && <button className="mt-2 text-xs text-cyan-300 underline" onClick={() => setEdit(false)}>Keep the saved {what}</button>}{form(() => setEdit(false))}</>;
+export function SavedOr({ saved, what, encrypted, at, detail, form, label, state, revealTarget }: { saved: boolean; what: string; encrypted?: boolean; at?: unknown; detail?: ReactNode;
+  form: (close: () => void) => ReactNode; label?: string | null; state?: VaultItemState; revealTarget?: string }) {
+  const [edit, setEdit] = useState(false), [show, setShow] = useState(false);
+  if (state === "loading") return <p className="my-3 text-sm text-slate-400" role="status">{what}: reading what is saved…</p>;
+  if (state === "unavailable") return <p className="my-3 rounded-lg border border-amber-800 p-3 text-sm text-amber-200" role="alert">{what}: could not read what is saved right now. Nothing is shown as missing until it loads — reload the page to try again.</p>;
+  if (!saved || edit) return <>{saved
+    ? <button className="mt-2 text-xs text-cyan-300 underline" onClick={() => setEdit(false)}>Keep the saved {what}</button>
+    : <p className="mt-3 text-sm text-amber-300">○ {what}: not saved yet</p>}{form(() => setEdit(false))}</>;
   return <div className="my-3 rounded-lg border border-emerald-900 bg-emerald-950/30 p-3 text-sm">
-    <p className="text-emerald-300">✓ {what}: {label ? <span className="font-mono">{label}</span> : encrypted ? "saved and encrypted" : "saved"}{at ? ` · last updated ${when(at)} UTC` : ""}
+    <p className="text-emerald-300">✓ {what}: {label ? <span className="font-mono">{label}</span> : encrypted ? "saved and sealed" : "saved"}{at ? ` · last updated ${when(at)} UTC` : ""}
+      {revealTarget && <button className="ml-3 text-xs text-cyan-300 underline" onClick={() => setShow(true)}>Show the saved {what.toLowerCase()} (passkey)</button>}
       <button className="ml-3 text-xs text-cyan-300 underline" onClick={() => setEdit(true)}>Change</button></p>
     {detail && <div className="mt-1 text-xs text-slate-300 [overflow-wrap:anywhere]">{detail}</div>}
-    {encrypted && <p className="mt-1 text-xs text-slate-400">{label ? "Sealed: the full number and security code are encrypted and never shown back. " : ""}Stays saved: enter it again only if it changes.{label ? "" : " For security it is never shown back."}</p>}
+    {encrypted && <p className="mt-1 text-xs text-slate-400">{label ? "Sealed: the full number and security code are encrypted and never shown back. " : ""}Stays saved: enter it again only if it changes.{label ? "" : revealTarget ? " Sealed: shown only through Show, after your passkey, for 60 seconds (the Fleet logs the view, never the value)." : " For security it is never shown back."}</p>}
+    {show && revealTarget && <LiveReveal kind="owner_identity" target={revealTarget} title={`Saved ${what.toLowerCase()}`} close={() => setShow(false)} />}
   </div>;
 }
 
@@ -204,6 +215,36 @@ function CardStatements({ card, call, name }: { card: Row; call: (op: string, ar
   </div>;
 }
 
+/**
+ * v121 (owner, 2026-10-26: "the treasury shows 10.79gbp when the paypal has 0.22p only"): provider cash first, then what
+ * the books say about it. Nothing here is summed with anything else; API credit is USD and never added to a GBP figure.
+ */
+export function TreasuryPosition({ p, error, name }: { p: Row | null; error: string; name: (id: string, stored?: string | null) => string }) {
+  if (!p) return <p className="text-sm text-slate-400">{error || "Reading…"}</p>;
+  const pp = p.paypal as Row | null, rc = p.reconciliation as Row, t = p.treasury as Row, ag = p.agents as Row, ow = p.owner as Row, ai = p.apiCredit as Row;
+  const usd = (v: unknown) => `$${(Number(v) / 1e8).toFixed(2)}`;
+  const status = rc.status === "reconciled" ? <span className="text-emerald-300">reconciled</span>
+    : rc.status === "unresolved" ? <span className="text-amber-300">unresolved — nothing below is spendable until it is</span> : <span className="text-amber-300">unavailable (no provider balance)</span>;
+  const tile = (k: string, v: ReactNode, hint?: ReactNode) => <div key={k} className="rounded border border-slate-700 p-3"><p className="text-xs text-slate-400">{k}</p><p className="font-mono">{v}</p>{hint && <p className="mt-1 text-xs text-slate-400">{hint}</p>}</div>;
+  return <div className="space-y-4 text-sm">
+    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      {tile("PayPal cash (actual)", pp ? money(pp.totalMinor) : "—", pp ? `observed ${when(pp.observedAt)} UTC${pp.fresh ? "" : " · stale"}` : "no balance observed")}
+      {tile("Available treasury (backed)", t.availableMinor == null ? "unknown" : money(t.availableMinor), "unallocated money that real cash covers")}
+      {tile("Owed to you (owner payable)", money(ow.payableMinor), `set aside in the books to repay it: ${money(ow.setAsideMinor)}`)}
+      {tile("API credit (USD, not cash)", usd(ai.free), `promotional ${usd(ai.promotional)} · purchased ${usd(ai.purchased)}${Number(ai.held) ? ` · held ${usd(ai.held)}` : ""}`)}
+    </div>
+    <p>Reconciliation: {status}. Books cash {money(rc.booksCashMinor)} − unbacked starting capital {money(rc.unbackedCapitalMinor)} = {money(Number(rc.booksCashMinor) - Number(rc.unbackedCapitalMinor))} against PayPal {pp ? money(pp.totalMinor) : "—"}{rc.differenceMinor == null ? "" : ` (difference ${money(rc.differenceMinor)})`}.</p>
+    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      {tile("Unallocated (book)", money(t.unallocatedMinor))}
+      {tile("Fleet Control reserved (book)", money(t.fleetControlReservedMinor))}
+      {tile("Set aside for you (book)", money(t.ownerSetAsideMinor), "reserved to repay what the Fleet owes you; not spendable")}
+      {tile("Agents' wallets (book budgets)", money(ag.walletsMinor), `backed by real money: at most ${money(ag.backedAtMostMinor)} · the rest is unbacked starting capital`)}
+    </div>
+    {(ag.wallets as Row[]).length > 0 && <table className="w-full text-left text-sm"><thead><tr className="text-slate-400"><th>Agent</th><th>Status</th><th className="text-right">Wallet (book)</th></tr></thead>
+      <tbody>{(ag.wallets as Row[]).map((w) => <tr key={String(w.agentId)} className="border-t border-slate-800"><td>{name(String(w.agentId))}</td><td>{String(w.status)}</td><td className="text-right font-mono">{money(w.walletMinor)}</td></tr>)}</tbody></table>}
+  </div>;
+}
+
 export function TreasuryPanels({ client, agents }: { client: GatewayClient; agents: AgentRef[] }) {
   const [agent, setAgent] = useState(""), [direction, setDirection] = useState(""), [before, setBefore] = useState<number | null>(null);
   const health = useRead<Row>(client, "treasury_health", {}, []);
@@ -226,19 +267,23 @@ export function TreasuryPanels({ client, agents }: { client: GatewayClient; agen
   const disputes = useRead<Row>(client, "paypal_disputes", {}, []);
   // v66: the existing capital recorded without money, and real deposits that back it (no second credit).
   const backing = useRead<Row>(client, "capital_backing", {}, []);
-  const reloadAll = () => { health.reload(); tx.reload(); card.reload(); pp.reload(); custody.reload(); survival.reload(); store.reload(); ptest.reload(); creq.reload(); reviews.reload(); backing.reload(); };
+  // v121: the treasury as it is — provider cash, reconciliation, backed funds, wallets, owner liabilities, API credit (USD).
+  const position = useRead<Row>(client, "treasury_position", {}, []);
+  const reloadAll = () => { position.reload(); health.reload(); tx.reload(); card.reload(); pp.reload(); custody.reload(); survival.reload(); store.reload(); ptest.reload(); creq.reload(); reviews.reload(); backing.reload(); };
   const call = useCallback(async (op: string, args: Record<string, unknown>) => { const r = await client.call(op, args); reloadAll(); return r; }, [client]); // eslint-disable-line react-hooks/exhaustive-deps
   // One name per agent everywhere: the agent list's (the owner's label or the default), never the registry's raw name.
   const name = (id: string, stored?: string | null) => agents.find((a) => a.id === id)?.name ?? displayAgentName(stored, id);
   const agentOptions = [["", "Choose an agent"], ...agents.map((a) => [a.id, a.name])];
   const h = health.data;
   return <>
-    <Panel title="Treasury health">{h ? <div className="grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-4">
-      {[["Real money held", money(h.cashMinor)], ["Unallocated treasury", money(h.partitions.treasuryUnallocatedMinor)], ["Agents' wallets", money(h.partitions.agentsMinor)],
+    <Panel title="Treasury position (what is real)"><TreasuryPosition p={position.data} error={position.error} name={name} /></Panel>
+
+    <Panel title="Treasury health (ledger)">{h ? <div className="grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-4">
+      {[["Book cash (ledger, includes unbacked capital)", money(h.cashMinor)], ["Unallocated treasury (book)", money(h.partitions.treasuryUnallocatedMinor)], ["Agents' wallets (book budgets)", money(h.partitions.agentsMinor)],
         ["Reserved (orders / withdrawals)", money(h.partitions.reservedMinor)], ["Card owed (to repay)", money(h.cardOutstandingMinor)], ["Card invoices open", `${h.cardInvoicesOpen} · ${money(h.cardInvoicesOpenMinor)}`],
         ["30 days in / out", `${money(h.flow30d.inMinor)} / ${money(h.flow30d.outMinor)}`], ["Runway", h.runwayDays == null ? "no net burn" : `${h.runwayDays} days`],
         ["Lifetime contribution", money(h.lifetimeContributionMinor)], ["Owner withdrawals", money(h.ownerWithdrawalsMinor)], ["Provider suspense", money(h.providerSuspenseMinor)],
-        ["PayPal", h.paypal.latestBalance ? `${money(h.paypal.latestBalance.availableMinor)} available · ${h.paypal.unmatched} unmatched` : "no balance observed yet"]]
+        ["PayPal (actual)", h.paypal.latestBalance ? `${money(h.paypal.latestBalance.availableMinor)} available · ${h.paypal.unmatched} unmatched` : "no balance observed yet"]]
         .map(([k, v]) => <div key={k} className="rounded border border-slate-700 p-3"><p className="text-xs text-slate-400">{k}</p><p className="font-mono">{v}</p></div>)}
       <div className="sm:col-span-2 xl:col-span-4"><p className="mb-2 text-xs text-slate-400">Contribution by agent</p><table className="w-full text-left text-sm"><thead><tr className="text-slate-400"><th>Agent</th><th>Status</th><th>Wallet</th><th>Revenue</th><th>Contributed</th></tr></thead>
         <tbody>{(h.contributions as Row[]).map((c) => <tr key={c.agentId} className="border-t border-slate-800"><td>{c.name ?? c.agentId}</td><td>{c.status}</td><td>{money(c.cashMinor)}</td><td>{money(c.revenueMinor)}</td><td>{money(c.contributionMinor)}</td></tr>)}</tbody></table></div>
@@ -250,7 +295,7 @@ export function TreasuryPanels({ client, agents }: { client: GatewayClient; agen
         ["Prospective — open checkouts", `${h.moneyStates.prospective.openCheckouts} · ${money(h.moneyStates.prospective.openCheckoutsMinor)}`],
         ["Verified provider sales not paid out", `$${(Number(h.moneyStates.verifiedProviderSales.notPaidOutUsdMinor) / 100).toFixed(2)} · ${h.moneyStates.verifiedProviderSales.payoutsReportedNotReceived} payouts not received`],
         ["Captured, held until PayPal shows it available", money(h.moneyStates.captured.heldUntilAvailableMinor)],
-        ["Available — agents / unallocated", `${money(h.moneyStates.available.agentCashMinor)} / ${money(h.moneyStates.available.treasuryUnallocatedMinor)}`],
+        ["Book — agents' wallets / unallocated (not cash: see Treasury position)", `${money(h.moneyStates.available.agentCashMinor)} / ${money(h.moneyStates.available.treasuryUnallocatedMinor)}`],
         ["PayPal observed", h.moneyStates.paypalObserved ? `${money(h.moneyStates.paypalObserved.availableMinor)} available · ${money(h.moneyStates.paypalObserved.withheldMinor)} withheld` : "no balance observed yet"],
         ["Receipts not yet posted", String(h.moneyStates.received.receiptsHeld)]]
         .map(([k, v]) => <div key={k} className="rounded border border-slate-700 p-3"><p className="text-xs text-slate-400">{k}</p><p className="font-mono">{v}</p></div>)}</div>
@@ -494,6 +539,8 @@ export function MoneyIdentitySetup({ client }: { client: GatewayClient }) {
     return upload(slot, JSON.stringify({ number, expMonth: v.expMonth, expYear: v.expYear, cvc: v.cvc, name: v.name, postcode: v.postcode }), { expiresAt, displayLabel });
   };
   const configured = (cls: string) => auto.data?.configured?.[cls]?.status === "configured";
+  // 0.27.0: stored / not stored / still reading / could not read — an entry form only for "not stored".
+  const vstate = (cls: string) => vaultItemState(auto, configured(cls));
   const expiry = (cls: string) => auto.data?.configured?.[cls]?.expiresAt ? <>Valid until {when(auto.data.configured[cls].expiresAt)} UTC.</> : undefined;
   const label = (cls: string) => (auto.data?.configured?.[cls]?.label as string | undefined) ?? null;
   const installed = (name: string) => (comms.data?.uploads as Row[] | undefined)?.find((u) => u.name === name && u.status === "installed");
@@ -529,7 +576,7 @@ export function MoneyIdentitySetup({ client }: { client: GatewayClient }) {
     <Panel title="2 · Your card (bypass only)">
       <p className="text-sm text-slate-300">Used where a merchant takes cards. Sealed here to the identity broker; agents never see it; every fill is logged. Before the card can be filled the agent’s own funds (or a Fleet envelope) are reserved for the charge; anything a merchant charges beyond what the agent can cover becomes the agent’s debt to the treasury. You repay the card from the treasury.</p>
       {/* v90: up to three cards (each credit, or debit on its own bank: Treasury → Money locations → Cards). v93: card 1, then more on request. */}
-      {(["payment_card", "payment_card_2", "payment_card_3"] as const).map((slot, i) => (i === 0 || configured(slot) || i < cardSlots) && <SavedOr key={slot} saved={configured(slot)} what={`Card ${i + 1}`} encrypted label={label(slot)}
+      {(["payment_card", "payment_card_2", "payment_card_3"] as const).map((slot, i) => (i === 0 || configured(slot) || i < cardSlots) && <SavedOr key={slot} saved={configured(slot)} state={vstate(slot)} what={`Card ${i + 1}`} encrypted label={label(slot)}
         detail={expiry(slot) ?? (configured(slot) ? <>No expiry recorded: use <em>Change</em> and enter this card again so its expiry and last four digits are shown.</> : undefined)}
         form={(close) => <Form title={`Seal and upload card ${i + 1}`} done="Sealed: shown above as the card's last four digits, name and expiry." clearOnDone after={close} fields={[{ key: "number", label: "Card number" }, { key: "expMonth", label: "Expiry month (MM)" }, { key: "expYear", label: "Expiry year (YYYY)" }, { key: "cvc", label: "CVC", type: "password" }, { key: "name", label: "Name on card" }, { key: "postcode", label: "Billing postcode" }]}
           submit={(v) => uploadCard(slot, v)} />} />)}
@@ -538,21 +585,21 @@ export function MoneyIdentitySetup({ client }: { client: GatewayClient }) {
     </Panel>
 
     <Panel title="3 · Bank details and identity facts">
-      <p className="text-sm text-slate-300">Each is sealed in this browser to the identity broker’s key. Filled into forms (or, for documents, uploaded) only where a provider requires it and only under your standing authority (4); never shown to an agent. A live selfie or video check stays yours.</p>
+      <p className="text-sm text-slate-300">Each item below shows whether it is saved. When you save one, it is sealed in this browser to the identity broker’s key. Filled into forms (or, for documents, uploaded) only where a provider requires it and only under your standing authority (4); never shown to an agent. A live selfie or video check stays yours.</p>
       <OnFile title="Documents" items={DOCS} configured={configured} />
       <DocumentUpload configured={configured} upload={async (cls, file) => call("owner_vault_upload", await sealOwnerDocument(client, cls, file))} />
-      <SavedOr saved={configured("bank_account_owner")} what="Bank details" encrypted detail={expiry("bank_account_owner")}
+      <SavedOr saved={configured("bank_account_owner")} state={vstate("bank_account_owner")} revealTarget="bank_account_owner" what="Bank details" encrypted detail={expiry("bank_account_owner")}
         form={(close) => <Form title="Seal and upload bank details" done="Saved and encrypted." clearOnDone after={close}
           fields={[{ key: "holder", label: "Account holder" }, { key: "sortCode", label: "Sort code" }, { key: "accountNumber", label: "Account number" }, { key: "bank", label: "Bank" }, { key: "iban", label: "IBAN (optional)" }]}
-          submit={(v) => upload("bank_account_owner", JSON.stringify({ holder: v.holder, sort_code: v.sortCode, account_number: v.accountNumber, bank: v.bank, ...(v.iban ? { iban: v.iban } : {}) }))} />} />
-      <SavedOr saved={configured("residential_address")} what="Address" encrypted detail={expiry("residential_address")}
+          submit={(v) => { const p = bankProblem(v); if (p) throw new Error(p); return upload("bank_account_owner", JSON.stringify({ holder: v.holder, sort_code: v.sortCode, account_number: v.accountNumber, bank: v.bank, ...(v.iban ? { iban: v.iban } : {}) })); }} />} />
+      <SavedOr saved={configured("residential_address")} state={vstate("residential_address")} revealTarget="residential_address" what="Address" encrypted detail={expiry("residential_address")}
         form={(close) => <Form title="Seal and upload address" done="Saved and encrypted." clearOnDone after={close}
           fields={[{ key: "line1", label: "Line 1" }, { key: "line2", label: "Line 2" }, { key: "city", label: "Town / city" }, { key: "postcode", label: "Postcode" }, { key: "country", label: "Country", value: "United Kingdom" }]}
-          submit={(v) => upload("residential_address", JSON.stringify(v))} />} />
+          submit={(v) => { const p = addressProblem(v); if (p) throw new Error(p); return upload("residential_address", JSON.stringify(v)); }} />} />
       <OnFile title="Facts" items={FILLABLE.filter(([k]) => !["residential_address", "bank_account_owner"].includes(k))} configured={configured} />
       <Form title="Seal and upload one fact" done="Saved and encrypted." clearOnDone note="Saving a fact that is already on file replaces it."
         fields={[{ key: "cls", label: "Fact", options: FILLABLE.filter(([k]) => !["residential_address", "bank_account_owner"].includes(k)).map(([k, l]) => [k, configured(k) ? `${l} (saved)` : l]) }, { key: "value", label: "Value" }]}
-        submit={(v) => upload(v.cls, v.value)} />
+        submit={(v) => { const p = factProblem(v); if (p) throw new Error(p); return upload(v.cls, v.value); }} />
     </Panel>
 
     <Panel title="4 · Standing authority">{a ? <>

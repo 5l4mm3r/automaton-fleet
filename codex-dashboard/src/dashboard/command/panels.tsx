@@ -13,6 +13,13 @@ import type { AgentModel } from "./agents";
 import { DEPARTMENT } from "./departments";
 import { isDecision, PRIORITY_ORDER, type EventPriority, type FleetEvent } from "./events";
 import type { CommandView, Row } from "./view";
+import { availableTreasuryText, knownMoney } from "../money/vault-view";
+
+type Wealth = NonNullable<NonNullable<Fleet["live"]>["wealth"]> | null | undefined;
+/** v121: a provider amount, or "—" when unknown (never 0 for unknown). */
+const treasuryMoney = (v: number | null | undefined) => knownMoney(v, money);
+/** v121: available backed treasury, or why it is not shown. */
+const availableText = (w: Wealth) => availableTreasuryText(w, money);
 
 /** A timestamp as UTC "YYYY-MM-DD HH:MM" (gateway timestamps can carry the database session's offset). */
 export function utc(iso: unknown, seconds = false): string {
@@ -61,7 +68,8 @@ export function FleetControllerStatus({ fleet, view, models }: { fleet: Fleet; v
   const cells: Array<[string, string]> = [
     ["Fleet status", lv ? (lv.health ? (lv.health.ok ? "Healthy" : `${lv.health.findings} finding(s)`) : "health unavailable") : view?.mode === "simulation" ? "Simulated" : "—"],
     ["Living agents", `${living.length}${rp?.maxAgents != null ? ` / cap ${rp.maxAgents}` : ""}${rp?.ceiling != null ? ` (ceiling ${rp.ceiling})` : ""}`],
-    ["Treasury cash", money(lv?.wealth?.cash ?? fleet.treasury)],
+    ...(lv ? [["PayPal cash (actual)", treasuryMoney(lv.wealth?.actualCash)], ["Available treasury (backed)", availableText(lv.wealth)]] as Array<[string, string]>
+      : [["Treasury cash", money(fleet.treasury)]] as Array<[string, string]>),
     ["Fleet-generated wealth", lv?.wealth ? money(lv.wealth.fleetGenerated) : view?.mode === "simulation" ? "simulated" : "unavailable"],
     ["Replication", rp ? `${rp.met ? "threshold met" : `${money(rp.remainingMinor)} to the next threshold`} · ${rp.blockers.length ? `blocked: ${rp.blockers.join(", ")}` : "no blockers"}` : "unavailable"],
     ["Open RED alerts", String(red)],
@@ -105,7 +113,8 @@ export function CapabilityState({ fleet, view }: { fleet: Fleet; view: CommandVi
 export function TreasurySummary({ fleet, view }: { fleet: Fleet; view: CommandView | null }) {
   const lv = fleet.live, t = view?.treasury;
   const cells: Array<[string, string]> = [
-    ["Spendable Treasury cash", money(lv?.wealth?.cash ?? fleet.treasury)],
+    ...(lv ? [["PayPal cash (actual)", treasuryMoney(lv.wealth?.actualCash)], ["Available treasury (backed)", availableText(lv.wealth)]] as Array<[string, string]>
+      : [["Spendable Treasury cash", money(fleet.treasury)]] as Array<[string, string]>),
     ["Owner-contributed funding", money(lv?.wealth?.ownerContributed ?? fleet.contributed)],
     ["Owner withdrawn", lv?.wealth ? money(lv.wealth.ownerWithdrawn) : "—"],
     ["Fleet-generated realised wealth", lv?.wealth ? money(lv.wealth.fleetGenerated) : t ? minor(t.lifetimeContributionMinor) : "—"],

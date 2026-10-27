@@ -22,10 +22,13 @@ const count = <T,>(xs: readonly T[] | undefined | null, f?: (x: T) => boolean) =
 const words = (s: string) => s.replace(/_/g, " ");
 
 /**
- * Treasury cash: LIVE reads the gateway's wealth figure only (missing → null, shown as —, never 0); the simulation shows
- * its own (labelled) simulated Treasury.
+ * Available treasury (v121): LIVE shows the unallocated money real cash covers — only while the books reconcile with a fresh
+ * provider balance (otherwise null, shown as —, never 0 and never the ledger partition sum); the simulation shows its own
+ * (labelled) simulated Treasury.
  */
-export const treasuryCash = (fleet: Fleet): number | null => (fleet.live ? fleet.live.wealth?.cash ?? null : fleet.treasury);
+export const treasuryCash = (fleet: Fleet): number | null => (fleet.live ? fleet.live.wealth?.availableTreasury ?? null : fleet.treasury);
+/** v121: the provider's actual cash (GBP), LIVE only. */
+export const actualCash = (fleet: Fleet): number | null => (fleet.live ? fleet.live.wealth?.actualCash ?? null : null);
 
 export function hqDataFrom(fleet: Fleet, view: CommandView | null, models: readonly AgentModel[]): HQData {
   const lv = fleet.live, rp = lv?.replication, living = models.filter((m) => m.agent.status !== "dead");
@@ -34,10 +37,11 @@ export function hqDataFrom(fleet: Fleet, view: CommandView | null, models: reado
   const redOpen = fleet.notices.filter((n) => n.level === "RED" && !n.acknowledged).length;
   const cash = minor(treasuryCash(fleet));
   return {
-    command: [["Living agents", `${living.length}${rp?.maxAgents != null ? ` / ${rp.maxAgents}` : ""}`], ["Treasury cash", cash],
+    command: [["Living agents", `${living.length}${rp?.maxAgents != null ? ` / ${rp.maxAgents}` : ""}`], [lv ? "Available treasury (backed)" : "Treasury cash", cash],
       ["Open RED alerts", String(redOpen)], ["Replication", rp ? (rp.met ? "threshold met" : `${money(rp.remainingMinor)} to go`) : DASH],
       ["Decisions (log)", view ? String(view.capital.length) : DASH], ["Dependencies", view ? String(view.dependencies.length) : DASH]],
-    treasury: [["Treasury cash", cash], ["Owner funding", lv ? minor(lv.wealth?.ownerContributed) : money(fleet.contributed)],
+    treasury: [[lv ? "Available treasury (backed)" : "Treasury cash", cash], ...(lv ? [["PayPal cash (actual)", minor(actualCash(fleet))] as [string, string]] : []),
+      ["Owner funding", lv ? minor(lv.wealth?.ownerContributed) : money(fleet.contributed)],
       ["Fleet-generated", minor(lv?.wealth?.fleetGenerated)], ["Revenue 24 h", minor(lv?.flows24h?.revenue)], ["Spend 24 h", minor(lv?.flows24h?.spend)]],
     opportunity: [["Agents here", here("opportunity")], ["Opportunities", count(view?.opportunities)], ["Shortlisted", count(view?.opportunities, (o) => o.status === "shortlisted")]],
     floor: [["Agents here", here("floor")], ["Healthy", bands("HEALTHY")], ["Profitable", bands("WINNING")], ["Stressed", bands("WOUNDED")], ["Critical", bands("CRITICAL")]],

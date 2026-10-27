@@ -3203,3 +3203,175 @@ Approved by the owner for commit `7c194b8c2348baa8fa5d34bd7ef6b201dc4911c2`, bui
   - the £5 treasury deposit and its transaction ID.
 - **Scope:** the tracker remains an execution test (Stages 1–2). Stage 3 waits for Agent-1's evidence-backed offer
   proposal. No repeat of the completed paid S1+S2 tests is planned.
+
+## Treasury display and sealed-information fix (26–27 Oct; LOCAL ONLY; nothing deployed, posted or funded)
+
+Owner, 26 Oct:
+
+> "the treasury shows 10.79gbp when the paypal has 0.22p only … it didnt take into account the 5gbp refund by the looks of
+> it … when any information is stored and sealed, it should show the information sealed and not request it to be inputted
+> again".
+
+Activation preparation is paused. Both agents remain paused, and Agent-2 is unchanged. Production was only read.
+
+### 1. The funding and refund trace (PayPal evidence and Fleet journals; production, read-only)
+
+**PayPal transactions on the treasury rail** (`b71b3f3c…`) — the only three that exist:
+
+| Date (UTC) | Transaction | Code | Gross | PayPal fee | Net to PayPal | What it was |
+|---|---|---|---:|---:|---:|---|
+| 10 Oct 19:58 | `19C47714VJ327730R` | T0006 | +100 | −33 | +67 | **Your £1 receiving test** (checkout `e5bd5e23…`, purpose `owner_test`) — the earlier funding |
+| 19 Oct 18:38 | `6JF13918S8462694B` | T0006 | +500 | −45 | +455 | Your £5 proof purchase of Agent-1's tracker (checkout `ce819ec1…`, order `1186e00e…`, `owner_proof`) |
+| 20 Oct 21:16 | `841606975U696002C` | T1107 | −500 | 0 | −500 | The full refund of that proof order (refund `R69207…`); PayPal returned no fee |
+
+PayPal now: 67 + 455 − 500 = **22p**. This matches the GBP balance PayPal reports (observed 26 Oct 18:53Z).
+
+**Fleet journals for real money:**
+
+| Seq | Kind | Reference | Debit | Credit |
+|---|---|---|---|---|
+| 842 | `owner_funding` | `paypal:capture:19C47714VJ327730R` | `fleet:treasury:unallocated` 67 | `fleet:owner:capital` 67 |
+| 965 | `owner_funding` | `paypal:capture:6JF13918S8462694B` | `fleet:treasury:unallocated` 455 | `fleet:owner:capital` 455 |
+| 1109 | `owner_proof_return` | `paypal:proof:refund:R69207cfe…` | `fleet:owner:capital` 500 | `fleet:treasury:unallocated` 498 + `fleet:treasury:owner_reimbursable` 2 |
+
+**The refund was recorded exactly once.**
+
+- One T1107 transaction and one journal (1109).
+- One `fleet_offer_proof_returns` row.
+- The order is `refunded`.
+- The evidence arrived by webhook (20 Oct 21:27:48Z) and by Transaction Search (21 Oct 00:50:36Z). It counts once (the
+  larger of the two), as designed.
+- **The fee:** PayPal kept the 45p fee on the purchase. It is reflected in the books as the gap between 455 credited and
+  500 returned: your capital, net, fell 45p.
+
+**Where the £1 test's 67p went.** In the books, `unallocated` is one pool:
+
+| Movement | Amount | Source |
+|---|---:|---|
+| In: £1 test, net | +67 | |
+| In: v74 write-off, net of the wallets it restored | +1 | +2,187 − 2,186 |
+| Out: a knowledge review | −1 | 12 Oct |
+| Out: five owner-conversation turns | −20 | 18 Oct; moved to money set aside for you |
+| Out: AI-credit tax/fees | −4 | 18 Oct; set aside for you |
+| Out: the proof refund beyond the proof's own net receipt | −43 | 498 − 455 |
+| **Unallocated now** | **0** | |
+
+The other 2p of the refund came from the money set aside for you (v107). Of the real 67p, 45p paid PayPal's proof fee, and
+22p remains in PayPal. In the books that 22p sits inside the set-aside-for-you partition.
+
+Every movement of `unallocated` since the start, by journal kind:
+
+| Journal kind | Movement |
+|---|---:|
+| owner funding (4 journals) | +20,522 |
+| genesis allocations | −20,000 |
+| knowledge review | −1 |
+| write-off | +2,187 / −2,186 |
+| owner conversations | −20 |
+| acquisition cost | −4 |
+| proof return | −498 |
+| **Total** | **0** |
+
+**Current position (production, read-only, 26 Oct ~19:25Z):**
+
+| | |
+|---|---:|
+| PayPal cash (actual, GBP) | **£0.22** |
+| Books cash (treasury + wallets) | £200.22 |
+| Unbacked starting capital (2 × £100 virtual genesis) | £200.00 |
+| Reconciliation: £200.22 − £200.00 − £0.22 | **£0.00 → reconciled** |
+| Available treasury (unallocated money that real cash covers) | **£0.00** |
+| Fleet Control reserved | £0.00 |
+| Owed to you (owner payable: Agent-1 £10.57 + Fleet £0.24) | **£10.81** |
+| Set aside in the books to repay it (`owner_reimbursable`) | **£10.79** (the 2p gap is the 20 Oct refund draw) |
+| Agent wallets (book budgets: Agent-1 £89.43, Agent-2 £100.00) | £189.43, of which backed by real money at most **£0.00** |
+| API credit (Anthropic; USD; not cash) | $115.23 (promotional $98.01, purchased $17.22, held $0) |
+
+**Funding needed: none for Stage 1.** Agent-1's AI usage draws provider credit, not PayPal cash. A Stage 1 Fleet Control
+call (a spend review, for example), if any, would be refused while unallocated is 0; it would not be paid out of other
+money.
+
+**Stage 2** needs real money in `unallocated`:
+
+- Fleet Control's message check reserves up to 30p.
+- The proof refund booking needs 500p, against the proof's own net receipt of about 455p.
+- So about **75p of net real money is the minimum** for one controlled order. The earlier £5 figure was a round working
+  reserve.
+- The 22p already in PayPal is earmarked in the books for repaying you. Using it would mean moving book money out of
+  the set-aside-for-you partition, which is an adjustment for separate approval. None is proposed.
+
+### 2. Root causes and what changed (candidate HQ 0.27.0 + schema v121, read-only)
+
+| HQ showed | Was | Root cause | Now |
+|---|---|---|---|
+| Overview "Treasury" £10.79; Treasury page headline £10.79; "Treasury cash" / "Spendable Treasury cash" £10.79 | `fleet_treasury_cash()` | The sum of every `treasury_cash` ledger partition: all of it was money set aside to repay you, labelled "real spendable Treasury funds" | **Available treasury (backed)**: unallocated money real cash covers, only while the books reconcile (else "unknown — …", never 0). **PayPal cash (actual)** beside it |
+| "Real money held" £200.22 | `fleet_treasury_health.cashMinor` | Book cash of the treasury and wallets, including £200 of unbacked starting capital | Relabelled **"Book cash (ledger, includes unbacked capital)"**; the new Treasury position panel shows the reconciliation |
+| PayPal £0.00 | Newest balance row of **any** currency | Each sync writes GBP then USD 2 ms later, so the USD row (0) was shown | `fleet_paypal_balance_latest()`: the accounting currency's (GBP) newest balance, used by Treasury health and Money states |
+| Agents' wallets £189.43 / "Available — agents" | Book budgets | No unbacked marking | "Agents' wallets (book budgets)"; the position shows "backed by real money: at most £0.00" |
+| Money & identity → Address: with nothing stored, an empty form under "Each is sealed…" | Correct state, misleading words | **No residential address had ever been stored before 26 Oct 19:09:51Z** (`owner_identity_uploaded` / `installed` at 19:09:51 / 19:09:58). The section's description read like a status | Four explicit states: **saved and sealed** (with **Show the saved address (passkey)**: the existing Reveal, 60 s, logged, never stored) / **not saved yet** + form / **reading…** / **could not read** (no form while unknown) |
+| Address / bank details form | `JSON.stringify(v)` is never empty | A blank or incomplete submit would have **replaced** the sealed value | Refused before anything is sealed (`addressProblem`, `bankProblem`, `factProblem`) |
+
+The **seller postal address** (Business details) is a separate, plaintext public record. It was already shown read-only,
+version 1, and you have confirmed it accurate: that prerequisite is complete.
+
+**New read (schema v121):** `fleet_treasury_position()`, through the dashboard read op `treasury_position`. It returns:
+
+- actual GBP cash, with its observation time and freshness (stale after 26 h);
+- the reconciliation, with status reconciled / unresolved / unavailable;
+- the available backed figure;
+- the treasury partitions;
+- wallets with their backed share;
+- owner payable and set-aside;
+- API credit in USD, kept apart.
+
+It posts nothing.
+
+**Legacy figure, unchanged and still in use (disclosed, not corrected):**
+
+- `fleet_treasury_cash()` and the wealth field `treasuryCashMinor` still mean "the sum of `treasury_cash` ledger
+  partitions" (today £10.79, all of it set aside for you).
+- They are still read by `fleet_replication_health` (the replication gate compares it with approved obligations) and by
+  `svc_notify_tick` (the insolvency notice).
+- Neither consumer is corrected by this change. Correcting them is an economic-policy change for separate review.
+- Replication is off, and the cap is 2.
+
+### 3. Tests (local; no provider, no paid call)
+
+- `npx tsc --noEmit` clean for the repository and for `codex-dashboard`. ESLint is clean on the eight changed HQ files.
+- **New:**
+  - `fleet-v121-treasury-position-pg` 5/5:
+    - GBP balance beats a later USD row in all three reads;
+    - no double count;
+    - API credit kept out of GBP;
+    - unresolved / stale / no balance → no available figure;
+    - reconciled → available = unallocated covered by cash;
+    - the replication figure is unchanged;
+    - reads post no journal;
+    - the gateway op exists;
+    - privilege audit clean.
+  - `fleet-codex-vault-treasury-view` 3/3: the four states, blank and incomplete values refused, available text.
+- **Existing, rerun:** HQ live contract 13/13, PayPal treasury 10/10, completion v51 14/14, notification detail 8/8.
+  The migration chain applies to v121 with a clean audit (the v120 suite's migration case).
+- **UI evidence** (`hq-0.27.0-evidence/`, production figures only, amounts with no secrets):
+  - `before.png` (sha `06a52a3b…`): the old labels and values;
+  - `after.png` (sha `e025ae20…`): the real `TreasuryPosition` and `SavedOr` components, server-rendered with HQ's CSS and
+    inspected;
+  - renderer `render-evidence.tsx`.
+  - The Overview card and Treasury headline changes in `page.tsx` were made after that render. They are covered by the
+    typecheck and the helper tests, not by a screenshot.
+
+### 4. Remaining, and deployment scope (needs approval; nothing run)
+
+**Remaining:**
+
+- A live check in HQ after deployment: the Treasury position panel; your vault address shown via Show (passkey).
+- Stage 2's reserve funding decision (about 75p minimum net, or the £5 working reserve).
+- The legacy consumers above, for separate review.
+
+**Deployment, when approved:**
+
+- **Group A:** push, two-pass build, side-install, data and services rehearsals 120 → 121, UI 0.27.0 built and its
+  checksum recorded, production before and after.
+- **Group B:** `fleet-release.sh` 120 → 121 with UI 0.27.0. No agent runtime change: these are controller and HQ only,
+  the founder runtime is unchanged, and Agent-1 stays on 7c194b8.
+- No funding, adjustment or activation is involved.

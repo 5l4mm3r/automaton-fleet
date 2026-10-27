@@ -55,7 +55,10 @@ export type LiveView = {
   signIn?: { password: { configured: boolean; setAt: string | null }; totp: boolean; method: string | null;
     passkeys: Array<{ id: string; name: string; createdAt: string | null; lastUsedAt: string | null; current: boolean }> } | null;
   /** v39: the three Treasury figures, never collapsed. */
-  wealth: { cash: number; ownerContributed: number; ownerWithdrawn: number; fleetGenerated: number } | null;
+  /** `cash` = ledger partitions of class treasury_cash (NOT provider cash; kept for the replication figures). v121: actualCash = the
+   *  provider's balance (GBP) and when it was observed; availableTreasury = unallocated money real cash covers, null unless reconciled. */
+  wealth: { cash: number; ownerContributed: number; ownerWithdrawn: number; fleetGenerated: number;
+    actualCash?: number | null; actualCashAt?: string | null; availableTreasury?: number | null; reconciliation?: string | null } | null;
   /** Last 24 hours, as the daily report states them. */
   flows24h: { revenue: number; spend: number; profitContributed: number; ownerFunding: number } | null;
   replication: {

@@ -110,7 +110,11 @@ export function toFleet(s: LiveSnapshot, wallets: Wallets = {}): Fleet {
         createdAt: typeof k.createdAt === "string" ? k.createdAt : null, lastUsedAt: typeof k.lastUsedAt === "string" ? k.lastUsedAt : null, current: Boolean(k.current) })),
     } : null,
     wealth: wealth ? { cash: num(wealth.treasuryCashMinor), ownerContributed: num(wealth.ownerContributedMinor), ownerWithdrawn: num(wealth.ownerWithdrawnMinor),
-      fleetGenerated: num(wealth.fleetGeneratedMinor) } : null,
+      fleetGenerated: num(wealth.fleetGeneratedMinor),
+      // v121: what is real. `cash` above is the ledger partition sum (it includes money set aside to repay the owner): never shown as cash.
+      actualCash: wealth.actualCashMinor == null ? null : num(wealth.actualCashMinor), actualCashAt: typeof wealth.actualCashAt === "string" ? wealth.actualCashAt : null,
+      availableTreasury: wealth.availableTreasuryMinor == null ? null : num(wealth.availableTreasuryMinor),
+      reconciliation: typeof wealth.reconciliationStatus === "string" ? wealth.reconciliationStatus : null } : null,
     flows24h: flows ? { revenue: num(flows.revenueMinor), spend: num(flows.spendMinor), profitContributed: num(flows.profitContributionMinor),
       ownerFunding: num(flows.ownerFundingMinor) } : null,
     replication: rep ? {

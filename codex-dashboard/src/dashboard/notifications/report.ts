@@ -39,7 +39,10 @@ export function dailyReport(detail: unknown): DailyReport | null {
       ["Realised profit contributed to the Treasury", amount(f.profitContributionMinor)], ["Owner funding", amount(f.ownerFundingMinor)]],
       note: "Owner funding is capital, never revenue or profit." },
     ...(t ? [{ title: "Treasury", facts: [
-      ["Treasury cash", amount(t.treasuryCashMinor)], ["Fleet-generated realised wealth", amount(t.fleetGeneratedMinor)],
+      // v121: provider cash and the backed available figure; the ledger partition sum (treasuryCashMinor) is not cash.
+      ["PayPal cash (actual)", t.actualCashMinor == null ? "unknown" : amount(t.actualCashMinor)],
+      ["Available treasury (backed)", t.availableTreasuryMinor == null ? `unknown (${text(t.reconciliationStatus ?? "no balance", 40)})` : amount(t.availableTreasuryMinor)],
+      ["Fleet-generated realised wealth", amount(t.fleetGeneratedMinor)],
       ["Owner contributed", amount(t.ownerContributedMinor)], ["Owner withdrawn", amount(t.ownerWithdrawnMinor)]] as Fact[] }] : []),
     { title: "Activity in the window", facts: [
       ["Ventures opened", count(detail.venturesOpened24h)], ["Ventures closed", count(detail.venturesClosed24h)],
