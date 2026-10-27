@@ -3564,3 +3564,7 @@ Approved by the owner for `1116576f3663a9f2289422b226b7e12232ff57ee`, build
 
 **UI rollback, if needed:** `dashboard.env.pre-0.27.0` (back to 0.26.2). **Backend rollback:** fix forward. The 120 dump
 exists, but a database restore needs your explicit approval.
+
+**Owner confirmation (27 Oct):** the saved vault address matches (checked through the passkey Show; the value was not
+shared), and the corrected Overview, Treasury and sealed-item screens look correct on production. The display fix is
+complete.
