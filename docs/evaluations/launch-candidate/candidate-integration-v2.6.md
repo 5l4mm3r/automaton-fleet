@@ -3733,3 +3733,67 @@ the production runtime has no timed safety re-check. An undeclared rest is cappe
 
 Funding or any financial entry; Stage 2 (sales, the proof order, the refund); Stage 3 (public acquisition, which needs
 Agent-1's evidence-backed offer first); publishing; Agent-2; any authentication change.
+
+## Stage 1 preflight (27 Oct): STOPPED before any change — the 24 h checkpoint and blocker stop are not persistent
+
+Stage 1 was approved subject to preflight conditions. One failed, so **no Stage 1 step was taken**:
+
+- no hold;
+- no key copy or `service.env` edit;
+- no controller restart;
+- no timer;
+- no file copy;
+- no owner task;
+- Agent-1 still paused.
+
+**Condition: the persistent guard must enforce the 24-hour review checkpoint and the reported-blocker stop.**
+
+**Result: it does not.** `fleet-canary.sh check` (hourly, systemd) runs the safe stop only on:
+
+- ledger verification failure;
+- agent cash charges > CASH_CEILING_MINOR;
+- provider credit consumed > $15;
+- a repeated delivery;
+- a repeated buyer message;
+- ENDS_AT.
+
+Its measures (`fleet-canary-measures.sql`) read neither offer reviews nor blockers. A blocker recorded by Agent-1
+(`capabilities.request` → `fleet_capability_demands`, or an owner / dependency request → `fleet_owner_requests`) reaches
+Fleet Command and the owner's notifications, but stops nothing. The 24-hour checkpoint exists only as an instruction in
+this record. **Both therefore depend on this Claude session.** As instructed, nothing extra was implemented under this
+approval.
+
+**Read-back (read-only, before any change). Model assignments are preserved as they are:**
+
+| | |
+|---|---|
+| Policy | anthropic `claude-opus-5-5`, max output 4,000; prices per token: input 400 µ¢, output 2,000 µ¢, cache read 20 µ¢, cache write 500 µ¢; **disabled**; `FLEET_COGNITION_PROVIDER=none`; model / thinking adaptive / effort medium / 150 s / 180 s in `service.env` |
+| Tiers (routing on; both founders routed) | T1 `claude-haiku-4-5-20251001` (enabled, verified 30 Sep, max 2,000); T2 `claude-sonnet-5-5` (enabled, verified, adaptive, max 8,000); T3 `claude-opus-5-5` (enabled, verified, adaptive, max 16,000) |
+| Agent-1 | paused, 754p/day, 600 calls/h, 7c194b8 |
+| Agent-2 | paused, 3,000p/day, 60 calls/h, b60e262 |
+| Credit | 11,523,033,480 µ¢, held 0; the hold for $15 would be 10,023,033,480 µ¢ |
+| FX (USD) | 0.750296 (27 Oct) |
+
+**Two ways to make the checkpoint and blocker stop persistent (for your decision; neither started):**
+
+**A. No code change: a 24-hour Stage 1 deadline on the existing end timer.**
+
+- Set Stage 1's ENDS_AT = STARTED_AT + **24 h**, instead of 7 days.
+- At 24 h the persistent end timer runs the safe stop whatever happened: pause, offer hold, sales closed, Fleet Control
+  off. It releases the hold only if nothing is open.
+- That enforces the checkpoint persistently. **A blocker is not detected as such**, but its cost stays bounded by
+  754p/day, 120 calls/h and the $15 hold, and it ends at 24 h.
+- Stage 2 would then re-establish the hold, timers and budget under its own approval.
+- This changes the approved deadline (7 days → 24 h for Stage 1), so it needs your word.
+
+**B. Small guard extension (code; separate approval and a release).**
+
+- `canary.conf` gains `REVIEW_BY` (STARTED_AT + 24 h) and `REVIEW_DIGEST` (`f3e6193a…`).
+- The measures gain:
+  - `reviewPassed`: a passing offer review of that digest by Agent-1 since STARTED_AT;
+  - `blockersSince`: Agent-1's capability demands and owner / dependency requests since STARTED_AT.
+- The hourly check runs the safe stop on: `now ≥ REVIEW_BY` and no passing review; or any blocker since STARTED_AT.
+- Tests: stub cases for both stops and their non-stops, plus the PostgreSQL measures test.
+- It ships in the release, because the units run the installed `scripts/fleet-canary.sh`. That means Group A/B, scripts
+  only, schema unchanged.
+- The 7-day deadline then stays as approved.
