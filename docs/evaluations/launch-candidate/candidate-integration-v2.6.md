@@ -3510,3 +3510,57 @@ the legacy book figure `treasuryCashMinor` (the treasury_cash partition sum). Th
   - settings captured.
 - **On failure:** no database restore. Controller-side units stop and you decide; the pre-install backup is kept.
 - **Not included:** any task, funding, financial adjustment, credit hold, timer, inference, agent resume or sales opening.
+
+## Group B INSTALLED (27 Oct, 20:24–20:26Z): 1116576 on schema 121 with HQ 0.27.0
+
+Approved by the owner for `1116576f3663a9f2289422b226b7e12232ff57ee`, build
+`2c9907f2ebb809e814dc04183da139407a59c07e7e65ad367a91683a77e4b633`.
+
+**Checked before the run:**
+
+- `~/rlc138/install.sh` sha256 `2b9122a1…4cf5`;
+- pins;
+- the HQ tarball sha `bccb6e66…2558`;
+- rehearsals 12 minutes old;
+- `FLEET_ROLLOUT_AUTO_RESTORE` unset.
+
+**The run:**
+
+- **Gates:** all passed.
+- **Pre-install backup:** `~/rlc138/baseline-pre-install-1116576-20261027T202419Z`, 5,471 dump entries; kept, not
+  restored.
+- **Release 7c194b8 → 1116576, schema 120 → 121:**
+  - **outage 20:25:23–20:26:10Z (47 s)**;
+  - reconciliation OK;
+  - `RELEASE 1116576 DEPLOYED 20:26:23Z: schema 121, root UI 0.27.0`;
+  - one `production_deployed` event.
+- **Verified by the script:**
+  - Agent-1 7c194b8 PID 2135441 and Agent-2 b60e262 PID 866408, both paused, the same processes;
+  - inference off;
+  - ledger head, credit and owner payable unchanged;
+  - v116–v121 checks;
+  - owner tasks 0;
+  - flags false;
+  - permissions closed.
+
+**Verified afterwards (read-only, 20:27Z):**
+
+- `fleet_treasury_position`:
+  - PayPal **£0.22 GBP**, fresh;
+  - **reconciled**, difference £0.00 (books £200.22 − unbacked £200.00);
+  - **available backed treasury £0.00**; unallocated 0, Fleet Control reserved 0;
+  - **owner payable £10.81**, distinct from **set aside £10.79**;
+  - **wallets £189.43** (Agent-1 £89.43, Agent-2 £100.00), **backed at most £0.00**;
+  - API credit $115.2303348 free, $0 held.
+- **Ledger:** head 1176 `e214852e…`, verify true. Credit balance 11,523,033,480 µ¢, unchanged.
+- **Legacy `treasuryCashMinor`:** 1,079, unchanged, as decided.
+- **The dashboard:**
+  - `FLEET_DASHBOARD_STATIC_DIR=/opt/automaton-fleet/ui/0.27.0`;
+  - the loopback and public `/` are byte-identical to the 0.27.0 `index.html`;
+  - the bundle carries the new labels ("Available treasury (backed)", "PayPal cash (actual)", "Treasury position (what is
+    real)", "not saved yet", "Show the saved …").
+- **The production screens themselves need your sign-in:** you confirm them; Claude cannot sign in to HQ.
+- Inference off, Fleet Control budget unset, no canary unit, both agents paused.
+
+**UI rollback, if needed:** `dashboard.env.pre-0.27.0` (back to 0.26.2). **Backend rollback:** fix forward. The 120 dump
+exists, but a database restore needs your explicit approval.
