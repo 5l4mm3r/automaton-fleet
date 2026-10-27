@@ -160,8 +160,16 @@ for (const [label, commit] of RUNTIMES) {
         expect(died).toBe(true);
         await waitFor(async () => (await q(`SELECT status FROM fleet_estates WHERE agent_id = $1`, [a]))[0]?.status === "settled", 20_000);
         expect((await q(`SELECT detail ->> 'cause' AS c FROM fleet_events WHERE event_type = 'agent_died' AND agent_id = $1`, [a]))[0].c).toBe("health_timeout");
+        //    Started BEFORE the reinstatement, against its dead record: the runtime refuses itself (exit 3, which the founder
+        //    unit's RestartPreventExitStatus never restarts) without a heartbeat. The order is reinstate first, then start.
+        const hb0 = (await q(`SELECT last_heartbeat FROM fleet_agents WHERE agent_id = $1`, [a]))[0].last_heartbeat;
+        await host.start(a);
+        expect(await waitFor(async () => host.exitCode(a) !== null, 60_000), "a founder started against a dead record exits").toBe(true);
+        expect(host.exitCode(a)).toBe(3);
+        expect(await status()).toBe("dead");
+        expect((await q(`SELECT last_heartbeat FROM fleet_agents WHERE agent_id = $1`, [a]))[0].last_heartbeat).toEqual(hb0);
         //    The owner's reinstatement (hold 30 min), then the SAME founder restarted on the same runtime.
-        const r = (await q(`SELECT fleet_admin_incident_reinstate('real-process rehearsal', ARRAY[$1]::text[], '{}'::uuid[], 30, $2) AS r`, [a, OWNER]))[0].r;
+        const r =(await q(`SELECT fleet_admin_incident_reinstate('real-process rehearsal', ARRAY[$1]::text[], '{}'::uuid[], 30, $2) AS r`, [a, OWNER]))[0].r;
         expect(r.ok).toBe(true);
         await host.start(a);
         expect(await waitFor(async () => (await status()) === "active", 60_000), "heartbeat → challenge → active").toBe(true);

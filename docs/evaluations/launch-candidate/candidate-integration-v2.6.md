@@ -4157,7 +4157,7 @@ applies again only after the hold.
 returns to normal rules once the hold lapses. It would then die after the normal grace. That second death keeps the
 original evidence and opens a new estate with a distinct key (tested), but it is not the recovery plan. The procedure
 avoids it as follows:
-- start both founder processes before the reinstatement transaction;
+- ~~start both founder processes before the reinstatement transaction;~~ **CORRECTED (Group A, below): reinstate FIRST, then start the units. A founder started against its dead record exits 3 and is never restarted;**
 - reinstate with **60 min**;
 - verify;
 - if the challenge has not passed within 30 min, **stop and report** before the hold lapses.
@@ -4221,3 +4221,173 @@ new estate under a reversion-suffixed key.
 7. Check that production is identical before and after.
 
 Not in Group A: install, reinstatement, the hold extension, key rotation, funding, activation, resume or any paid call.
+
+## Group A on c448d98 (27 Oct, 22:42–23:00Z): PASSED except the founder rehearsals (refused by their own guard); production unchanged
+
+The owner approved Group A for `c448d98a1c32c63af89288758240fc5787f9f9d6`. Only disposable databases, synthetic process
+credentials and the fake provider (or none) were used. There was no paid call, no financial posting, no reinstatement and
+no cutover.
+
+| Step | Result |
+|---|---|
+| Docs head | Before the push, `fleet-origin/fleet/canary-prep` was 1116576. The push was a fast-forward `1116576..c448d98` with no force: 6 docs commits (9597186 … c7ef757) and the v122 commits c4b52ae and c448d98. This record's file at c448d98 has sha256 `9ddd0527627a8561…`. A secret-pattern scan of the range was clean |
+| Build (VPS, two passes) | Pins came from pass 1's output (`~/rlc139/pins.txt`). Pass 2 verified **build `48c0015ed443e23e835eed697ff5bc01275509d23fd13783a21f2422ad7c5725`** with lockfile `1df54e3526cb39c847d18fec14f1d4e3595557e34d94040c5b774f9b2f2a21c1` (unchanged) |
+| Side-install | `/opt/automaton-fleet/releases/c448d98…`, identity re-verified; `current` stayed 1116576 |
+| Data rehearsal `fleet-rollout.sh rehearse 121 → 122` | **PASSED 22:45:21Z.** Only 122 applies. The privilege audit is `ok` with no problems. 1,120 journals, ledger verify true, rerun is a no-op, and the rollback dump restores 121 with the same head (dump `3f4d47ea…`) |
+| Services rehearsal `fleet-upgrade-rehearsal.sh 121 → 122` | **PASSED 22:46:07Z.** 1116576 refuses 122, so a rollback means a database restore. The candidate controller (all readiness checks, including `reaper`), Operator API and dashboard were ready on 122, with the ledger unchanged. The rollback restored 121 and 1116576 was ready again. Production PIDs unchanged |
+| Founder `upgrade-rehearsal 7c194b8` and `revision-rehearsal` | **REFUSED, not run** (see below) |
+| Recovery rehearsal (`recovery-rehearsal.sh`, sha `3e5474e0…`; log `b20da8b1…`) | **PASSED.** See below |
+| Real-process synthetic test (local) | **PASSED 2/2.** It now also proves the start-while-dead case. See below |
+| HQ | 0.27.0 is unchanged. The candidate's `fleet-ui-deploy.sh --check` reports "reuse, already served (no switch, no restart); nothing changed" |
+| Production before / after (22:42:10Z / ~23:00Z) | **Identical:** schema 121; ledger head 1179 `1e64694cbc6821e781a…` (verify true); agents, founder cognition, state, units, unit files, PIDs, packages, tools and settings; events 3,018 → 3,018 with the same permanent-history digest; `current` 1116576. Both founder units are `failed` / exit 3 with 0 restarts. Inference is off and the four flags are false. Only `automaton_fleet` exists, because every copy was dropped. The baseline full dump `e1c7086b…` has 5,475 TOC entries |
+
+**The founder rehearsals refused correctly.** `fleet-founders` refuses any real-runtime rehearsal while founder units or
+state that are not living production founders exist on the host. The two dead founders' failed units and Agent-1's
+state directory are exactly that. Getting past the refusal would mean touching the dead agents' units or state, so it was
+not attempted.
+
+These rehearsals exercise a founder **runtime upgrade**. c448d98 changes no founder runtime, so they are not a
+precondition for installing it. Once the founders are living again, the guard allows them, and they should run before
+any future founder upgrade.
+
+(A side finding: the 1116576 baseline script printed "toc 0 lines" because `postgres` cannot open a 0600 file in a 0700
+directory by path. The dumps were valid. The script now reads the dump through stdin.)
+
+### The recovery sequence, established by evidence
+
+1. **A founder process cannot be started first.** The founder runtime of both 7c194b8 and b60e262 asks the controller
+   whether it is accepted as living before its first heartbeat.
+   - Against a dead record it throws `FounderRejectedError`, which exits with **code 3**.
+   - The founder unit has `RestartPreventExitStatus=3 4`, so systemd never restarts it. That is exactly what production
+     shows now: `failed`, exit 3, 0 restarts.
+   - The real-process test proves this on both runtimes. A start against the dead record leaves the process exited with
+     code 3, the status still `dead` and `last_heartbeat` unchanged.
+   - On the production copy, a heartbeat for the dead identity returns `dead`.
+2. **Reinstate first**, with `founder-reinstate`.
+3. **Then start** the units with `systemctl start`.
+4. **Each founder becomes active by its own heartbeat and a passed challenge.** The hold ends at that moment.
+
+The hold protects the gap between reinstating and starting, and any slow start.
+
+**Two kinds of proof:**
+
+- **Real processes, synthetic identities:** `src/__tests__/fleet/fleet-v122-recovery-real-founders.test.ts`, 2/2, local.
+  - It runs real founder runtimes from git-archived 7c194b8 and b60e262 trees against the candidate controller and its
+    real reaper.
+  - The sequence is: unresponsive → own heartbeat; a 9 s outage ridden out; death; **start while dead → exit 3**;
+    reinstatement; start → heartbeat → challenge → active.
+  - The identity, credential and state files are identical, there are 0 model turns and the agent stays paused.
+- **Registry level, the copied production identities** (`recovery-rehearsal.sh` on a fresh production dump with the
+  release's own commands): the founder processes' calls (heartbeat, challenge) were made with the release's built store.
+  No production state file or credential file was used, and no founder process ran.
+
+**Recovery rehearsal on the production copy** (dump `3f4d47ea…`, the c448d98 release's own `cli.js`):
+
+| # | What | Result |
+|---|---|---|
+| 0 | Copy restored and migrated with the release's `migrate` | Schema 121 → 122. Production timings: unresponsive 120 s, dead 600 s, termination grace 480 s, health grace 300 s |
+| 1 | Before reinstatement | Both `dead` with credentials revoked. A heartbeat returns `dead` |
+| 2 | `founder-reinstate "INCIDENT 2026-10-27 controller outage" A1,A2 <1179> 60` | `ok`. Both `unresponsive` with **holds of 60 min**. Identity unchanged, 0 credentials revoked, paused, policy disabled |
+| 3 | The hold protects (no process yet; unresponsive 30 min, heartbeats 2 h old, grace window long past) | Both still `unresponsive` after the reaper |
+| 4 | Agent-1 verifies | Heartbeat → `unresponsive`; challenge `{"ok":true}` → **active**. **The hold cleared at active** |
+| 5 | **Agent-2 fails verification**; the fallback is applied **before its hold ends**: `set-timeouts dead=86400`, `lifecycle-policy terminationGrace=86400` | Both audited (`timeouts_set`, `lifecycle_policy_set`). Then `founder-hold-end` (the release command; `lifecycle_hold_ended`) and 2 h simulated past the hold's end: **Agent-2 is still `unresponsive`, alive**. **Control:** the same instant at production timings, inside a transaction that was rolled back, gives **Agent-2 `dead`**. So the fallback is what prevents the death |
+| 6 | Agent-2 recovers later, inside the window | Heartbeat → challenge `{"ok":true}` → **active**, hold none |
+| 7 | Timings restored, once both are active | 120 / 600 / 480 / 300, identical to before. Both still active |
+| 8 | The incident's downtime (106 s reaper gap, heartbeats 126 s old) | Both stay active |
+| 9 | Books and history | Reversals 1180 → 1179, 1181 → 1177, 1182 → 1178; the originals 1177–1179 and both `agent_died` events are kept. Unallocated 0, unbacked_estates 0, living 2/2, paused, cognition-log rows unchanged (1,091 → 1,091), ledger verifies. Live head unchanged; live agents dead; live timings 600 / 480 |
+
+### The containment fallback (concrete; existing commands only; nothing new built)
+
+If an agent has not passed its challenge **15 minutes** after its unit started, or its unit fails earlier, the recovery
+script immediately does the following (still **45 min before** the 60-min hold ends):
+
+1. It raises the two lifecycle death timings to **24 h**: `fleet:admin set-timeouts dead=86400` and
+   `fleet:admin lifecycle-policy terminationGrace=86400`.
+   - These are the existing, owner-only, audited commands.
+   - The v122 reaper counts both timings **from the hold's end**, so after the hold the agent cannot be killed for
+     24 h.
+   - They are the only two automatic death paths for an unresponsive founder. The others (parent-reported terminal,
+     orphan slot, economic death) do not apply to these agents. The control in step 5 proves the effect.
+2. It **stops the failing agent's unit** so it cannot loop.
+3. It keeps its journal, its registry row and its challenges as evidence.
+4. The agent stays **alive, unresponsive, paused, with no inference, and spending blocked** by the tripped breaker.
+   Agents that already verified stay active. The settings are fleet-wide, but the registry holds only these two agents
+   (cap 2).
+5. Next, the owner diagnoses and fixes the agent, then runs `systemctl start`. The agent becomes active by heartbeat and
+   challenge. `recover.sh restore-timings` then returns 600 / 480; it refuses while any agent is not active, because an
+   unresponsive agent past the normal grace would die at once.
+6. If more time is needed, the same two commands can be re-applied before the window ends. The registry bounds each
+   setting at 7 days, and every change is audited.
+
+This is bounded maintenance protection with no new code. The proposed `lifecycle_hold_extend` (not built) would scope
+the same protection to one agent, but it is not needed for this recovery.
+
+### Group B: the exact installation and recovery package (PREPARED; NOT RUN; needs the owner's approval)
+
+**Part 1: install** (`install-c448d98.sh`, **sha256 `a788fd7dc432e6cf55bf9b8f9ba4cd5813aa8aa1347db1379101448bd02fd071`**,
+staged identically as `~/rlc139/install.sh`; run with `bash ~/rlc139/install.sh`)
+
+- **Pins:**
+  - commit `c448d98a1c32c63af89288758240fc5787f9f9d6`;
+  - build `48c0015ed443e23e835eed697ff5bc01275509d23fd13783a21f2422ad7c5725`;
+  - lockfile `1df54e3526cb39c847d18fec14f1d4e3595557e34d94040c5b774f9b2f2a21c1`;
+  - UI 0.27.0 (`~/rlc138/ui-0.27.0-1116576.tgz`, `bccb6e66…`), **reused, not switched**.
+- **Gates, checked before any change** (all dry-run read-only against production now: PASS):
+  - pins;
+  - both rehearsals passed and are under 24 h old (**before 22:45Z on 28 Oct**);
+  - release present;
+  - schema 121 on 1116576;
+  - **the incident state:** both dead by `health_timeout`, units `failed` / 3, credentials revoked, wallets frozen,
+    estates settled;
+  - **containment:** breaker tripped, only the canary hold open at 10,023,033,480 µ¢, Fleet Control budget unset, policy
+    off, provider `none`;
+  - timings 120 / 600 / 480 / 300;
+  - incident evidence `SHA256SUMS` verifies (9 / 9);
+  - permissions closed, flags false, founder unit template identical;
+  - `FLEET_ROLLOUT_AUTO_RESTORE` unset;
+  - a fresh full dump (TOC checked; kept, never restored).
+- **Change:** `fleet-release.sh … 121 122 0.27.0 …`.
+  - Backend cutover: dump, migrate 122, reconcile, approve, restart the controller-side units.
+  - With both agents dead, a controller outage cannot cost a life.
+- **Verification:**
+  - controller ready;
+  - agents **still dead and untouched**;
+  - containment unchanged;
+  - **no recovery event and no hold**;
+  - timings unchanged;
+  - ledger head, credit, payable, tiers and unallocated unchanged;
+  - v116–v121 checks;
+  - **v122:** both owner functions present, the reaper with the hold and the 45 s resume gap, `unbacked_estates` at 0,
+    the four new events routed;
+  - UI 0.27.0 served, unit files unchanged, ledger verifies.
+- **On failure:** no restore. The controller-side units stop and the owner decides.
+
+**Part 2: recovery** (`recover-c448d98.sh`, **sha256 `454ec43e2a1d9e7c273944bf8050cdcd093fde28961a8e0049246c06c8a7d5b9`**,
+staged as `~/rlc139/recover.sh`; run with `bash ~/rlc139/recover.sh` **only after Part 1 completed**)
+
+- **Gates:**
+  - c448d98 / build 48c0015e on 122, controller ready;
+  - registry exactly the two dead founders, with the incident's `health_timeout` deaths;
+  - no earlier reinstatement;
+  - units `failed` / 3 and state directories present;
+  - journal 1179 = the acquisition cost `3cb79f23-c4fa-4aaa-a090-a5dfe1a2c0fd`;
+  - timings production;
+  - containment intact;
+  - evidence verifies;
+  - cap 2 with 0 living;
+  - a fresh full dump (kept, never restored).
+- **Steps:**
+  1. `founder-reinstate "INCIDENT 2026-10-27 controller outage" 01M3F50SH7PNX2E3GST13J52AS,01M4C4NXT786Q4E9725N5A15KV
+     3cb79f23-c4fa-4aaa-a090-a5dfe1a2c0fd 60`. It is one atomic transaction, and a refusal changes nothing. Then
+     checks: both unresponsive, holds ~60 min, credentials live, estates reverted, **exactly** reversals 1180 > 1179,
+     1181 > 1177, 1182 > 1178, originals and deaths kept, unallocated 0, unbacked 0, ledger verifies, containment
+     unchanged. These 13 checks ran verbatim on a disposable copy: 0 failed.
+  2. `sudo systemctl start` both founder units.
+  3. Watch for up to 15 min: heartbeat → challenge → active.
+  4. The fallback above, if needed (exit 3, "RECOVERY CONTAINED, NOT COMPLETE").
+  5. Verification: both active, holds ended at active, latest challenge passed, no cognition turn, ledger unchanged since
+     step 1, timings production, containment unchanged.
+- **Not included:** ending containment (breaker, Fleet Control budget, canary hold), inference, resume, key rotation
+  (operator key R4), funding, the R3 inference-profile preflight, any founder runtime change, the hold extension.
+- **After recovery** (separate, when you decide): the founder upgrade and revision rehearsals become runnable. Stage 1
+  re-planning needs `FLEET_INFERENCE_PROFILE` (R3), which is still absent from `service.env`, and the operator key (R4).
