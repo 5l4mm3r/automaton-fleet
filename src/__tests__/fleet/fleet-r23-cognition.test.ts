@@ -519,6 +519,42 @@ describe("R23 founder mind: routed mode", () => {
     expect(text.length).toBeLessThanOrEqual(15_000);
     expect(text).toContain("THE-TASK-MARKER");
   });
+
+  it("2026-10-28 (Stage 1 retry): a packet over the BYTE bound is trimmed too — evidence and facts give way before the turn is refused", () => {
+    // Agent-1's shape: ~6 KB of facts, 13 research records (each with an excerpt), and a task whose essentials no longer fit
+    // beside them. Before the fix renderTaskPacket refused the packet (bytes > 16,000) before any trimming ran, at every level.
+    const root = tmp();
+    const m = path.join(root, "m");
+    const w = path.join(root, "w");
+    fs.mkdirSync(m);
+    fs.mkdirSync(path.join(w, "research"), { recursive: true });
+    fs.writeFileSync(path.join(m, "facts.json"), JSON.stringify(Object.fromEntries(Array.from({ length: 16 }, (_, i) => [`fact ${String(i).padStart(2, "0")}`, "f".repeat(330)]))));
+    for (let i = 0; i < 13; i++) {
+      const id = `att-${String(i).padStart(2, "0")}`;
+      fs.writeFileSync(path.join(w, "research", `r${i}.txt`), `attemptId: ${id}\nrequested: https://example.org/page-${i}-${"p".repeat(120)}\nfetched: 2026-10-${String(10 + i).padStart(2, "0")}T00:00:00Z\n`
+        + `sha256: ${"a".repeat(64)}\n---BEGIN UNTRUSTED CONTENT---\n${"b".repeat(600)}\n---END UNTRUSTED CONTENT---\n`);
+      fs.writeFileSync(path.join(w, `ref${i}.md`), `see ${id}`);   // referenced, so each record carries an excerpt
+    }
+    const task = `THE-TASK-MARKER ${"t".repeat(6_500)}`;
+    const oc = { form: "analysis" as const, mustCite: false, instructions: "act" };
+    const build = () => buildTaskPacket({ memoryDir: m, workspaceDir: w, task, outputContract: oc });
+    expect(taskPacketProblems(build())).toContain("packet too large");   // the situation: over the byte bound after the builder's own trims
+    // Facts are kept while the task can still be shortened (keepKnowledge): then only evidence gives way; here that is enough.
+    const kept = renderBoundedPacket(build(), 15_000, { keepKnowledge: true });
+    expect(kept).toContain("THE-TASK-MARKER");
+    expect(Buffer.byteLength(JSON.stringify(JSON.parse(kept.split("\n")[3])))).toBeLessThanOrEqual(16_000);
+    expect(JSON.parse(kept.split("\n")[3]).knowledge).toHaveLength(16);
+    // A larger task: facts give way too at the last level (keepKnowledge false), never the task.
+    const big = buildTaskPacket({ memoryDir: m, workspaceDir: w, task: `THE-TASK-MARKER ${"t".repeat(11_500)}`, outputContract: oc });
+    expect(() => renderBoundedPacket(buildTaskPacket({ memoryDir: m, workspaceDir: w, task: `THE-TASK-MARKER ${"t".repeat(11_500)}`, outputContract: oc }), 15_000, { keepKnowledge: true })).toThrow(/packet too large/);
+    const last = renderBoundedPacket(big, 15_000, { keepKnowledge: false });
+    expect(last).toContain("THE-TASK-MARKER");
+    expect(JSON.parse(last.split("\n")[3]).knowledge.length).toBeLessThan(16);
+    // Only size is trimmable: secret-shaped text is still refused at once, whatever else could be dropped.
+    const secret = build();
+    secret.task = `${secret.task} sk-ant-api03-${"S".repeat(40)}`;
+    expect(() => renderBoundedPacket(secret)).toThrow(/secret-shaped/);
+  });
 });
 
 // ─────────────────────────────────────────────── R23.1 idle cognition efficiency

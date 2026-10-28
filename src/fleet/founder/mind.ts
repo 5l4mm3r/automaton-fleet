@@ -33,7 +33,7 @@ import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { MAX_TOOL_CALLS_EXECUTED, imageTokens, type ChatMessage, type ThinkingBlock, type ToolCall } from "../cognition/types.js";
-import { PACKET_LIMITS, buildTaskPacket, renderTaskPacket, type TaskPacket } from "../cognition/task-packet.js";
+import { PACKET_LIMITS, buildTaskPacket, renderTaskPacket, taskPacketProblems, type TaskPacket } from "../cognition/task-packet.js";
 import type { Tier } from "../cognition/router.js";
 import { ROUTINE_PURPOSES } from "../cognition/router.js";
 import { decideTool, type CapabilityManifest } from "../capabilities.js";
@@ -430,9 +430,20 @@ export function slimWakePacket(p: TaskPacket): TaskPacket {
   return slim;
 }
 
-/** Trim a packet (lowest-value sections first, never the task) until its rendered form fits one controller message. */
+/**
+ * Trim a packet (lowest-value sections first, never the task) until it fits BOTH limits: the packet's own byte bound
+ * (PACKET_LIMITS.totalBytes, checked by renderTaskPacket) and one controller message (maxChars, rendered).
+ * 2026-10-28 (Stage 1 retry, Agent-1): the byte bound was checked before any trimming, so a packet over it was refused at
+ * every reduction level although dropping evidence entries and facts would have made it fit — the founder could not think.
+ * Only "packet too large" is trimmable; any other packet problem (secret-shaped text, a forbidden key) still refuses at once.
+ */
 export function renderBoundedPacket(p: TaskPacket, maxChars = MAX_PACKET_CHARS, o: { keepKnowledge?: boolean } = {}): string {
-  let text = renderTaskPacket(p);
+  const tryRender = (): string | null => {
+    const problems = taskPacketProblems(p);
+    if (problems.length === 1 && problems[0] === "packet too large") return null;
+    return renderTaskPacket(p);
+  };
+  let text = tryRender();
   const shrink: Array<() => boolean> = [
     () => p.notes.length > 0 && (p.notes.pop(), true),
     () => { const e = p.evidence.find((x) => x.excerpt); if (!e) return false; delete e.excerpt; return true; },
@@ -443,9 +454,9 @@ export function renderBoundedPacket(p: TaskPacket, maxChars = MAX_PACKET_CHARS, 
     () => !o.keepKnowledge && p.knowledge.length > 0 && (p.knowledge.pop(), true),
   ];
   for (const step of shrink) {
-    while (text.length > maxChars && step()) text = renderTaskPacket(p);
+    while ((text === null || text.length > maxChars) && step()) text = tryRender();
   }
-  if (text.length > maxChars) throw Object.assign(new Error("FLEET_TASK_PACKET_INVALID: packet too large"), { code: "FLEET_TASK_PACKET_INVALID" });
+  if (text === null || text.length > maxChars) throw Object.assign(new Error("FLEET_TASK_PACKET_INVALID: packet too large"), { code: "FLEET_TASK_PACKET_INVALID" });
   return text;
 }
 
