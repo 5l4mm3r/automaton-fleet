@@ -5576,3 +5576,50 @@ holds the 18:10Z files**, which carry the funding defect. They must be replaced 
 - No owner command closes the proof checkout early: after the window it stays payable for up to 72 h, to the owner only
   (private link).
 - Unexpected orders are detected and handled, not proven impossible.
+
+## Stage 2 execution — started 28 Oct 20:20Z under the owner's approval of e512fb2; STOPPED before any checkout
+
+**Done:**
+- Push: d36ace4 and e512fb2 pushed, no force (a3ebf49..e512fb2), after the scope check (6 Stage 2 files) and a clean
+  secret scan.
+- Staging: the old copies were preserved in `~/rlc142/prev-d36ace4/` (7185c769…, 7a22845e…, 88c1f071…, 90363ce1…).
+- The four e512fb2 files were installed in `~/rlc142/`. **All four full hashes matched the final report.**
+- `--check` (new package, read-only, 20:30Z): passed.
+
+**Stop — the owner's pre-payment condition.** Captures can succeed after `expires_at` (code facts):
+1. The reaper (`cx_paypal_work`) closes `requested`/`open` checkouts past `expires_at` only when custody's pass runs. Until
+   then the checkout is still `open`, the transition `open → approved` has no expiry check, and custody captures an
+   `approved` checkout (`cx_paypal_work` selects `approved` with no expiry filter).
+2. `expired`/`cancelled`/`failed → capture_pending/captured` is allowed by design ("money that arrives after the fleet gave
+   up on a checkout is still that checkout's money"). An in-flight capture, or late evidence of money taken, is booked.
+3. When a checkout expires, its PayPal order becomes `closed` and is watched for 30 days, not destroyed. On a retired
+   order, a late APPROVED is reconciled, never auto-captured.
+
+The e512fb2 package relied on "expired = harmless" in three places:
+- the earlier-link gate ignored time-expired `requested`/`open` checkouts and live PayPal orders;
+- `cleanup` released the holds and disarmed the guard without the proof order being resolved;
+- the rehearsal asserted the gates pass once a checkout expires.
+
+On production this changes no result today: 0 non-terminal checkouts at any expiry, 0 live PayPal orders (1 retired, 2
+captured), 0 open reconciliation items, no approval or capture events on the retired order.
+
+**Prepared fix (local, NOT pushed or staged; needs the owner's approval because it changes an approved file):**
+- `live_other`: every non-owner-proof checkout counts while its status is non-terminal, *whatever its expires_at*, or while
+  any PayPal order of it is live; **any open PayPal reconciliation item** also stops every step.
+- The proof order is **resolved** only when all of these hold:
+  - it is refunded;
+  - exactly one 500p proof return is booked;
+  - no PayPal order of it is live;
+  - no reconciliation item on it is open.
+
+  `refund-verify` requires this. `cleanup` does the safe parts (pause, cognition off, Fleet Control off, offer held) but
+  **keeps the holds and the guard** while the proof order is unresolved. A new read-only `monitor` mode reports it (exit 4
+  until resolved). The "window closed" message says expiry is not resolution.
+- Rehearsal: **14/14**. New in this run:
+  - a past-`expires_at` checkout still `open` keeps blocking;
+  - custody's pass closes it, then the gate passes;
+  - a late-approval reconciliation item blocks until resolved through the owner's command;
+  - an unpaid proof order stays NOT RESOLVED after its expiry and closure, with holds and guard kept and cognition off.
+
+`stage2-proof.sh` → `d60fe5b80593e96d18a08b7d0e95ab900c7d519d6dfdb077bdadaa67a7dceb3b`; the other three files are
+unchanged.

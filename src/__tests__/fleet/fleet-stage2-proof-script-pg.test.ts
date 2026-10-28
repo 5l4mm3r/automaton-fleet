@@ -212,7 +212,7 @@ describe.skipIf(!PG_BIN || !fs.existsSync(CLI))("Stage 2 package rehearsed on Po
       const r = x.run(["--check"]);
       expect(r.code, r.out).toBe(0);
       expect(r.out).toContain("check done");
-      expect(r.out).toContain("checkouts payable now (any offer, any order): 0");
+      expect(r.out).toContain("checkouts not closed (any offer, any order, whatever their expiry): 0; live PayPal orders: 0; open reconciliation items: 0");
       expect(r.out).not.toMatch(/ERROR|STOP/);
       expect(await x.db(`SELECT (SELECT count(*) FROM fleet.fleet_ledger_journal) j, (SELECT count(*) FROM fleet.fleet_provider_credit_holds) h, (SELECT count(*) FROM fleet.fleet_events) e`)).toEqual(before);
     });
@@ -459,18 +459,74 @@ describe.skipIf(!PG_BIN || !fs.existsSync(CLI))("Stage 2 package rehearsed on Po
       expect(await x.R.one(`fleet.svc_order_country($1, $2, 'GB')`, [o.access_token, ORIGIN])).toMatchObject({ ok: true });
       expect(await x.R.one(`fleet.svc_order_consent($1, $2, $3)`, [o.access_token, ORIGIN, BUYER_CONSENT_VERSION])).toMatchObject({ ok: true });
       expect(await x.R.one(`fleet.svc_order_pay($1, $2)`, [o.access_token, ORIGIN])).toMatchObject({ ok: true });   // still payable: closing sales does not close links
+      const pp = `ORD${crypto.randomBytes(6).toString("hex").toUpperCase()}`;           // custody opened its PayPal order (the link)
+      expect((await x.cx("cx_paypal_checkout_update", ["custody-executor", o.checkout_id, "open", pp, `https://www.paypal.com/checkoutnow?token=${pp}`, null])).ok).toBe(true);
       let r = x.run(["--check"]);
       expect(r.code, r.out).toBe(1);
-      expect(r.out).toContain("a checkout other than the proof order is payable");
-      // Its 72 hours pass (time moved for the test); custody's pass closes it; the link no longer takes a payment.
+      expect(r.out).toContain("a checkout other than the proof order is live");
+      // Its 72 hours pass (time moved for the test) but custody's pass has not run yet: expires_at is past, the checkout is
+      // still 'open' — and an approval now would still be captured. The gate does NOT treat expiry as safety.
       await x.R.q(`ALTER TABLE fleet.fleet_paypal_checkouts DISABLE TRIGGER USER`);
       await x.R.q(`UPDATE fleet.fleet_paypal_checkouts SET created_at = created_at - interval '73 hours', expires_at = expires_at - interval '73 hours' WHERE checkout_id = $1`, [o.checkout_id]);
       await x.R.q(`ALTER TABLE fleet.fleet_paypal_checkouts ENABLE TRIGGER USER`);
+      expect((await x.db(`SELECT status, expires_at < now() AS past FROM fleet.fleet_paypal_checkouts WHERE checkout_id = $1`, [o.checkout_id]))[0]).toEqual({ status: "open", past: true });
+      r = x.run(["--check"]);
+      expect(r.code, r.out).toBe(1);
+      expect(r.out).toContain("a checkout other than the proof order is live");
       await x.cx("cx_paypal_work", ["custody-executor", 20]);
+      expect((await x.db(`SELECT state FROM fleet.fleet_paypal_provider_orders WHERE checkout_id = $1`, [o.checkout_id])).map((q) => q.state)).toEqual(["closed"]);
       expect((await x.db(`SELECT status FROM fleet.fleet_paypal_checkouts WHERE checkout_id = $1`, [o.checkout_id]))[0].status).toBe("expired");
       expect(await x.R.one(`fleet.svc_order_pay($1, $2)`, [o.access_token, ORIGIN])).toMatchObject({ ok: true, state: "expired" });
       r = x.run(["--check"]);
       expect(r.code, r.out).toBe(0);
+      // Late PayPal evidence about it (here: a late approval reconciled) stops every step again until the owner resolves it.
+      await x.R.q(`SELECT fleet.fleet_paypal_recon_add('late_approval', $1, NULL, $2, 500, 'GBP', '{}'::jsonb)`, [o.checkout_id, pp]);
+      r = x.run(["--check"]);
+      expect(r.code, r.out).toBe(1);
+      expect(r.out).toContain("a PayPal reconciliation item is open");
+      const [item] = await x.db(`SELECT item_id::text FROM fleet.fleet_paypal_reconciliation_items WHERE status = 'open'`);
+      expect(spawnSync(process.execPath, [CLI, "economy-paypal-reconciliation-resolve", item.item_id, "test: the approval lapsed uncaptured"], { env: { ...process.env, FLEET_ADMIN_DATABASE_URL: x.R.pgc.ownerUrl, FLEET_PG_SCHEMA: "fleet" }, encoding: "utf8" }).status).toBe(0);
+      r = x.run(["--check"]);
+      expect(r.code, r.out).toBe(0);
+    });
+
+  });
+
+  describe("an unpaid proof order stays monitored", () => {
+    let x: Rig;
+    beforeAll(async () => { x = await stage1Closed("unpaid"); }, 300_000);
+    afterAll(async () => { await x?.close(); });
+
+    it("an unpaid proof order is never resolved by its expiry: cleanup keeps the holds and the guard; monitor keeps reporting it", async () => {
+      const t = txnId();
+      await receipt(x, { transactionId: t, amountMinor: 100, feeMinor: 0 });
+      expect(x.run(["fund", t]).code).toBe(0);
+      let r = x.run(["publish"]);
+      expect(r.code, r.out).toBe(0);
+      expect((await x.R.econ(x.F, "offer.publish", { offerId: x.offerId, reviewId: x.reviewId })).ok).toBe(true);
+      r = x.run(["publish-verify"]);
+      expect(r.code, r.out).toBe(0);
+      r = x.run(["purchase"], { WAIT_PAY: "2" });
+      expect(r.code, r.out).toBe(3);
+      expect(r.out).toContain("It is NOT resolved by its expiry");
+      r = x.run(["cleanup"]);
+      expect(r.code, r.out).toBe(0);
+      expect(r.out).toContain("holds KEPT");
+      expect(r.out).toContain("CLEANED UP EXCEPT THE PROOF ORDER");
+      expect(fs.existsSync(path.join(x.dir, "guard-on"))).toBe(true);
+      expect(Number((await x.db(`SELECT count(*) AS n FROM fleet.fleet_provider_credit_holds WHERE status = 'open'`))[0].n)).toBe(2);
+      expect((await x.db(`SELECT (SELECT cognition_enabled FROM fleet.fleet_cognition_policy WHERE id = 1) AS cog, (SELECT paused FROM fleet.fleet_founder_cognition WHERE agent_id = $1) AS paused`, [x.F.id]))[0])
+        .toEqual({ cog: false, paused: true });
+      // Its expiry passes and custody closes it: still NOT resolved (a late capture would still be booked) — monitored.
+      const [c] = await x.db(`SELECT checkout_id::text FROM fleet.fleet_customer_orders WHERE owner_proof`);
+      await x.R.q(`ALTER TABLE fleet.fleet_paypal_checkouts DISABLE TRIGGER USER`);
+      await x.R.q(`UPDATE fleet.fleet_paypal_checkouts SET created_at = created_at - interval '73 hours', expires_at = expires_at - interval '73 hours' WHERE checkout_id = $1`, [c.checkout_id]);
+      await x.R.q(`ALTER TABLE fleet.fleet_paypal_checkouts ENABLE TRIGGER USER`);
+      await x.cx("cx_paypal_work", ["custody-executor", 20]);
+      r = x.run(["monitor"]);
+      expect(r.code, r.out).toBe(4);
+      expect(r.out).toContain("cancelled checkout=expired");
+      expect(r.out).toContain("NOT RESOLVED");
     });
   });
 

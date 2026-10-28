@@ -18,6 +18,7 @@
 #                                                 Refused while a real (non-owner) buyer is still owed a delivery or an answer.
 #   bash stage2-proof.sh unexpected              ONLY if a non-owner order appears: the proof stops; the $0.50 reserve is released
 #                                                 for that buyer; Agent-1 is resumed to answer them (delivery is automatic)
+#   bash stage2-proof.sh monitor                 read-only: the proof order's state until definitively resolved (exit 4 while not)
 #   bash stage2-proof.sh guard                   run by the guard timer every minute: re-asserts sales closed + offer held
 #   bash stage2-proof.sh status                  read-only
 #
@@ -27,7 +28,8 @@
 # it is published: the public order route refuses every new order (sales closed AND held). The guard timer re-asserts both.
 # TWO DIFFERENT CLOCKS: the 15-minute window is the OPERATOR's watch window. The checkout itself stays payable server-side for
 # 72 h from its creation (fleet_paypal_checkouts.expires_at default; no owner route shortens it); a payment after the window is
-# still the owner's own proof order — re-run 'purchase' to verify it.
+# still the owner's own proof order — re-run 'purchase' to verify it. Expiry is not resolution: a capture can still be booked after
+# expires_at (an approval before custody's pass closes the checkout, or late evidence), so the proof order is monitored until refunded.
 # Kill switch any time: cli founder-cognition <A1> pause …; cli cognition-disable. No database restore, ever.
 set -uo pipefail
 MODE=${1:---check}
@@ -62,8 +64,16 @@ proof_order() { Q "SELECT order_id FROM fleet_customer_orders WHERE owner_proof 
 paystatus() { Q "SELECT payment_status FROM fleet_customer_orders WHERE order_id = '$1'"; }
 # Non-owner orders made, or paid through an earlier link, since Stage 2 began.
 others() { Q "SELECT count(*) FROM fleet_customer_orders o LEFT JOIN fleet_paypal_checkouts c USING (checkout_id) WHERE NOT o.owner_proof AND (o.created_at > '$SINCE' OR c.captured_at > '$SINCE')"; }
-# Previously issued links: any checkout other than an owner-proof order that can still take a payment (closing sales does not close it).
-payable_other() { Q "SELECT count(*) FROM fleet_paypal_checkouts c LEFT JOIN fleet_customer_orders o USING (checkout_id) WHERE NOT COALESCE(o.owner_proof, false) AND (c.status IN ('approved','capture_pending') OR (c.status IN ('requested','open') AND c.expires_at > now()))"; }
+# Previously issued links. expires_at is NOT proof of safety: a checkout past expires_at stays 'open' until custody's pass closes
+# it (an approval in between is captured), and an expired checkout still books a capture that arrives late. So every checkout
+# other than an owner-proof order counts while its status is not terminal (whatever expires_at says) or a PayPal order of it is
+# live; and any open PayPal reconciliation item (late approval / capture, duplicate, unknown creation) stops the proof too.
+live_other() { Q "SELECT (SELECT count(*) FROM fleet_paypal_checkouts c LEFT JOIN fleet_customer_orders o USING (checkout_id) WHERE NOT COALESCE(o.owner_proof, false) AND (c.status IN ('requested','open','approved','capture_pending') OR EXISTS (SELECT 1 FROM fleet_paypal_provider_orders p WHERE p.checkout_id = c.checkout_id AND p.state IN ('creating','open','approved')))) + (SELECT count(*) FROM fleet_paypal_reconciliation_items WHERE status = 'open')"; }
+# The proof order is RESOLVED only when refunded, its 500p proof return booked once, no PayPal order of it live and no open
+# reconciliation item on it. Unpaid is never resolved by expiry alone: it stays monitored ('monitor'); its PayPal order is
+# watched by custody for 30 days after the checkout closes.
+proof_state() { Q "SELECT o.payment_status||' checkout='||c.status||' expires='||to_char(c.expires_at,'MM-DD HH24:MI')||' paypalOrders='||COALESCE((SELECT string_agg(p.state, ',') FROM fleet_paypal_provider_orders p WHERE p.checkout_id = c.checkout_id),'none')||' recon='||(SELECT count(*) FROM fleet_paypal_reconciliation_items r WHERE r.checkout_id = c.checkout_id AND r.status = 'open')||' returns='||(SELECT count(*) FROM fleet_offer_proof_returns x WHERE x.checkout_id = c.checkout_id) FROM fleet_customer_orders o JOIN fleet_paypal_checkouts c USING (checkout_id) WHERE o.order_id = '$1'"; }
+proof_resolved() { [[ -z "$1" ]] || [[ "$(Q "SELECT o.payment_status = 'refunded' AND (SELECT count(*) FROM fleet_offer_proof_returns x WHERE x.checkout_id = c.checkout_id AND x.kind = 'refund') = 1 AND NOT EXISTS (SELECT 1 FROM fleet_paypal_provider_orders p WHERE p.checkout_id = c.checkout_id AND p.state IN ('creating','open','approved')) AND NOT EXISTS (SELECT 1 FROM fleet_paypal_reconciliation_items r WHERE r.checkout_id = c.checkout_id AND r.status = 'open') FROM fleet_customer_orders o JOIN fleet_paypal_checkouts c USING (checkout_id) WHERE o.order_id = '$1'")" == t ]]; }
 # A real buyer is owed while their paid order has no sent delivery, or their latest message is unanswered.
 owed() { Q "SELECT COALESCE(string_agg(left(o.order_id::text,8)||CASE WHEN o.payment_status = 'paid' AND NOT EXISTS (SELECT 1 FROM fleet_order_deliveries d WHERE d.order_id = o.order_id AND d.status = 'sent') THEN ':delivery' ELSE '' END||CASE WHEN (SELECT author FROM fleet_customer_messages m WHERE m.order_id = o.order_id ORDER BY created_at DESC LIMIT 1) = 'buyer' THEN ':answer' ELSE '' END, ' '),'') FROM fleet_customer_orders o LEFT JOIN fleet_paypal_checkouts c USING (checkout_id) WHERE NOT o.owner_proof AND (o.created_at > '$SINCE' OR c.captured_at > '$SINCE') AND ((o.payment_status = 'paid' AND NOT EXISTS (SELECT 1 FROM fleet_order_deliveries d WHERE d.order_id = o.order_id AND d.status = 'sent')) OR (SELECT author FROM fleet_customer_messages m WHERE m.order_id = o.order_id ORDER BY created_at DESC LIMIT 1) = 'buyer')"; }
 unresolved() { echo "$(Q 'SELECT count(*) FROM fleet_cognition_inflight') $(Q "SELECT count(*) FROM fleet_control_ai_reservations WHERE status IN ('open','unknown')") $(Q "SELECT count(*) FROM fleet_cognition_log WHERE at > '$SINCE' AND NOT (outcome='ok' AND usage_source='provider') AND NOT (outcome='error' AND COALESCE(provider_usd_microcents,0)=0 AND COALESCE(input_tokens,0)=0)")"; }
@@ -82,7 +92,7 @@ base_gates() {  # ${1:-} = allow-others: only 'unexpected' and 'cleanup' run wit
   [[ "$(Q 'SELECT fleet_sales_open()')" == f ]] || stopall "sales are open (Stage 2 never opens them)"
   [[ "$(Q 'SELECT count(*) FROM fleet_refund_authorities a WHERE fleet_refund_authority_live(a)') $(Q 'SELECT count(*) FROM fleet_outward_release WHERE expires_at > now()')" == "0 0" ]] || stopall "a refund authority or outward release is live"
   [[ "${1:-}" == allow-others || "$(others)" == 0 ]] || stopall "a NON-owner order exists: the proof is over — run 'unexpected' (that buyer is served; nothing is refunded automatically)"
-  [[ "${1:-}" == allow-others || "$(payable_other)" == 0 ]] || stopall "a checkout other than the proof order is payable (an earlier link): wait for its expiry, or the agent cancels it"
+  [[ "${1:-}" == allow-others || "$(live_other)" == 0 ]] || stopall "a checkout other than the proof order is live, or a PayPal reconciliation item is open (an earlier link; expiry alone does not clear it): report"
   [[ "$(Q "SELECT verdict||' '||automated_ok||' '||files_digest FROM fleet_artifact_reviews WHERE review_id = '$REVIEW'")" == "pass true $DIGEST" ]] || stopall "review $REVIEW is not pass/automated-ok/$DIGEST"
   [[ "$(Q "SELECT fleet_files_digest(fleet_offer_deliverables('$OFFER'))")" == "$DIGEST" ]] || stopall "the offer's files changed since review $REVIEW"
   [[ "$(Q "SELECT fleet_ledger_verify()->>'ok'")" == true ]] || stopall "ledger verification failed"
@@ -98,7 +108,7 @@ case "$MODE" in
   echo "  treasury: unallocated $(unalloc)p; PayPal $(Q "SELECT (fleet_capital_backing()->'paypal'->>'availableMinor')")p; fee evidence: $(Q "SELECT string_agg(amount_minor||'p→fee '||fee_minor||'p ('||to_char(initiated_at,'MM-DD')||')', ', ' ORDER BY initiated_at) FROM fleet_paypal_transactions WHERE rail_id = '$RAIL' AND event_code = 'T0006'")"
   echo "  Fleet Control: $(Q "SELECT (fleet_control_ai_state()->>'set')||' ceiling '||COALESCE(fleet_control_ai_state()->>'ceilingMinor','-')||'p'") (tier $(Q 'SELECT review_tier FROM fleet_spend_review_policy') = $(Q "SELECT model FROM fleet_cognition_tiers WHERE tier = (SELECT review_tier FROM fleet_spend_review_policy)"))"
   echo "  offer: $(Q "SELECT status||' held='||(held_at IS NOT NULL)||' linked review '||left(review_id::text,8)||' files v'||files_version FROM fleet_offers WHERE offer_id = '$OFFER'"); latest capability check $(Q "SELECT to_char(max(checked_at),'MM-DD HH24:MI') FROM fleet_capability_checks WHERE agent_id = '$A1'") (publish needs one ≤ 7 days old: Agent-1 runs it in the publish turn)"
-  echo "  checkouts payable now (any offer, any order): $(Q "SELECT count(*) FROM fleet_paypal_checkouts WHERE status IN ('requested','open','approved','capture_pending')")"
+  echo "  checkouts not closed (any offer, any order, whatever their expiry): $(Q "SELECT count(*) FROM fleet_paypal_checkouts WHERE status IN ('requested','open','approved','capture_pending')"); live PayPal orders: $(Q "SELECT count(*) FROM fleet_paypal_provider_orders WHERE state IN ('creating','open','approved')"); open reconciliation items: $(Q "SELECT count(*) FROM fleet_paypal_reconciliation_items WHERE status = 'open'")"
   echo "  agents: $(Q "SELECT string_agg(left(a.agent_id,6)||' '||a.status||' paused='||c.paused, ' | ' ORDER BY a.agent_id) FROM fleet_agents a JOIN fleet_founder_cognition c USING (agent_id)"); policy $(policy | cut -d' ' -f1); open owner tasks $(Q 'SELECT count(*) FROM fleet_owner_tasks WHERE closed_at IS NULL')"
   echo "  funding recorded since $SINCE: $(Q "SELECT COALESCE(string_agg(external_ref||' '||kind, ', '),'none') FROM fleet_ledger_journal WHERE kind = 'owner_funding' AND recorded_at > '$SINCE'")"
   [[ -s $PHASES ]] && { echo "  phases so far:"; sed 's/^/    /' $PHASES; }
@@ -174,10 +184,10 @@ purchase)
     ORD=$(proof_order); [[ -n "$ORD" && "$(Q "SELECT owner_proof FROM fleet_customer_orders WHERE order_id = '$ORD'")" == t ]] || stopall "no owner-proof order designated"
     phase "purchase: owner-proof order $ORD designated before payment ($(grep -q '"replay": *true' $R/proof.json && echo 'same order, reused' || echo new))"
     echo "  OWNER: open the order page below, state your country (United Kingdom), consent, pay £5.00 with PayPal:"; grep -o '"page": *"[^"]*"' $R/proof.json | head -1
-    echo "  Operator window: $(( WAIT_PAY / 60 )) minutes from now. The checkout itself stays payable server-side until $(Q "SELECT to_char(c.expires_at,'YYYY-MM-DD HH24:MI\"Z\"') FROM fleet_paypal_checkouts c JOIN fleet_customer_orders o USING (checkout_id) WHERE o.order_id = '$ORD'") (72 h)."
+    echo "  Operator window: $(( WAIT_PAY / 60 )) minutes from now. The checkout itself stays payable server-side until $(Q "SELECT to_char(c.expires_at,'YYYY-MM-DD HH24:MI\"Z\"') FROM fleet_paypal_checkouts c JOIN fleet_customer_orders o USING (checkout_id) WHERE o.order_id = '$ORD'") (72 h) — and a payment approved by then, or captured late, is still booked: it stays monitored until resolved."
     if ! waitfor $WAIT_PAY "[[ \"\$(paystatus $ORD)\" != awaiting_payment ]]"; then
       phase "purchase: window closed unpaid (order $ORD; guard stays armed)"
-      echo "== WINDOW CLOSED $(ts): order $ORD is unpaid. Do NOT pay now. Its checkout stays payable until it expires (see above): to try again, run 'purchase' (same order, new window); if you paid anyway, run 'purchase' — it verifies it."
+      echo "== WINDOW CLOSED $(ts): order $ORD is unpaid ($(proof_state $ORD)). Do NOT pay now. It is NOT resolved by its expiry: it stays monitored ('monitor'). To try again, run 'purchase' (same order, new window); if you paid anyway, run 'purchase' — it verifies it."
       exit 3
     fi
   fi
@@ -229,6 +239,7 @@ refund-verify)
   grep -q " refund: covered" $PHASES 2>/dev/null || stopall "run refund-check first"
   waitfor $WAIT_REFUND "[[ \"\$(paystatus $ORD)\" == refunded ]]" || stopall "refund not observed and booked within 24 h"
   [[ "$(Q "SELECT count(*)||' '||sum(amount_minor) FROM fleet_offer_proof_returns WHERE checkout_id = (SELECT checkout_id FROM fleet_customer_orders WHERE order_id = '$ORD') AND kind = 'refund'")" == "1 $PRICE" ]] || stopall "the proof return is not exactly one ${PRICE}p"
+  proof_resolved "$ORD" || stopall "refund booked but the proof order is not resolved: $(proof_state $ORD)"
   phase "refund: observed ($(Q "SELECT string_agg(DISTINCT source, '+') FROM fleet_paypal_clawback_evidence WHERE checkout_id = (SELECT checkout_id FROM fleet_customer_orders WHERE order_id = '$ORD')")) and booked once; order refunded"
   echo "== REFUND BOOKED $(ts)" ;;
 
@@ -256,14 +267,20 @@ cleanup)
   for t in $(Q "SELECT task_id FROM fleet_owner_tasks WHERE agent_id = '$A1' AND closed_at IS NULL"); do cli founder-task-close $t "stage 2 cleanup (Agent-1 paused first)" > /dev/null; done
   cli cognition-disable > /dev/null; cli economy-fleet-control-ai-budget off "stage 2 complete" > /dev/null
   [[ "$(Q "SELECT held_at IS NOT NULL OR status <> 'published' FROM fleet_offers WHERE offer_id = '$OFFER'")" == t ]] || cli economy-offer-hold $SLUG "stage 2 complete" > /dev/null
-  guard_off
-  if [[ "$(unresolved)" == "0 0 0" ]]; then
+  proof_resolved "$(proof_order)" && guard_off
+  if [[ "$(unresolved)" == "0 0 0" ]] && proof_resolved "$(proof_order)"; then
     for h in $CAP_RUN $RESERVE_RUN; do [[ "$(Q "SELECT count(*) FROM fleet_provider_credit_holds WHERE run_id = '$h' AND status = 'open'")" == 1 ]] && cli economy-engineering-credit-release $h "stage 2 complete; nothing unresolved" > /dev/null; done
     phase "cleanup: holds released (nothing unresolved)"
   else
-    phase "cleanup: holds KEPT — unresolved [inflight fcOpen/unknown cognition] $(unresolved)"
+    phase "cleanup: holds KEPT — unresolved [inflight fcOpen/unknown cognition] $(unresolved); proof order: $(proof_state "$(proof_order)")"
   fi
   phase "cleanup: done"
-  [[ -f $R/stage2-costs.sh ]] && bash $R/stage2-costs.sh; echo "== STAGE 2 CLEANED UP $(ts)" ;;
-*) echo "usage: --check|status|fund <txn>|publish|publish-verify|purchase|message|message-verify|refund-check|refund-verify|unexpected|cleanup|guard"; exit 2 ;;
+  [[ -f $R/stage2-costs.sh ]] && bash $R/stage2-costs.sh
+  if proof_resolved "$(proof_order)"; then echo "== STAGE 2 CLEANED UP $(ts)"; else echo "== STAGE 2 CLEANED UP EXCEPT THE PROOF ORDER $(ts): $(proof_state $(proof_order)) — holds and guard KEPT; monitoring continues ('monitor')"; fi ;;
+
+monitor)  # read-only: the proof order until it is definitively resolved (refunded + returned once + nothing live + no reconciliation)
+  ORD=$(proof_order); [[ -n "$ORD" ]] || { echo "  no proof order"; exit 0; }
+  echo "  proof order $ORD: $(proof_state $ORD); guard $(guard_active)"
+  if proof_resolved "$ORD"; then echo "== RESOLVED $(ts)"; exit 0; else echo "== NOT RESOLVED $(ts) (keep monitoring)"; exit 4; fi ;;
+*) echo "usage: --check|status|fund <txn>|publish|publish-verify|purchase|message|message-verify|refund-check|refund-verify|unexpected|cleanup|monitor|guard"; exit 2 ;;
 esac
