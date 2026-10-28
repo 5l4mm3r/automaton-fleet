@@ -1,0 +1,8 @@
+== Stage 1 retry (resume) 2026-10-28T12:12:13Z
+== 8a. arm the end timer BEFORE the resume (provisional start = now)
+  armed: STARTED_AT 2026-10-28T12:12:15Z, ENDS_AT 2026-10-29T12:12:15Z (end timer next elapse Thu 2026-10-29 12:12:15 UTC; hourly guard active)
+== 8b. resume Agent-1
+== 8c. re-arm at exactly STARTED_AT + 24 h
+  armed: STARTED_AT 2026-10-28T12:12:16Z, ENDS_AT 2026-10-29T12:12:16Z (end timer next elapse Thu 2026-10-29 12:12:16 UTC; hourly guard active)
+== RESUMED 2026-10-28T12:12:17Z: Stage 1 runs until 2026-10-29T12:12:16Z at the latest; hourly guard + 754p/day + 120/h + $15 hold.
+   Success or a blocker seen by this session → pause Agent-1 first, then close the task. Otherwise the timer ends it.

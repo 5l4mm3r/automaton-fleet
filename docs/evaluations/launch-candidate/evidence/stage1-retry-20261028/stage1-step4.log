@@ -1,0 +1,11 @@
+== Stage 1 retry, step 4 (inference on) — apply — 2026-10-28T12:11:30Z
+== gates (read-only)
+== preflight: the CURRENT file (the rollback) and the NEW file
+  both PREFLIGHT PASSED (16 checks each)
+== 4a. policy enabled (prices unchanged; agents paused, so no call can start) 2026-10-28T12:11:34Z
+== 4b. service.env (backup first) 2026-10-28T12:11:35Z
+== 4c. controller restart (bounded: ready within 30 s or automatic rollback) 2026-10-28T12:11:36Z
+  ready after 2 s; controller PID 2240025 → 2254751
+== 4d. founders re-verified (they ride out the outage; heartbeat + challenge) 2026-10-28T12:11:38Z
+== STEP 4 DONE 2026-10-28T12:11:38Z: inference available (provider anthropic, profile cloud_allowed), both founders active and PAUSED, breaker
+   tripped, canary hold kept (exactly $15 free). Rollback: sudo cp -p /etc/automaton-fleet/service.env.pre-stage1-retry-20261028T121135Z /etc/automaton-fleet/service.env; cognition-disable; restart (preflight first).

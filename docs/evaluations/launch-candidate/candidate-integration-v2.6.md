@@ -4830,3 +4830,74 @@ approved.
 | `stage1-retry-inference-on.sh` | `2c2d78cc246c9eaaac31fb3e6db1baade8a300f4268e555df8142e6eefd287e0` |
 | `scripts/fleet-controller-preflight.mjs` | `2c6f6c37ad900b92b1d461996040facfcbfb88fbf27989797fe9e1be5594d628` |
 | `canary-tracker-candidate/Landlord_Compliance_Tracker.xlsx` / `README.txt` | `7793dff2…` / `4494dff2…` |
+
+## Stage 1 retry (28 Oct 12:10–12:36Z): activation SAFE, Agent-1 BLOCKED by a founder packet defect, contained; repair dd29a53 prepared
+
+**Execution:**
+- **Pins** verified at 12:10Z: package `848db128…`, step 4 `2c2d78cc…`, preflight `2c6f6c37…`, xlsx `7793dff2…`,
+  README `4494dff2…`.
+- **`--check`** passed.
+- **Free credit, including in-flight reservations** (the controller's own v119 figure, balance − `fleet_provider_credit_held`):
+  1,500,000,000 µ¢ = $15, 0 in flight.
+- **`prepare`** (12:11:28–12:11:40Z, exit 0):
+  - Agent-1 754p / 120 per hour, paused; Fleet Control 30p/day (unallocated £0, so its reservations wait); the hold verified.
+  - Step 4: both preflights 16/16, policy on, `service.env` installed, live preflight 16/16.
+  - **Restart ready in 2 s** (controller PID 2240025 → 2254751). Both founders re-verified active, same PIDs, 0 restarts, no
+    lifecycle event; controller log `service_started` only.
+  - Canary units installed and dry runs wrote nothing.
+  - Files placed (0600, hashes verified). Task `a11941fe-6a1f-417b-9726-5cdc32b63e62` opened with the corrected text.
+- **`resume`** (12:12:13–12:12:17Z, exit 0):
+  - end timer armed and verified BEFORE the resume;
+  - Agent-1 resumed at **12:12:16Z**;
+  - re-armed at exactly **ENDS_AT 2026-10-29T12:12:16Z**;
+  - hourly guard active.
+  - `systemctl list-timers` showed a "LAST" time for the end timer; the end service never ran (no exec timestamp, no
+    journal entry, no STOPPED marker).
+
+**Blocker:**
+- Agent-1 woke at 12:12:59Z.
+- Every turn, one a minute (12 turns, 12:13:02–12:28:42Z), stopped **inside the founder before any model call**:
+  `FLEET_TASK_PACKET_INVALID: packet too large` (`evidence/stage1-retry-20261028/agent1-mind-log-stops.jsonl`).
+- One `AGENT_CANNOT_THINK` notification at 12:13Z.
+- No paid call, no reservation, no charge.
+
+**Containment (as instructed: an unchanged repeated failure → pause; kill switch):**
+- Agent-1 **paused at 12:29:58Z**.
+- AI policy **disabled at 12:33Z** (`cognition-disable`, no restart).
+- No configuration rollback was needed: the configuration and controller are healthy. No database was touched.
+
+**Root cause (founder runtime, both 7c194b8 and b60e262):** `renderBoundedPacket` called `renderTaskPacket` first, and that
+refuses any packet over `PACKET_LIMITS.totalBytes` (16,000 bytes of JSON) before a single trimming step runs. Measured with
+the release's own `buildTaskPacket` on a root-only temporary copy of Agent-1's memory and workspace (sizes only, then
+deleted):
+- the sections other than the task use about 11,300 bytes after the builder's own trims: facts 6,162, 13 research records
+  3,825, the rest policy, objective and contract;
+- so at most about 4,700 bytes were left for the task;
+- on 20 Oct Agent-1 already needed reduction level 4. Today's essentials (the wake brief, notices 1,852, events 2,208, the
+  owner task 1,232, and the rest) do not fit at any level;
+- the trims that would make it fit (drop older evidence, then facts) were unreachable.
+
+**Repair `dd29a53` (local, not pushed; changes `src/fleet/founder/mind.ts` and its test only):**
+- A packet whose only problem is "packet too large" is now trimmed by the same lowest-value-first steps until it passes both
+  limits. The task is never cut. Any other packet problem (secret-shaped text, a forbidden key) still refuses at once.
+- **Tests:** `fleet-r23-cognition` **24/24**. The new case reproduces the production error with the old function (fails:
+  `FLEET_TASK_PACKET_INVALID: packet too large`) and passes with the fix. Typecheck shows no errors in the changed files.
+- **On the copy of Agent-1's real state**, the fixed logic fits tasks of 6,000 to 12,000 characters (evidence trimmed to 4,
+  facts given way at the last level). Before, only about 4,700 bytes fitted.
+- **Deploying it needs a new release** (c448d98 plus this fix; schema 122 unchanged) and `upgrade-runtime` for Agent-1. That
+  is a production artifact, so it is presented for approval, not deployed. The founder-upgrade rehearsal from 7c194b8 is now
+  necessary (section 6 above).
+
+**State at 12:36Z (`evidence/stage1-retry-20261028/final-status.txt`):**
+- Both agents `active`, heartbeats current, both **paused**, runtimes 7c194b8 / b60e262, founder PIDs unchanged, no lifecycle
+  event since the resume.
+- Policy **off** (`service.env` provider `anthropic`, profile `cloud_allowed`).
+- Agent-1 model turns **0**, Agent-2 0, in flight 0; provider credit events 0; journals since the resume 0.
+- Ledger **1182** verifies; unallocated 0, owner payable 1,081, Agent-1 cash 8,943.
+- Credit 11,523,033,480 µ¢, held 10,023,033,480 (`canary-agent1-ceiling` open), **free 1,500,000,000**.
+- Fleet Control 30p, spent 0, no reservations.
+- Breaker tripped; sales closed; outward releases 0; refund authorities 0.
+- Offer `d7063a0a` unchanged: status paused, files v5, the same two files, published 18 Oct as before, no new review.
+- Task **open**; files in `from-owner/tracker-v6/`.
+- Timers: hourly guard (next 13:00Z); **end 2026-10-29T12:12:16Z**, which runs the safe stop (pause, offer hold, sales
+  closed, Fleet Control off, and the hold released only if no reservation is open).

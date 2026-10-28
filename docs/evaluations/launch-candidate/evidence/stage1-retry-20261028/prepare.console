@@ -1,0 +1,24 @@
+== Stage 1 retry (prepare) 2026-10-28T12:11:28Z
+== 1. Agent-1 120 calls/h (paused)
+  754 120 paused=true enabled=true
+== 2. Fleet Control 30p/day (unfunded treasury: its reservations wait)
+== 3. ceiling hold: already in place (exactly $15 free, verified by SQL: 1500000000 µ¢)
+== 4. inference on (pinned step-4 script: preflights, bounded restart, automatic CONFIGURATION rollback)
+== Stage 1 retry, step 4 (inference on) — apply — 2026-10-28T12:11:30Z
+== gates (read-only)
+== preflight: the CURRENT file (the rollback) and the NEW file
+  both PREFLIGHT PASSED (16 checks each)
+== 4a. policy enabled (prices unchanged; agents paused, so no call can start) 2026-10-28T12:11:34Z
+== 4b. service.env (backup first) 2026-10-28T12:11:35Z
+== 4c. controller restart (bounded: ready within 30 s or automatic rollback) 2026-10-28T12:11:36Z
+  ready after 2 s; controller PID 2240025 → 2254751
+== 4d. founders re-verified (they ride out the outage; heartbeat + challenge) 2026-10-28T12:11:38Z
+== STEP 4 DONE 2026-10-28T12:11:38Z: inference available (provider anthropic, profile cloud_allowed), both founders active and PAUSED, breaker
+== 5. guard: canary.conf (provisional times; fixed at resume) + the four release units (timers NOT enabled yet)
+{"at":"2026-10-28T12:11:39Z","canary":"agent1-c1","mode":"check","dryRun":true,"measures":{"ledgerOk" : true, "agentChargedMinor" : 0, "agentUsageMicro" : 0, "creditConsumedUsdMicro" : 0, "repeatedDel
+{"at":"2026-10-28T12:11:39Z","canary":"agent1-c1","mode":"end","dryRun":true,"measures":{"ledgerOk" : true, "agentChargedMinor" : 0, "agentUsageMicro" : 0, "creditConsumedUsdMicro" : 0, "repeatedDeliv
+DRY-RUN would run: fleet:admin economy-engineering-credit-release canary-agent1-ceiling canary agent1-c1 ended; no reservation open
+== 6. files → /var/lib/private/automaton-founders/01M3F50SH7PNX2E3GST13J52AS/workspace/ws_01M3F50SH8BHKVHZP1291FN09K/from-owner/tracker-v6 (owner fnd-01M3F50SH7PNX2E3GST13J52AS, 0600; hashes verified)
+== 7. owner task (shown in Agent-1's working turns; Agent-1 is paused, so nothing runs yet)
+  task a11941fe-6a1f-417b-9726-5cdc32b63e62
+== PREPARED 2026-10-28T12:11:40Z: inference on, Agent-1 PAUSED, task open, files placed, guard installed (timers not enabled). Next: 'resume'.

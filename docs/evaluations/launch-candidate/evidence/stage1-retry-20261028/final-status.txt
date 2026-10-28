@@ -1,0 +1,15 @@
+== 2026-10-28T12:36:42Z
+agents: 01M3F5 active hb 12:36:16 paused=true 7c194b8 | 01M4C4 active hb 12:36:34 paused=true b60e262 units 2241482/2241491 ctl 2254751
+lifecycle events since start: none
+turns A1: 0 rows, outcomes -, tiers -, in 0 out 0 cacheR 0, usd_micro 0, promo_usd_micro 0, charged_micro 0, charged_cents 0, last -
+turns A2 since start: 0; inflight 0 (0c)
+credit: balance 11523033480 held 10023033480 free 1500000000; hold open 10023033480
+fleet control: ceiling 30 spent 0 inflight 0 reservations none
+offer: paused files_v5 held=false published_at=10-18 19:13 review=d06474be-d05b-4fec-83e2-5428874b24d0 sales_open f
+offer files: Landlord_Compliance_Tracker.xlsx:f45c3d00, README.txt:4494dff2
+reviews since start: none
+blockers since start: demands none; owner requests none
+task: open
+ledger 1182 verify true unallocated 0 owner_payable 1081 A1cash 8943 breaker t outward 0 refund_auth 0
+agent events since start: session_opened=2, founder_cognition_enabled=1, founder_cognition_paused=1, notification=1
+guard: canary.conf  next check Wed 2026-10-28 13:00:00 UTC; end Thu 2026-10-29 12:12:16 UTC
