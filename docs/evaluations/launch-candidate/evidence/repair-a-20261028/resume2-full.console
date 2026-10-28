@@ -1,0 +1,9 @@
+== repair A steps 6–7 (resume) 2026-10-28T13:39:53Z
+== policy on (prices unchanged)
+== stage1-retry.sh resume (fresh 24 h from the actual resume; the previous deadline replaced and verified before)
+== Stage 1 retry (resume) 2026-10-28T13:39:55Z
+!! not c448d98 on schema 122
+== STAGE 1 RETRY STOPPED (resume) 2026-10-28T13:39:55Z: Agent-1 754 120 paused=true enabled=true; policy enabled=t; no database was restored
+!! stage1-retry.sh resume failed
+  policy disabled
+== STOPPED (resume) 2026-10-28T13:39:56Z: Agent-1 active dd29a53 754 120 paused=true; Agent-2 active b60e262 3000 60 paused=true pid 2241491; no database restored

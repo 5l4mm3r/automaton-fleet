@@ -1,0 +1,20 @@
+controller preflight — release /opt/automaton-fleet/releases/dd29a53ee724657748a93c018734003466ff35fb (dist)
+  service.env /etc/automaton-fleet/service.env sha256 4d4632fd878c19bbd5964ea81cb221c73ad6e8551617149f33ed3c307f03770a
+  runtime.env /etc/automaton-fleet/runtime.env sha256 2a059634922f839afe2f9ebf85322840aba246f4faa37837b4434bcd9a5553bc
+PASS service user exists — automaton-fleet-service uid 999
+PASS credential sources (LoadCredential) — service.env, tls.crt, tls.key
+PASS environment loads (release loadServiceEnv)
+PASS service user
+PASS no admin credential in the service env
+PASS database URLs (service and restricted agent role)
+PASS TLS (certificate, key, hostname, expiry) — remote on
+PASS listen addresses — 127.0.0.1:8787
+PASS runtime release pins — dd29a53 build c9035c92c570
+PASS inference profile and cognition provider — profile cloud_allowed, provider AnthropicProvider
+PASS research fetcher
+PASS registry health (service role) — schema 122
+PASS service role is restricted — fleet_service_login
+PASS agent role is restricted
+PASS database privileges
+PASS runtime pins match the registry's approved runtime — approved dd29a53
+PREFLIGHT PASSED (16 checks)

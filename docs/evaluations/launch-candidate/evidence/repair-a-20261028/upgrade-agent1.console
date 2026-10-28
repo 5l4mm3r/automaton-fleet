@@ -1,0 +1,51 @@
+== repair A steps 6–7 (upgrade) 2026-10-28T13:39:29Z
+  before: agent=01M3F50SH7PNX2E3GST13J52AS 2026-09-26 15:23:26.111519+00 dd017a31003a281c3337ba532c3f6017 active
+  before: credential=4297d562f4d98083 revoked=false
+  before: memory=56fbc538ed518a0f workspace=bb81969372062838
+  before: files=d8a8beb418409def f25654bace32d607 
+== upgrade-preflight (changes nothing)
+0Z",
+      "detail": "from 7c194b8 to dd29a53; 1089 state files"
+    }
+  ],
+  "state": {},
+  "ledger": {},
+  "process": {
+    "before": {
+      "pid": 2241482,
+      "uid": 65037,
+      "instanceId": "PBcFx-w_oBVq7Iy-DFBxES2B"
+    }
+  },
+  "backupDir": null,
+  "downtimeMs": null,
+  "record": null
+}
+
+== upgrade-runtime Agent-1 → dd29a53 (OWNER GATE, approved)
+crocents": 995120
+    },
+    "stateSha256Before": "65ffd1d828214917e23a9d8b93d2ddc3c0c6d113701ddada3a17ed513a2d1bf1"
+  },
+  "health": {
+    "ok": true,
+    "pid": 2270377,
+    "uid": 65037,
+    "instanceId": "FabXcMi56x_ZIFaxTECgoPJF",
+    "commit": "dd29a53ee724657748a93c018734003466ff35fb",
+    "buildId": "c9035c92c5707f442e072e0b9a0d4d4104a5d557d8c6b50ff5aab8a8d6a04002",
+    "lockfileSha256": "1df54e3526cb39c847d18fec14f1d4e3595557e34d94040c5b774f9b2f2a21c1",
+    "heartbeatAfter": true,
+    "challengesPassed": 1,
+    "challengesFailed": 0,
+    "status": "active",
+    "waitedMs": 1420
+  }
+}
+
+== preservation proof
+  identity, credential, memory, workspace, identity files: IDENTICAL
+  new process 2270377 (was 2241482)
+  latest challenge: passed at 13:39:36
+  Agent-2 unchanged: active b60e262 3000 60 paused=true pid 2241491
+== UPGRADED 2026-10-28T13:39:37Z: Agent-1 on dd29a53, same identity, paused. Next: resume.

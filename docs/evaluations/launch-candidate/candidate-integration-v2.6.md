@@ -4901,3 +4901,59 @@ deleted):
 - Task **open**; files in `from-owner/tracker-v6/`.
 - Timers: hourly guard (next 13:00Z); **end 2026-10-29T12:12:16Z**, which runs the safe stop (pause, offer hold, sales
   closed, Fleet Control off, and the hold released only if no reservation is open).
+
+## Repair A (28 Oct 12:55–13:40Z): dd29a53 INSTALLED, Agent-1 UPGRADED with identity preserved; resume STOPPED at a stale package pin (needs approval)
+
+**Commits:**
+- `dd29a53ee724657748a93c018734003466ff35fb`: code. The only runtime source change since c448d98 is `src/fleet/founder/mind.ts`
+  `renderBoundedPacket`, plus its test.
+- `fef13a76e7eda6f1536150d9170eaeeba0e9d588`: record.
+- Both pushed `152d14f..fef13a7`, no force. The secret scan's only hits are the preflight test's placeholders.
+
+**Build and rehearsals:**
+
+| Step | Result |
+|---|---|
+| Build (VPS, two passes) | **build `c9035c92c5707f442e072e0b9a0d4d4104a5d557d8c6b50ff5aab8a8d6a04002`**, lockfile `1df54e35…` (unchanged); `~/rlc140/pins.txt` |
+| Side-install | `/opt/automaton-fleet/releases/dd29a53…`, identity re-verified; `current` stayed c448d98 |
+| Data rehearsal `fleet-rollout.sh rehearse 122 → 122` | **PASSED** 13:08:45Z; reconciliation OK (1,123 journals; 2,769 events preserved); the rollback dump restores 122 with the same head |
+| Services rehearsal `fleet-upgrade-rehearsal.sh 122 → 122` | **PASSED** 13:09:32Z. Code-only rollback = re-approve c448d98, **no database restore**, every candidate-era write preserved; c448d98 ready on the unrestored data; the dump restore kept for the disaster path only |
+| Founder upgrade rehearsal `upgrade-rehearsal 7c194b8` (synthetic founder, throwaway registry, fake provider) | **PASSED 27/27**: preflight changes nothing; unapproved build refused; mis-pinned target fails closed and rolls back; upgrade, rollback, re-upgrade with nothing lost; 0 failed challenges; routed cognition |
+| Revision rehearsal | **PASSED 19/19** |
+| Offline packet construction, candidate's compiled code, root-only copy of Agent-1's state + its real attention (`packet-check.log`) | owner task (1 line, 1,358 chars), 3 notices, events and upgrade line, plus 0–6,000 chars of extra essentials: **every packet that fits carries the task byte-identical and every owner-task line verbatim**; secret-shaped text, a forbidden key, and secret + oversize all **still refused**; the copied memory and workspace trees are **unchanged** by build and trim |
+
+**Install** (`install-dd29a53.sh`, `f46631f8…`):
+- `--check` passed: the live configuration with the candidate's validators passed 15 of 16 checks. The 16th was the expected
+  "registry still approves c448d98", which the cutover itself resolves.
+- Backup `baseline-pre-install-dd29a53-20261028T133707Z` (5,486 entries).
+- `fleet-release.sh` **DEPLOYED** 13:39:08Z.
+- **Controller-side outage 13:38:13–13:39:00Z (47 s).** Founders: same processes, both active and paused throughout, no
+  lifecycle event.
+- Ledger 1182 unchanged and verifies; containment unchanged; the installed release passes the preflight.
+- No automatic restore (`FLEET_ROLLOUT_AUTO_RESTORE` unset).
+
+**Agent-1 runtime upgrade** (`upgrade-agent1-resume.sh upgrade`, `f6e95401…`; the release's `upgrade-preflight`, then
+`upgrade-runtime`):
+- Agent-1 moved 7c194b8 → **dd29a53** (build `c9035c92…`). New process 2270377 (was 2241482). Heartbeat, then 1 challenge
+  passed in 1.4 s; status `active`; still paused.
+- **Preservation proven (hashes, before = after):**
+  - agent id, creation time and wallet hash;
+  - credential `4297d562…`, not revoked;
+  - **memory tree `56fbc538ed518a0f`**, **workspace tree `bb81969372062838`**;
+  - `founder.json` `d8a8beb4…`, `fleet-credentials.json` `f25654ba…`.
+- **Agent-2 unchanged:** b60e262, PID 2241491, paused, 3,000p / 60 per hour.
+
+**Resume: STOPPED at a gate, safely (13:39:55Z).**
+- The policy was enabled with its read-back correct. Then the pinned `stage1-retry.sh` (`848db128…`) refused: "not c448d98 on
+  schema 122".
+- Its gate hardcodes `C=c448d98…`, which the approved install has now replaced. **The script disabled the policy again;
+  Agent-1 stayed paused.** Nothing else changed.
+- The old deadline (29 Oct 12:12:16Z) and the hourly guard remain armed.
+- **Proposed correction (needs approval; not run):**
+  - **`stage1-retry-dd29a53.sh` = `ac1a28c8f6bdfd5e13bf25f362bcfac90262c4f585baf961c41f942c03bd706f`.** Its diff from the
+    approved package is line 19 only (`C=` → dd29a53). Its read-only common gates pass.
+  - **`upgrade-agent1-resume-v2.sh` = `6f82c3fc86fea5210cace9f188d9a6f62589d462f5d7452407623e69e46d7f56`.** Its diff is line
+    12 only (pointing at the corrected package). `--check` passed.
+  - In `resume` mode the pin is used only in that one gate.
+
+Evidence: `evidence/repair-a-20261028/`.

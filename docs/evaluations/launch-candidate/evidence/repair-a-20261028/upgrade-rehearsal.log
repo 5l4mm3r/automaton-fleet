@@ -1,0 +1,16 @@
+== upgrade rehearsal dd29a53 (schema 122 -> 122), rollback to c448d98, start 2026-10-28T13:08:57Z
+throwaway copy restored: schema 122, ledger head 1182 08881fec3c34386f723…, logins: fleet_agent_login fleet_dashboard_login fleet_operator_login fleet_service_login 
+{"ok":true,"latencyMs":4,"schemaVersion":122,"countersConsistent":true}
+1. copy migrated to 122; candidate dd29a53 approved in the THROWAWAY registry; ledger head unchanged
+2. code-only release (schema 122 unchanged; the previous release on the candidate-approved copy: refused) — rollback restores the pre-release dump and the previous release (as rehearsed below)
+3a. candidate controller ready on schema 122: {"ok":true,"checks":{"database":true,"agentApi":true,"runtimeRelease":true,"reaper":true,"sandboxTermination":true,"privileges":true}}
+3b. candidate Operator API ready on schema 122 (readyz 200)
+3c. candidate dashboard ready on schema 122: login 200, preview 404, read without session 401, call without session 401
+3d. v42 projects read (the dashboard 'projects' op): {"projects":0,"summary":{"note":"Internal payments move value between agents; they are never Fleet revenue.","active":0,"planning":0,"cancelled":0,"completed":0,"escrowMinor":0,"agentsCollaborating":0,"internalPaymentsMinor":0,"plannedTimeSavedHours":0}}
+3f. Fleet Command read on the copy: {"rows": 197, "rawEvents": 2784, "housekeeping": 0, "nonOperational": 0} (only P0–P3; no housekeeping; the raw history is untouched)
+3g. Fleet history on the copy: {"feed": 197, "copies": 0, "events": 2784, "history": 384, "diagnostics": 196, "temporary7d": 2204, "notifications": 30, "hiddenPermanent": 0, "duePastRetention": 12}; retention pass {"mailCleared": 0, "eventsExpired": 12, "mailFreedBytes": 0, "suppressionExpired": 0} (none past 7 days left), no event written
+3e. ledger verify ok, head unchanged, no reservation or birth while the candidate services ran
+4. code-only rollback on the copy: previous runtime c448d98 re-approved, database NOT restored; reconciliation OK — every candidate-era write preserved (ledger head 1182, events through #11570)
+5. previous release c448d98: controller ready and dashboard ready on the same, unrestored schema 122 data
+6. (disaster path only) the verified pre-release dump still restores schema 122 with the pre-release ledger head
+== UPGRADE REHEARSAL PASSED 2026-10-28T13:09:32Z — production untouched (PIDs 2254751  2240049  2240053 , schema 122)

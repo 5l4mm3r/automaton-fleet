@@ -1,0 +1,20 @@
+== install dd29a53 (apply) — release c448d98 -> dd29a53, schema 122 unchanged, UI 0.27.0 reused — 2026-10-28T13:37:04Z
+== 0. gates
+== startup preflight: the LIVE configuration with the CANDIDATE's validators (and pins as they will be)
+  15 checks passed; expected before the cutover: registry still approves c448d98
+== 1. backup
+stamp 20261028T133707Z /opt/automaton-fleet/releases/c448d98a1c32c63af89288758240fc5787f9f9d6
+dump 02567e141138ed2c toc 5486 lines; size 16M
+  backup /home/ubuntu/rlc139/baseline-pre-install-dd29a53-20261028T133707Z (5486 entries; kept, never restored by this script)
+  -- 2026-10-28T13:37:10Z: current c448d98; schema 122; 01M3F50SH7PNX2E3GST13J52AS active paused=true 7c194b8 | 01M4C4NXT786Q4E9725N5A15KV active paused=true b60e262; ctl PID 2254751; ledger 1182 verify true; contained yes
+== 2. release c448d98 -> dd29a53 (2026-10-28T13:37:11Z)
+OUTAGE START 2026-10-28T13:38:13Z
+reconciliation: OK (/home/ubuntu/rollout-dd29a53-cutover-reconcile.json: events 2765 before, purged {}, preserved 2765)
+OUTAGE END 2026-10-28T13:39:00Z
+== ROLLOUT dd29a53 DEPLOYED 2026-10-28T13:39:08Z: schema 122, readyz 200
+== RELEASE dd29a53 DEPLOYED 2026-10-28T13:39:08Z: schema 122, root UI 0.27.0 (production_deployed recorded)
+  release done in 117 s
+== 3. verification (2026-10-28T13:39:08Z)
+  -- 2026-10-28T13:39:11Z: current dd29a53; schema 122; 01M3F50SH7PNX2E3GST13J52AS active paused=true 7c194b8 | 01M4C4NXT786Q4E9725N5A15KV active paused=true b60e262; ctl PID 2269119; ledger 1182 verify true; contained yes
+== INSTALL COMPLETE 2026-10-28T13:39:11Z: dd29a53 (build c9035c92c570) on schema 122; both founders active and PAUSED on 7c194b8 / b60e262 (same processes);
+   policy off; containment unchanged; ledger unchanged. Next: fleet-founders.sh upgrade-runtime 01M3F50SH7PNX2E3GST13J52AS (Agent-1 only).
