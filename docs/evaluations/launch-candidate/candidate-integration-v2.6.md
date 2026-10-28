@@ -4391,3 +4391,53 @@ staged as `~/rlc139/recover.sh`; run with `bash ~/rlc139/recover.sh` **only afte
   (operator key R4), funding, the R3 inference-profile preflight, any founder runtime change, the hold extension.
 - **After recovery** (separate, when you decide): the founder upgrade and revision rehearsals become runnable. Stage 1
   re-planning needs `FLEET_INFERENCE_PROFILE` (R3), which is still absent from `service.env`, and the operator key (R4).
+
+## Group B, 28 Oct 10:48–10:57Z: installation STOPPED at its own gate (script defect); production unchanged; recovery not reached
+
+Owner approval (28 Oct): install `install.sh` = `a788fd7d…`, then — only after it verifies — `recover.sh` = `454ec43e…`, with
+preconditions: the watcher survives SSH/session loss, its failure handling applies the fallback if a unit fails or
+verification times out, and the fallback commands work through the owner CLI without the expired operator bridge. Push of
+cebfbf5 (no force) approved after checking its contents.
+
+| Item | Result |
+|---|---|
+| Hashes on the VPS | install.sh `a788fd7d…`, recover.sh `454ec43e…`: both matched |
+| Push cebfbf5 | contents checked (the record, both scripts, the start-while-dead test addition plus one whitespace change `const r =(`; secret scan clean); `c448d98..cebfbf5` fast-forward, no force |
+| **Installation (a788fd7d)** | **refused at gate line 80, `UISHA: unbound variable`, exit 1, before the backup and before `fleet-release.sh`.** Cause: on line 25 the `UISHA=` assignment sat after the `#` of a comment. The read-only gate dry-run of 27 Oct used a separate script (`gate-dryrun.sh`) that defined its own values, so it did not exercise this line. Production after: release 1116576, schema 121, nothing written. |
+| Corrected installer | `install-c448d98.sh` = **`0a94b3d302a71eceeaf24526ae24c9955588d4c039672bc07087e596a14842b3`**. The only change is that `UISHA=…` now comes before the comment. A scan of both scripts finds no variable used without an assignment (it would have caught this one). Its step-0 gates ran for real against production (gates-only copy cut before the backup, snapshot files in a temp directory): **ALL STEP-0 GATES PASSED** at 10:56:22Z. Staged as `~/rlc139/install.sh`; the failed one is kept as `install-a788fd7d-failed-gate.sh` (+ .log/.console/.exit). **Not run: the hash differs from the approved one.** |
+| Founder upgrade/revision rehearsals | stay recorded as NOT RUN (the guard refused); exception accepted by the owner; guard not bypassed |
+
+Recovery preconditions (checked before any reinstatement; recovery itself not reached):
+
+- **Survives SSH loss:** the launch is `setsid nohup … < /dev/null` (own session, no tty). logind `KillUserProcesses` is at the
+  default (no). Test: a detached process outlived its SSH session being cut server-side (its sshd killed; the client got
+  "closed by remote host"), and finished; `sudo -v` and `sudo systemctl` worked without a tty (NOPASSWD). Founder units are
+  `Type=exec` (the start returns at exec; TimeoutStartSec 90 s).
+- **Fallback through the owner CLI, no operator bridge:** the CLI's set-timeouts / lifecycle-policy go straight to PostgreSQL with
+  `FLEET_ADMIN_DATABASE_URL` from `/etc/automaton-fleet/admin.env` (root:automaton-fleet-admin 0640; ubuntu is in the group),
+  actor `operator:ubuntu`; no Operator API, no operator key. Read-only on production: `lifecycle-policy` (no arguments) prints
+  the policy as ubuntu. Executed on a disposable copy (`fleet_fallback_check`, the v121 rollout dump migrated to 122 by the c448d98
+  dist CLI) with the production admin credential, only the database name changed: `set-timeouts dead=86400` rc 0 and
+  `lifecycle-policy terminationGrace=86400` rc 0 → `120 86400 86400 300` (exactly what recover.sh step 4 checks); events
+  `timeouts_set` and `lifecycle_policy_set` by `operator:ubuntu`; the restore path → `120 600 480 300`. The copy was dropped,
+  production unchanged.
+- **Failure handling:** recover.sh breaks its watch loop when either unit's ActiveState is `failed` (exit 3 is never restarted)
+  or at 900 s (a unit crash-looping with another exit code is `activating`, so it reaches the 900 s branch), then applies the
+  fallback and stops the failing unit(s). **Gap found:** if `founder-reinstate` succeeds but one of the seven checks after it
+  fails, `die()` exits before the units start and without the fallback, and the agents would die about 70 minutes later unless
+  someone acted. The pinned script is not changed. Instead, **`recover-run-c448d98.sh`
+  (`f6a8d7e13918588ccdade37a857ca1886d19095c7bd5dd8a3b99717d81126a12`)** is the detached launcher. It checks recover.sh's hash,
+  runs it, and if it ends other than 0 (COMPLETE) or 3 (CONTAINED) while an agent is reinstated but not active, it applies the
+  same two owner-authorised timing commands. It never reinstates, starts, stops or posts anything. Tested on a disposable copy
+  (`fleet_guard_check`) with a stub that ran the release's `founder-reinstate` and then exited 1: both agents were unresponsive
+  with holds, the supervisor applied `120 86400 86400 300`, and production was unchanged.
+- Gates of recover.sh that can be read now all hold: registry = both dead; the two `agent_died` health_timeout events
+  (ids 11469, 11472); no `agent_reinstated`; both state directories present; J1179 correct; cap `2 0`; evidence verifies;
+  `node`/`curl` on PATH.
+- Side observation: `fleet_events` is 2810 (3018 on 27 Oct). The daily `svc_event_retention` at 07:00Z expired 208 temporary
+  events older than 7 days (only types with a retention period). Every incident event (11458–11481) is present; permanent
+  events never expire.
+
+**Proposed launch (on approval of `0a94b3d3…`):** `setsid nohup bash -c 'bash ~/rlc139/install.sh; echo EXIT=$? > ~/rlc139/install.exit' < /dev/null > ~/rlc139/install.console 2>&1 &`,
+then, only on `INSTALL COMPLETE` with EXIT=0, `setsid nohup bash ~/rlc139/recover-run.sh < /dev/null > /dev/null 2>&1 &`
+(logs: recover-guard.log, recover.console, recover.log, recover-evidence/). Rehearsal deadline 28 Oct 22:45Z.

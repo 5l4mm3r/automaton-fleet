@@ -22,7 +22,7 @@ A1=01M3F50SH7PNX2E3GST13J52AS; A2=01M4C4NXT786Q4E9725N5A15KV
 C=c448d98a1c32c63af89288758240fc5787f9f9d6; BUILD=48c0015ed443e23e835eed697ff5bc01275509d23fd13783a21f2422ad7c5725
 LOCK=1df54e3526cb39c847d18fec14f1d4e3595557e34d94040c5b774f9b2f2a21c1
 PREV=1116576f3663a9f2289422b226b7e12232ff57ee; A1_RT=7c194b8c2348baa8fa5d34bd7ef6b201dc4911c2; A2_RT=b60e262bf7393e0ea2cca3b491199987f830cb3b
-UI=0.27.0; UITGZ=~/rlc138/ui-0.27.0-1116576.tgz;   # the UI served now (reused, not switched); UISHA=bccb6e667859dcaa270477e9f00328c61e8c8aeeb089e2f95f24922de8ff2558
+UI=0.27.0; UITGZ=~/rlc138/ui-0.27.0-1116576.tgz; UISHA=bccb6e667859dcaa270477e9f00328c61e8c8aeeb089e2f95f24922de8ff2558   # the UI served now (reused, not switched)
 REL=/opt/automaton-fleet/releases/$C
 ts() { date -u +%FT%TZ; }
 Q() { sudo -n -u postgres psql -X -q -At -d automaton_fleet -c "SET default_transaction_read_only=on; SET search_path=fleet; $1"; }
