@@ -5086,3 +5086,43 @@ content. It now binds to content: text, tool inputs, tool-result content includi
 - used across all attempts **$4.56656**; remaining of the $15 total **$10.43344**, equal to the controller's free figure;
   0 in flight;
 - deadline unchanged: end timer **2026-10-29T13:44:01Z**.
+
+## e0dc223 checks (28 Oct 14:36–15:22Z): build, rehearsals and replay PASSED; the real-provider probe FAILED at call 1 on its own configuration — stopped before install
+
+Pushed `1838f80..212078b` (41d9ebf, e0dc223, 212078b; scope as described; scan clean).
+
+| Check | Result |
+|---|---|
+| Build (two passes) | **e0dc223, build `54dd29fd82b56e2b62fbcdb5b8e44a270d7f46ae3088e6fbb064ee506334cb73`**, lockfile `1df54e35…`; side-installed, `current` stays dd29a53 |
+| Data rehearsal 122 → 122 | PASSED 14:40:03Z (required by the cutover tool) |
+| Services rehearsal 122 → 122 | PASSED 14:40:39Z (code-only rollback = re-approve dd29a53, no restore) |
+| **Founder upgrade rehearsal dd29a53 → e0dc223** (candidate code; only dd29a53 and e0dc223 appear in its log) | **PASSED 27/27** |
+| **Revision rehearsal on e0dc223** | **PASSED 19/19** |
+| Offline packet check (e0dc223 build, copy of Agent-1's state) | identical to dd29a53: task and owner task verbatim in every packet that fits; secret, forbidden-key and secret + oversize refused; memory and workspace unchanged |
+| Recorded-sequence replay **through the built code** | **dd29a53: 3 replays after a changed prefix (turns 4, 7, 10, final requests = the three rejections); e0dc223: 0** of 85 requests |
+| **Real-Anthropic probe** (`probe-e0dc223.mjs`, cost meter with a pre-call ceiling of exactly $0.25, run `probe-e0dc223`) | **FAILED at call 1:** `invalid_request_error: "thinking.type.enabled" is not supported for this model` (req_011CgUs3NLTzyTGSJFe5HKTe). The probe forced a fixed thinking budget to guarantee signed thinking; Opus 5.5 accepts adaptive only (production T3 uses adaptive). No output, **charge none**. **Stopped as instructed: no rerun, no install, no upgrade** |
+
+**Probe accounting:**
+- engineering hold `probe-e0dc223` $0.25 placed before the run and released after;
+- 1 call imported into `fleet_engineering_cognition_calls`, $0.00 (worst case reserved 4,976,916 all-in µ¢, not charged).
+
+**Allowance, reconciled after the probe:** used **$4.56656** since the first resume (all attempts), left **$10.43344**, equal to
+the controller's free figure. Policy off; both agents paused, healthy, on dd29a53 / b60e262; deadline 2026-10-29T13:44:01Z
+unchanged.
+
+**CORRECTION to the dd29a53 record ("Repair A"):**
+- `scripts/fleet-founders.sh` always runs the **pinned** release (`/opt/automaton-fleet/current`).
+- The founder upgrade rehearsal recorded there as "7c194b8 → dd29a53, 27/27" actually exercised **7c194b8 → c448d98**, and
+  the revision rehearsal recorded as dd29a53's ran **c448d98**. (This morning's revision run, 19/19, ran dd29a53.)
+- dd29a53's founder runtime code was therefore not rehearsed in a throwaway registry before Agent-1's upgrade. In production
+  that upgrade preserved identity, credential, memory and workspace, and 85 live calls ran without a packet refusal.
+- The e0dc223 rehearsals above were run from the candidate's own code with a root-only runtime env pinning e0dc223
+  (`FLEET_RUNTIME_ENV_FILE`, the tool's own input; production's `runtime.env` untouched); their logs show only the intended
+  commits.
+
+**Prepared, not run** (mechanical pins and paths from the approved dd29a53 scripts; verified diffs):
+- `install-e0dc223.sh`: pins, paths and labels only, 14 diff lines.
+- `upgrade-agent1-continue.sh`: as v2, plus the approved continuation terms:
+  - the preserved deadline is verified, not re-armed;
+  - the $15 total is reconciled from consumption events;
+  - a $2 cap hold makes the controller's free credit exactly $2 before any call or reservation.

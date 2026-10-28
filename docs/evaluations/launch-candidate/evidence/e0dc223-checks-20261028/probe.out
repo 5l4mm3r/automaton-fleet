@@ -1,0 +1,17 @@
+{
+ "runId": "probe-e0dc223",
+ "calls": [
+  {
+   "call": 1,
+   "ok": false,
+   "sent": "0:user[text]",
+   "code": "PROVIDER_BAD_REQUEST",
+   "detail": "invalid_request_error: \"thinking.type.enabled\" is not supported for this model.",
+   "providerRequestId": "req_011CgUs3NLTzyTGSJFe5HKTe",
+   "usage": null
+  }
+ ],
+ "spentAllInMicro": "0",
+ "usdCeilingMicro": "25000000",
+ "verdict": "FAIL: a request was refused"
+}

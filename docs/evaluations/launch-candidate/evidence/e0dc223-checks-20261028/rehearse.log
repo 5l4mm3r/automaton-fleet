@@ -1,0 +1,27 @@
+== rollout rehearse e0dc223 (schema 122 -> 122) from dd29a53 start 2026-10-28T14:39:31Z
+Note: switching to 'dd29a53ee724657748a93c018734003466ff35fb'.
+
+You are in 'detached HEAD' state. You can look around, make experimental
+changes and commit them, and you can discard any commits you make in this
+state without impacting any branches by switching back to a branch.
+
+If you want to create a new branch to retain commits you create, you may
+do so (now or later) by using -c with the switch command. Example:
+
+  git switch -c <new-branch-name>
+
+Or undo this operation with:
+
+  git switch -
+
+Turn off this advice by setting config variable advice.detachedHead to false
+
+dump /home/ubuntu/automaton_fleet-v122-rollout-e0dc223-20261028T143936Z.dump sha 02f9a2eeb0f62da7
+restore: row counts identical
+migrate-check: {"currentVersion":122,"resultingVersion":122,"wouldApply":[],"requiredVersion":122,"rolledBack":true}
+{"ok":true,"latencyMs":3,"schemaVersion":122,"countersConsistent":true}
+reconciliation: OK (0 new accounts at zero; 1123 journals; events 2769 before, purged {}, preserved 2769; appended {"code_role_granted":1,"push_role_granted":1,"agent_role_granted":1,"build_role_granted":1,"media_role_granted":1,"browser_role_granted":1,"custody_role_granted":1,"service_role_granted":1,"bankfeed_role_granted":1,"channels_role_granted":1,"identity_role_granted":1,"operator_role_granted":1,"dashboard_role_granted":1})
+ledger verify: true
+re-run: {"currentVersion":122,"resultingVersion":122,"wouldApply":[],"requiredVersion":122,"rolledBack":true}
+rollback proof: the dump restores to schema 122 with the same ledger head
+== REHEARSAL PASSED 2026-10-28T14:40:03Z — live untouched (schema 122)

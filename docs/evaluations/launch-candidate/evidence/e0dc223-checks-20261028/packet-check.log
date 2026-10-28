@@ -1,0 +1,14 @@
+real attention lines: ownerTask 1 (1358 chars), notices 3 (1837), events 145 , upgrade 322
+task 3682 chars, keepKnowledge=true: FITS 14984 chars; task identical: true; every owner-task line verbatim: true; evidence 12, knowledge 16
+task 3682 chars, keepKnowledge=false: FITS 14984 chars; task identical: true; every owner-task line verbatim: true; evidence 12, knowledge 16
+task 5682 chars, keepKnowledge=true: FITS 14967 chars; task identical: true; every owner-task line verbatim: true; evidence 5, knowledge 16
+task 5682 chars, keepKnowledge=false: FITS 14967 chars; task identical: true; every owner-task line verbatim: true; evidence 5, knowledge 16
+task 7682 chars, keepKnowledge=true: REFUSED (FLEET_TASK_PACKET_INVALID: packet too large)
+task 7682 chars, keepKnowledge=false: FITS 14588 chars; task identical: true; every owner-task line verbatim: true; evidence 4, knowledge 11
+task 9682 chars, keepKnowledge=true: REFUSED (FLEET_TASK_PACKET_INVALID: packet too large)
+task 9682 chars, keepKnowledge=false: FITS 14502 chars; task identical: true; every owner-task line verbatim: true; evidence 4, knowledge 5
+secret-shaped task: refused — FLEET_TASK_PACKET_INVALID: secret-shaped text at packet.task
+forbidden key: refused — FLEET_TASK_PACKET_INVALID: forbidden key packet.economics.signature
+secret + oversize: refused — FLEET_TASK_PACKET_INVALID: secret-shaped text at packet.task; packet too large
+copied memory tree unchanged by build+trim: yes; workspace tree unchanged: yes
+live memory tree hash: 56fbc538ed518a0f (compare after the upgrade)
