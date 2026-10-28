@@ -1,0 +1,87 @@
+
+ RUN  v2.1.9 /home/sl4mm3r/projects/automaton-fleet-v25
+
+stdout | src/__tests__/fleet/fleet-v118-promotional-edges-pg.test.ts > v118 edges: the window before a promotional reversal (PostgreSQL) > survival protection OFF: an agent whose last pence went on promotional credit is not killed before the reversal
+EDGE spendAll A {"before":100,"estimateCents":100,"record":{"ok":true,"late":false,"tier":"T2","model":"claude-sonnet-5-5","payer":"agent","currency":"GBP","journalId":"a8944adf-93c3-4dde-b4e5-90e3f61d37c2","fxRateMicro":1000000,"usageSource":"provider","chargedCents":100,"overrunMicro":0,"unfundedCents":0,"chargedMicrocents":100000000,"uncollectableMinor":0,"unpostedMicrocents":0,"cacheSavingMicrocents":0,"providerUsdMicrocents":100000000}}
+
+stdout | src/__tests__/fleet/fleet-v118-promotional-edges-pg.test.ts > v118 edges: the window before a promotional reversal (PostgreSQL) > survival protection OFF: an agent whose last pence went on promotional credit is not killed before the reversal
+EDGE A after the call, before any settlement {"cash":0,"exhausted":true}
+
+stdout | src/__tests__/fleet/fleet-v118-promotional-edges-pg.test.ts > v118 edges: the window before a promotional reversal (PostgreSQL) > survival protection OFF: an agent whose last pence went on promotional credit is not killed before the reversal
+EDGE A lifecycle tick {"insolvency":{"ok":true,"died":1,"protected":0,"protection":true,"heldByOwner":0},"aiCredits":{"attributed":1,"unattributed":0,"reversedMinor":100}}
+
+stdout | src/__tests__/fleet/fleet-v118-promotional-edges-pg.test.ts > v118 edges: the window before a promotional reversal (PostgreSQL) > survival protection OFF: an agent whose last pence went on promotional credit is not killed before the reversal
+EDGE A after the tick {"status":"dead","cash":100,"deathOrEstateEvents":2}
+
+stdout | src/__tests__/fleet/fleet-v118-promotional-edges-pg.test.ts > v118 edges: the window before a promotional reversal (PostgreSQL) > survival protection ON: no false exhaustion notice while the reversal is pending
+EDGE spendAll B {"before":100,"record":{"ok":true,"late":false,"tier":"T2","model":"claude-sonnet-5-5","payer":"agent","currency":"GBP","journalId":"85336a6c-bd29-48f1-9a01-0c8cfad47576","fxRateMicro":1000000,"usageSource":"provider","chargedCents":100,"overrunMicro":0,"unfundedCents":0,"chargedMicrocents":100000000,"uncollectableMinor":0,"unpostedMicrocents":0,"cacheSavingMicrocents":0,"providerUsdMicrocents":100000000}}
+
+stdout | src/__tests__/fleet/fleet-v118-promotional-edges-pg.test.ts > v118 edges: the window before a promotional reversal (PostgreSQL) > survival protection ON: no false exhaustion notice while the reversal is pending
+EDGE B tick {"insolvency":{"ok":true,"died":0,"protected":1,"protection":true,"heldByOwner":0}}
+
+stdout | src/__tests__/fleet/fleet-v118-promotional-edges-pg.test.ts > v118 edges: the window before a promotional reversal (PostgreSQL) > survival protection ON: no false exhaustion notice while the reversal is pending
+EDGE B after {"status":"active","cash":100,"protectedNotices":1}
+
+stdout | src/__tests__/fleet/fleet-v118-promotional-edges-pg.test.ts > v118 edges: the window before a promotional reversal (PostgreSQL) > insufficient cash while promotional credit is available (documented): a call needs the agent's cash until the reversal
+EDGE B authorize with cash 0 and promotional credit available {"cash":0,"authorize":{"ok":false,"code":"FLEET_INSUFFICIENT_ALLOCATION"}}
+
+stdout | src/__tests__/fleet/fleet-v118-promotional-edges-pg.test.ts > v118 edges: the window before a promotional reversal (PostgreSQL) > insufficient cash while promotional credit is available (documented): a call needs the agent's cash until the reversal
+EDGE B authorize after the reversal {"cash":100,"authorize":{"ok":true,"tier":"T2","model":"claude-sonnet-5-5","currency":"GBP","provider":"anthropic","requestId":"fec71128-bf2b-4445-9f2e-540a5775a81d","fxRateMicro":1000000,"estimateCents":1,"maxOutputTokens":8000,"estimateUsdCents":1}}
+
+stdout | src/__tests__/fleet/fleet-v118-promotional-edges-pg.test.ts > v118 edges: the window before a promotional reversal (PostgreSQL) > concurrent settlement passes never duplicate a reversal
+EDGE concurrent settle ["error: duplicate key value violates unique constraint \"fleet_ai_credit_promotional_uses_pkey\"",{"attributed":3,"unattributed":0,"reversedMinor":12},"error: duplicate key value violates unique constraint \"fleet_ai_credit_promotional_uses_pkey\""]
+
+stdout | src/__tests__/fleet/fleet-v118-promotional-edges-pg.test.ts > v118 edges: the window before a promotional reversal (PostgreSQL) > concurrent settlement passes never duplicate a reversal
+EDGE concurrency result {"dupUses":0,"dupJournals":0,"accrual":{"micro":"212000200","posted_minor":"212"},"reversedToCash":212}
+
+stdout | src/__tests__/fleet/fleet-v118-promotional-edges-pg.test.ts > v118 edges: the window before a promotional reversal (PostgreSQL) > sub-penny calls stay exact: the charge and the reversal accrue the same microcents
+EDGE sub-penny {"calls":7,"microCharged":2380000,"chargeCarry0":200,"chargeCarry1":380200,"promoMicroAdded":2380000,"chargedMinor":2,"reversedMinor":2,"cashDelta":0}
+
+ ❯ src/__tests__/fleet/fleet-v118-promotional-edges-pg.test.ts (5 tests | 2 failed) 7354ms
+   × v118 edges: the window before a promotional reversal (PostgreSQL) > survival protection OFF: an agent whose last pence went on promotional credit is not killed before the reversal 95ms
+     → expected 'dead' to be 'active' // Object.is equality
+   × v118 edges: the window before a promotional reversal (PostgreSQL) > survival protection ON: no false exhaustion notice while the reversal is pending 34ms
+     → expected 1 to be +0 // Object.is equality
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/__tests__/fleet/fleet-v118-promotional-edges-pg.test.ts > v118 edges: the window before a promotional reversal (PostgreSQL) > survival protection OFF: an agent whose last pence went on promotional credit is not killed before the reversal
+AssertionError: expected 'dead' to be 'active' // Object.is equality
+
+Expected: "active"
+Received: "dead"
+
+ ❯ src/__tests__/fleet/fleet-v118-promotional-edges-pg.test.ts:77:16
+     75|     const estate = Number(await R.one(`(SELECT count(*) FROM fleet.fle…
+     76|     console.log("EDGE A after the tick", JSON.stringify({ status: st, …
+     77|     expect(st).toBe("active");                                        …
+       |                ^
+     78|     expect(estate).toBe(0);
+     79|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  src/__tests__/fleet/fleet-v118-promotional-edges-pg.test.ts > v118 edges: the window before a promotional reversal (PostgreSQL) > survival protection ON: no false exhaustion notice while the reversal is pending
+AssertionError: expected 1 to be +0 // Object.is equality
+
+- Expected
++ Received
+
+- 0
++ 1
+
+ ❯ src/__tests__/fleet/fleet-v118-promotional-edges-pg.test.ts:88:59
+     86|     console.log("EDGE B after", JSON.stringify({ status: await status(…
+     87|     expect(await status(B)).toBe("active");
+     88|     expect(await events("agent_exhaustion_protected", B)).toBe(0);    …
+       |                                                           ^
+     89|   });
+     90| 
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+ Test Files  1 failed (1)
+      Tests  2 failed | 3 passed (5)
+   Start at  13:35:31
+   Duration  9.75s (transform 1.37s, setup 0ms, collect 1.78s, tests 7.35s, environment 0ms, prepare 143ms)
+

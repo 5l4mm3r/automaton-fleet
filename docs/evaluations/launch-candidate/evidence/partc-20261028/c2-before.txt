@@ -1,0 +1,9 @@
+controller pid=2240025 started=Wed_2026-10-28_11:13:29_UTC restarts=0
+founders pids=2241482/2241491
+agents 01M3F50SH7PNX2E3GST13J52AS:active:paused=true:7c194b8 01M4C4NXT786Q4E9725N5A15KV:active:paused=true:b60e262
+provider FLEET_COGNITION_PROVIDER=none; profile_line=0; policy_enabled=f
+ledger 1182 08881fec3c34386f723d05297c460d55e4d03a9c6b7d6d8c8eab83b110fbabad verify=true
+credit balance=11523033480 holds=canary-agent1-ceiling 10023033480 open
+breaker tripped=t budget=''
+authorities sales_open=f refund_live=0 outward=0 identity_card=f custody_activation_null=t
+timings 120 600 480 300

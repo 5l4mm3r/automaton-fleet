@@ -1,0 +1,11 @@
+== C2 inference profile (apply) 2026-10-28T12:02:57Z
+  controller PID 2240025; service.env sha 21b8b3631b630be3
+== preflight of the CURRENT file (must pass: it is the rollback)
+PREFLIGHT PASSED (16 checks)
+== preflight of the NEW file
+PREFLIGHT PASSED (16 checks)
+  installed; backup /etc/automaton-fleet/service.env.pre-inference-profile-20261028T120300Z
+== preflight of the LIVE file
+PREFLIGHT PASSED (16 checks)
+== C2 APPLIED 2026-10-28T12:03:01Z: FLEET_INFERENCE_PROFILE=cloud_allowed in /etc/automaton-fleet/service.env (provider still none; takes effect at the next approved restart).
+   Rollback (no restart needed while the controller has not restarted): sudo cp -p /etc/automaton-fleet/service.env.pre-inference-profile-20261028T120300Z /etc/automaton-fleet/service.env

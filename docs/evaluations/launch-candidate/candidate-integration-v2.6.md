@@ -4732,3 +4732,101 @@ restore, authentication changes.
 
 Staged on the VPS in `~/rlc140/` with the same hashes. Nothing there has run except the read-only `--check` modes, the
 preflights and the disposable-copy rehearsals.
+
+## Part C executed (28 Oct 12:01–12:03Z): operator key rotated, inference profile recorded; production otherwise unchanged
+
+Pushed first: `d6bc595..73ae0b9` (50fb937 and 73ae0b9; scope as described; secret scan clean). The only pattern hits were
+the preflight test's placeholder connection strings: `pw-preflight-secret`, port 1.
+
+**C1: `claude-operator` key rotated with the release's own tooling (30 days)**
+
+| Step | Result |
+|---|---|
+| Baseline, through the actual operator tool (`fleet_whoami`) | `KEY_EXPIRED` for `dbaf93c5…` (refused by the client) |
+| Config backup | `claude-operator.json.pre-rotation-20261028T120109Z` (0600). It is a record, not a rollback: the old private key is deleted and the old key is revoked and expired |
+| `rotate-prepare --expires-days 30` | new key `ce7e51321565092d4f9701ccda65a1a9`, generated on the dev VM, file 0600. The tooling names it `bridge-claude.20261028T120109Z.key`; that is a naming quirk, and it is `claude-operator`'s key. Only the public key and the key id were printed |
+| VPS `operator-add-key` (owner CLI, `operator:ubuntu`) | registered, expires **2026-11-27T12:01:24Z** |
+| `rotate-verify` (signed `whoami` through the real tunnel, pending key) | accepted |
+| `rotate-switch` | current = `ce7e5132…` |
+| **Actual operator tool** (`fleet_whoami`, MCP, no reconnect needed: it reloads its config on every call) | `claude-operator`, key `ce7e5132…`, expires 27 Nov; scopes as before |
+| VPS `operator-revoke-key dbaf93c5… rotated to ce7e5132…` | revoked |
+| **Old key rejected by the SERVER** | a signed `whoami` with the old key, sent from a temporary private config with the local expiry check removed (deleted afterwards): **`AUTH_FAILED`** "signature not accepted (unknown, revoked or expired key…)", request `3a46c5e4…` |
+| `rotate-finish` | the old key rejected and the new one working → the old private key file deleted; `key status --remote`: ok, 29.9 days |
+| Actual operator tool, again (`fleet_lifecycle_health`) | 2 active, 0 stale heartbeats, 0 overdue challenges, reaper current |
+| Other keys | `bridge-claude` `ec4f0698…` and `bridge-chatgpt` `fe22d91c…`: **unchanged** (expired, not revoked), as instructed |
+
+No private key material was printed or logged. Every key file stays 0600 in the 0700 operator directory. Owner-CLI access
+was never touched.
+
+**C2: `config-inference-profile.sh`**
+- Its full sha256, `6a5e0dea3ea30794775b2a19253ffe75e249aed2bd4a3c99b2df6d920474e2e2`, was recorded and matched three ways:
+  the reviewed copy at 73ae0b9, the pinned value, and the staged VPS copy.
+- Run at 12:02:57Z: the current file passed the preflight 16/16; the new file 16/16; backup
+  `service.env.pre-inference-profile-20261028T120300Z`; installed; **the LIVE file passed 16/16**.
+- `service.env`'s **only** change is the added line `FLEET_INFERENCE_PROFILE=cloud_allowed`. It is still root:root 0600 with
+  one link.
+
+**Verification afterwards** (snapshots `evidence/partc-20261028/c2-before.txt` and `c2-after.txt`). **The only difference is
+the profile line:**
+
+- provider `none`; cognition policy **disabled**;
+- **no controller restart:** PID 2240025, started 11:13:29Z, 0 restarts (unchanged);
+- founder PIDs 2241482 / 2241491 (unchanged); **both agents active and paused**;
+- ledger 1182 `08881fec…`, verifies; credit 11,523,033,480 µ¢; hold `canary-agent1-ceiling` 10,023,033,480 µ¢ open;
+- breaker tripped; Fleet Control budget unset; sales closed; refund authorities 0; outward releases 0; card / identity
+  autonomy off; custody activation none;
+- timings 120 / 600 / 480 / 300;
+- **Stage 1 step-4 read-only check: CHECK PASSED** (nothing pending; both preflights 16/16).
+
+## Part D: final pinned package (prepared 28 Oct; NOT approved, NOT run)
+
+**`stage1-retry.sh` (`848db128…`, full hash in the table below)** is the only command. It is staged in `~/rlc140/`. It runs
+the pinned step-4 script (`2c2d78cc…`) and the pinned preflight (`2c6f6c37…`), and copies the pinned files
+(`tracker-v6/`: xlsx `7793dff2…`, README `4494dff2…`). It refuses to start if any pinned hash differs.
+
+| Mode | Does |
+|---|---|
+| `--check` | read-only, every gate. **Ran 12:06Z: CHECK PASSED.** Agent-1 754p / 120 per hour / paused; Agent-2 3,000p / 60 per hour / paused; policy off; budget unset; free credit exactly 1,500,000,000 µ¢; offer files are the expected two; no task, canary.conf or units left over; the step-4 check passed |
+| `prepare` | **1** Agent-1 at 120 per hour (already set; read back). **2** Fleet Control 30p/day. **3** the hold is verified, not re-created. **4** the step-4 script: both preflights, policy on, `service.env`, preflight of the LIVE file, a bounded 30 s restart with automatic configuration rollback, and founders re-verified. **If step 4 fails:** the Fleet Control budget is cleared again and the script stops. **5** `canary.conf` and the release's four units installed (timers not enabled); `check --dry-run` and `end --dry-run` must write nothing. **6** files to `from-owner/tracker-v6/` (owner `fnd-…`, 0600, hashes verified). **7** the owner task. Agent-1 stays PAUSED throughout |
+| `resume` | **8a** arm the end timer (drop-in `OnCalendar=` = start + **24 h**) and the hourly guard; **verify armed (next elapse = ENDS_AT) before resuming**. **8b** `founder-cognition <Agent-1> resume`. **8c** re-arm at exactly STARTED_AT (the resume timestamp) + 24 h and verify again |
+
+**Deadline:** 24 hours after the resume, enforced by the persistent end timer, which runs the safe stop: pause, offer hold,
+sales closed, budget off, and the hold released only when no reservation is open. There is no automatic blocker stop (the
+24-hour form you approved on 27 Oct). The timer's calendar format was checked with `systemd-analyze` and round-trips
+exactly.
+
+**Correction to the approved task text (needs your word).** The 27 Oct text told Agent-1 to remove `tracker.zip` (10adb667)
+and the workbook. **`tracker.zip` was already removed on 20 Oct.** The offer's live deliverables are
+`Landlord_Compliance_Tracker.xlsx` `f45c3d00` and `README.txt` `4494dff2`. The pinned text now says "1) offer file remove:
+Landlord_Compliance_Tracker.xlsx (f45c3d00…, the current deliverable). Keep README.txt …". Everything else is word-for-word as
+approved.
+
+**Rollback: two different things.**
+
+| | What | When | Touches |
+|---|---|---|---|
+| **Configuration rollback** (automatic) | `service.env` restored from its backup; AI policy disabled; controller restarted on the old file | inside step 4: the live file fails the preflight, or the controller is not ready within 30 s | one root file, the policy flag, one restart. **No ledger, registry or event row is undone** |
+| **Kill switch** (manual, immediate, no restart) | `cli cognition-disable`; `founder-cognition <Agent-1> pause …` | any time after step 4 | the policy and pause flags only |
+| **Database restoration** | **never done by this package**, on any failure | only on your separate, explicit approval | everything after the dump; we fix forward instead |
+
+**What Part D would change:**
+- the cognition policy on and provider `anthropic` (restart);
+- Fleet Control budget 30p/day;
+- the canary units and timers;
+- two files in Agent-1's workspace;
+- one owner task;
+- Agent-1 resumed.
+
+**What stays:**
+- breaker tripped (it gates payments; Stage 1 makes none);
+- the $15 hold;
+- sales and authorities closed;
+- Agent-2 paused;
+- no funding.
+
+| File | sha256 |
+|---|---|
+| `stage1-retry.sh` | `848db128237722d5d7ae38f057a9ae3c6c28e8eab556e1dd065506c30259babf` |
+| `stage1-retry-inference-on.sh` | `2c2d78cc246c9eaaac31fb3e6db1baade8a300f4268e555df8142e6eefd287e0` |
+| `scripts/fleet-controller-preflight.mjs` | `2c6f6c37ad900b92b1d461996040facfcbfb88fbf27989797fe9e1be5594d628` |
+| `canary-tracker-candidate/Landlord_Compliance_Tracker.xlsx` / `README.txt` | `7793dff2…` / `4494dff2…` |

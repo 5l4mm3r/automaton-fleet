@@ -1,0 +1,6 @@
+== Stage 1 retry (--check) 2026-10-28T12:06:23Z
+  Agent-1 754 120 paused=true enabled=true; Agent-2 3000 60 paused=true enabled=true; policy enabled=f; Fleet Control budget unset; free credit 1500000000 µ¢
+  offer files: Landlord_Compliance_Tracker.xlsx:f45c3d00,README.txt:4494dff2; open owner tasks (Agent-1): 0; canary conf: absent; units: 0
+== step 4 read-only check
+== CHECK PASSED 2026-10-28T12:06:28Z: nothing written; the step may run
+== CHECK PASSED 2026-10-28T12:06:28Z: nothing written

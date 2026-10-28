@@ -1,0 +1,5 @@
+== Stage 1 retry, step 4 (inference on) — --check — 2026-10-28T12:03:08Z
+== gates (read-only)
+== preflight: the CURRENT file (the rollback) and the NEW file
+  both PREFLIGHT PASSED (16 checks each)
+== CHECK PASSED 2026-10-28T12:03:12Z: nothing written; the step may run
