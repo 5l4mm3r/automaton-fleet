@@ -5219,3 +5219,151 @@ unchanged.
 - **timers:** hourly guard (next 17:00Z); end **2026-10-29T13:44:01Z** — the safe stop pauses, holds the offer, keeps sales
   closed, turns Fleet Control off, and releases `canary-agent1-ceiling` only if no reservation is open. It does **not**
   release `stage1-continuation-cap`: the owner decides.
+
+## Stage 1 closeout and cost reconciliation (28 Oct 16:45–17:05Z)
+
+### 1. Spend reconciliation (Fleet records; the Console comparison waits for the owner's figures)
+
+**Previous reconciliation point:** 26 Oct 14:19–14:20Z (adjustment +45,820,070 µ¢; promotional grant +10,000,000,000 µ¢).
+Since then, every Anthropic credit event:
+
+| When | Events | Recorded by | µ¢ | USD |
+|---|---|---|---|---|
+| 26 Oct 14:39Z | 35 | engineering `scen-bc19e05-s1s2` (S1+S2 suite) | −198,966,520 | −1.9896652 |
+| → promotional at Stage 1 start | | | | **98.0103348** (the owner's figure) |
+| 28 Oct 13:44–16:02Z | 92 | controller (Agent-1: 82 resume calls + 10 continuation calls) | −538,203,260 | −5.3820326 |
+| 28 Oct (probe v2) | 3 | engineering `probe-e0dc223-v2` | −1,708,800 | −0.017088 |
+
+**Stage 1 attempts, by purpose:**
+
+| Purpose | USD | Note |
+|---|---|---|
+| First retry, 12:12Z | 0 | packet-fit defect: refused before any model call |
+| **Failed review loop, 13:44Z** | **4.56656** | 85 calls (82 with usage, 3 HTTP 400 signature rejections at $0); execution and debugging overhead, not customer work |
+| Probe v1 | 0 | 1 call refused (`thinking.type.enabled`), charge none |
+| **Successful provider probe v2** | **0.017088** | 3 calls |
+| **Successful review continuation, 16:00Z** | **0.8154726** | 10 calls; review 17a35f88 |
+| **Total** | **5.3991206** | equals the recorded consumption events |
+
+**Fleet now:**
+- promotional lot `a6765484` remaining **9,261,121,420 µ¢ = $92.6112142**;
+- purchased (owner) lot `05f4cb13` remaining **1,722,000,000 µ¢ = $17.22**;
+- **total $109.8312142** = `fleet_provider_credit_balance`.
+
+These match the expected figures exactly. A Console display at 2 decimal places reads $92.61 / $17.22 / $109.83.
+
+**Separated:**
+- **actual consumption** = the 95 events above;
+- **reserved credit** = 0 (both Stage 1 holds released, no other hold, 0 in flight, no Fleet Control reservation);
+- **unresolved calls** = 0 (every call since the first resume has provider-reported usage, or is a certain-zero HTTP 400 with no
+  input; engineering calls all `usage` or `none`);
+- **rounding** = display only (Fleet keeps µ¢).
+
+No discrepancy is attributed and no adjustment posted. **The owner's Console figures are still to be compared.**
+
+**Recorded plainly:**
+- $4.56656 failed review loop;
+- $0.017088 successful provider probe;
+- $0.8154726 successful review continuation;
+- **F2 (carried refusal recovery) is deterministically tested, not live-proven** (the live run's carry was written by the
+  previous runtime).
+
+### 2. Stage 1 closed
+
+- Cognition **disabled** 16:47:11Z (controller PID unchanged 2290343: no restart).
+- Checks passed: policy off; both agents paused; task `a11941fe…` closed and no open owner task; sales closed; no outward
+  release, refund authority, card or identity autonomy, or custody activation; breaker tripped; 0 calls in flight; 0
+  open/unknown Fleet Control reservations; no unresolved cognition cost; ledger verifies.
+- **Holds released once each:**
+  - `canary-agent1-ceiling` 10,023,033,480 µ¢;
+  - `stage1-continuation-cap` 841,635,200 µ¢;
+  - now 0 open holds; free credit = the full balance, 10,983,121,420 µ¢.
+- **Stage 1 timers disabled** (`automaton-fleet-canary-check.timer`, `…-end.timer`: disabled, inactive, none scheduled).
+  Kept: the four unit files, the end-timer drop-in (`OnCalendar=2026-10-29 13:44:01 UTC`), `~/canary/canary.conf` and the
+  guard log `canary-agent1-c1.jsonl`.
+- Spend breaker stays tripped. Agent-2 unchanged (b60e262, paused).
+
+### 3. Result preserved
+
+- Review `17a35f88-f38f-482f-9e02-65664495781b`: pass, automated ok, digest
+  `f3e6193aafe44a8d5cf55809082cd7efb1aa8c9abd7c8514e4f3ceb7710d6c69`.
+- Its files equal the offer's current files exactly (names and sha256); the offer's own digest is the same.
+- The offer stays **paused** (not live), its 18 Oct publication record and old review link are unchanged, and sales are
+  closed.
+
+### 4. Next-stage package: controlled purchase and refund (EXECUTION PROOF ONLY — prepared, not authorised)
+
+**Purpose:** prove the live purchase → delivery → customer message → Fleet Control check → refund path once, with real money,
+on the reviewed files. **It is not commercial validation:** the owner's own order is never demand evidence, and the tracker
+is not an approved business strategy. Any later offer needs demand evidence and full-cost margins. Stage 1 and S1+S2 are
+not repeated.
+
+**a) New cash funding: 75p minimum; proposed £1.00 received net** (computed by code from recorded facts):
+- The £5.00 proof capture carried a **45p PayPal fee**, and the refund returned **0p** of it (20 Oct: T0006 fee −45,
+  T1107 refund fee 0). The capture therefore puts **455p** net into unallocated.
+- The refund booking needs **unallocated ≥ 500p** (v107), and Fleet Control's message check reserves up to **30p** first.
+  So 500 − 455 + 30 = **75p** must already be there; unallocated is **0p** today, which is also why Fleet Control has never
+  made a funded call.
+- The treasury PayPal balance must hold **500p** to send the refund: it holds 22p, plus 455p after the capture, so 23p short.
+  The 75p covers that too.
+- **Route:** the owner sends ≥ £1.00 (enough that ≥ 100p arrives net of any PayPal fee) to the treasury PayPal, then:
+  1. `ledger-record-funding <net cents> <PayPal txn id>`;
+  2. `economy-paypal-attribute b71b3f3c… <txn> <code> owner_funding <ref>`.
+- **Not** `economy-capital-back`: that would only back part of the £200 of unbacked virtual capital and leave unallocated at 0.
+
+**b) Maximum additional API usage:**
+- **$3.00** of provider credit, enforced before every call and reservation by the same mechanism as the $2 continuation: one
+  hold leaving exactly $3.00 free.
+- Expected use: Agent-1 publishes on review 17a35f88, sends one delivery, answers one buyer message. At the continuation's
+  rate (about $0.08 per call), roughly 15–25 calls, or $1.2–2.0.
+- Fleet Control: **≤ 30p GBP** by its own daily ceiling, funded from (a).
+
+**c) Fleet Control's first real message check:**
+- The owner sends one buyer message on the order page.
+- Fleet Control reserves its bounded maximum **from funded unallocated** (the first funded reservation ever), calls once,
+  and **settles once** at actual cost (reservation → settled, actual ≤ 30p, one ledger posting).
+- Verify: exactly one reservation row, status settled, no unknown cost; Agent-1 answers and classifies once; no repeat.
+
+**d) Checkout exposure controls:**
+1. Publish only on review 17a35f88 (owner task "Publish on your review 17a35f88"; the offer is live only while sales are open).
+2. `economy-sales open` **only for the owner's purchase window (≤ 15 minutes)**, the owner paying at once via
+   `economy-offer-proof uk-landlord-compliance-tracker-england-g-a9ddde`.
+3. Immediately after the capture: `economy-sales closed` and `economy-offer-hold`.
+4. No outward or marketing release, so the link is never promoted. Breaker tripped for agent spending.
+5. **An unexpected customer order** in the window is a real order: Agent-1 delivers the reviewed files as for any buyer
+   (never auto-refunded), the test **stops** (sales closed, offer held), and the owner decides. It is reported separately and
+   counts as a real sale, not as part of the proof.
+
+**e) Refund accounting and retained fees:**
+- The owner refunds the full £5.00 **in the PayPal app** (no refund authority is granted; `REAL_PAYMENTS` stays false).
+- Observed by webhook `PAYMENT.CAPTURE.REFUNDED` and Transaction Search T1107, counted once. Booked by
+  `fleet_order_refunded` as an owner-proof return: D owner capital 500, C unallocated (500p; the 20 Oct split was 498 + 2
+  owner-reimbursable). The order becomes `refunded` and its conversation closes.
+- **Retained cost to the owner:** the 45p PayPal fee, plus Fleet Control's actual (≤ 30p), plus the API usage in (b) (provider
+  credit, promotional first).
+
+**f) Stop conditions** (any one: pause Agent-1, disable cognition, close sales, hold the offer, report):
+- a provider signature error;
+- a repeated unchanged refusal, or no progress over 2 turns;
+- the $3 cap reached;
+- delivery hashes ≠ review 17a35f88's;
+- more than one delivery;
+- a message check that does not settle once;
+- any order other than the owner's;
+- unallocated < 500p before the refund;
+- the refund not observed and booked within 24 h;
+- any outward action;
+- a ledger verification failure.
+
+**g) Final cleanup:**
+- Agent-1 paused before its owner tasks are closed; cognition disabled; `economy-sales closed`; the offer held.
+- The API hold released only when nothing is in flight or unresolved.
+- Reconciliation: proof capture, refund, 45p fee, Fleet Control settlement, API consumption and the funding all accounted.
+- Unallocated returns to the funding's remainder (≈ 100 − Fleet Control actual).
+- The record and evidence written, nothing left scheduled.
+
+**Approvals this needs:**
+1. The funding (≥ £1.00 net, owner-sent).
+2. The $3.00 API cap and ≤ 30p Fleet Control.
+3. Publishing on 17a35f88 and a ≤ 15-minute sales window.
+4. The owner's £5 purchase, message and manual refund.
