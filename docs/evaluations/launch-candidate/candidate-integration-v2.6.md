@@ -5126,3 +5126,96 @@ unchanged.
   - the preserved deadline is verified, not re-armed;
   - the $15 total is reconciled from consumption events;
   - a $2 cap hold makes the controller's free credit exactly $2 before any call or reservation.
+
+## Stage 1 COMPLETE (28 Oct 15:24–16:04Z): exact-file review 17a35f88 PASSED on e0dc223; Agent-1 paused, then the task closed
+
+**Pushed:** `212078b..c414f7f`.
+
+**Probe v2** (`probe-e0dc223-v2.mjs` `1de986e1c60c70ad42f2b8dd7ce6dfc5462a5140674bda740ede496103c42a22`; one run, no retry):
+- Configuration: production's exact T3 — the registry's T3 row through the controller's `routedProviderFactory`
+  (`claude-opus-5-5`, adaptive thinking, effort medium, prompt cache "prefix") and `founderStepMaxTokens` (4,000).
+- Calls:
+  1. `view_image`, no thinking;
+  2. thinking (1 block) + `deliverable`, refused;
+  3. **the decisive request** — `2:user[tool_result+image] 3:assistant[thinking,text,tool_use]`: signed thinking replayed
+     after an image-bearing tool result — **accepted**.
+- **PASS.** Cost 1,708,800 µ¢ ($0.017088), metered under a pre-call ceiling of $0.25, imported (`probe-e0dc223-v2`, 3 calls);
+  hold placed and released.
+- Probe v1 (`probe-e0dc223`) is recorded too: 1 call, $0, refused `thinking.type.enabled`.
+
+**Rehearsal evidence names the executing candidate:**
+- run as `/opt/automaton-fleet/releases/e0dc223…/dist/fleet/founder/cli.js` with `/root/runtime-e0dc223.env`
+  (`FLEET_RUNTIME_COMMIT=e0dc223…`, `BUILD_ID=54dd29fd…`);
+- the upgrade rehearsal's report: `from` dd29a53 / `c9035c92…` → `to` e0dc223 / `54dd29fd…`; post-upgrade health on
+  e0dc223 / `54dd29fd…` (27/27);
+- the revision rehearsal ran e0dc223 / `54dd29fd…` (19/19);
+- the earlier correction stands: the dd29a53 rehearsal labels were wrong (they ran the pinned c448d98).
+
+**Install** (`install-e0dc223.sh` `e0cef7b2e9efd5a93263dc6c5ba2d1c1796dedaefbbea2c6f4b25a0a1e64e2e2`; pins `ad489cf1…`; build
+`54dd29fd82b56e2b62fbcdb5b8e44a270d7f46ae3088e6fbb064ee506334cb73`):
+- `--check` passed: 15 of 16 preflight checks, plus the expected registry mismatch;
+- backup `baseline-pre-install-e0dc223-20261028T155715Z`;
+- **outage 15:58:24–15:59:11Z (47 s)**; DEPLOYED 15:59:19Z;
+- founders: same processes, active, paused; ledger 1182 unchanged.
+
+**Agent-1 upgrade** (`upgrade-agent1-continue.sh` `ff676b16aa740d8b090bf0245519dadc2c4b317be240c22d2f71599229706101`):
+- dd29a53 → **e0dc223**: identity, wallet hash, credential `4297d562…`, memory `56fbc538…`, workspace `a8affb45…`, identity
+  files all **identical**;
+- new process 2291632; challenge passed 15:59:45Z;
+- Agent-2 unchanged (b60e262, PID 2241491, paused).
+
+**Continuation:**
+- `continue`:
+  - the $15 total reconciled (used 458,364,800 µ¢);
+  - **hold `stage1-continuation-cap` 841,635,200 µ¢**, so the controller's free credit was **exactly 200,000,000 µ¢ ($2)** for
+    every call and reservation;
+  - policy on (read-back unchanged);
+  - Agent-1 resumed 16:00:07Z;
+  - **deadline not re-armed** (end timer 2026-10-29T13:44:01Z verified).
+- Agent-1's steps (`agent1-steps.jsonl`):
+  - turn 1: offer, then inspection (exec, view_image), ending at the context budget;
+  - turn 2: offer, exec, view_image ×2, then **`deliverable` review OK at 16:02:25Z**.
+- **10 calls, 0 errors, 0 provider rejections** (the signature fix held: view_image steps followed by a thinking step
+  replayed without refusal).
+- **Agent-1 paused 16:02:56Z, then task `a11941fe…` closed 16:03:47Z.**
+- Honest note: Agent-1 re-inspected before reviewing. The carried-review continuity (F2) was not exercised live, because its
+  carry was written by the dd29a53 runtime, which keeps no refused review. The review passed on its first attempt with both
+  exact deliverable criteria, consistent with the new tool guidance (F3).
+
+**The review** (`17a35f88-f38f-482f-9e02-65664495781b`, 16:02:25Z):
+- subject offer d7063a0a; verdict **pass**; automated inspection **ok** (`fleet-qa-3`);
+- files: exactly `Landlord_Compliance_Tracker.xlsx` `7793dff2084dd7968019041e7579ecdedafd73529190c14b8a85a39820bc69b5`
+  (30,462 B) and `README.txt` `4494dff2185aeb052df9131199f34e768599e098d93b72394c994f2fe5dfcd89` (672 B) — the offer's current
+  files;
+- **files digest `f3e6193aafe44a8d5cf55809082cd7efb1aa8c9abd7c8514e4f3ceb7710d6c69`**, equal to the offer's own digest and to
+  the Stage 1 target;
+- 4 criteria, all met, including both listed deliverables worded exactly (verified against the gate's own rule).
+- **Nothing published:** the offer is paused, its publication of 18 Oct and its old review link are unchanged; sales closed.
+
+**Accounting (by code; `final-state.txt`):**
+
+| | USD |
+|---|---|
+| first retry 12:12Z (packet defect) | 0 |
+| resume 13:44Z (85 calls; 3 signature rejections) | 4.56656 |
+| probe v1 / v2 | 0 / 0.017088 |
+| continuation 16:00Z (10 calls; $2 cap) | 0.8154726 |
+| **total used of the $15** | **5.3991206** (all promotional; = the recorded consumption events) |
+| **left** | **9.6008794** = controller free 1.1845274 + cap hold 8.4163520 |
+
+- Agent-1 charged 0; ledger postings 0. **Ledger head 1182 `08881fec…`, verify true**; unallocated 0; owner payable £10.81;
+  Agent-1 cash £89.43; Agent-2 £100.00.
+- Agent-1 rolling 24 h usage (intended) 403.811802p of 754p.
+- Fleet Control: 30p, spent 0, no reservations (unfunded gate intact).
+- Credit lots: promotional 9,261,121,420 µ¢, owner 1,722,000,000 µ¢ (untouched).
+
+**State at 16:04Z:**
+- both agents **active, healthy (challenges all passed), paused**: Agent-1 e0dc223 (754p / 120 per hour), Agent-2 b60e262
+  (3,000p / 60 per hour);
+- 0 lifecycle events since 12:12Z;
+- policy **on** (provider anthropic) with both agents paused, as in the approved Stage 1 package;
+- breaker tripped; sales closed; no outward or refund authority;
+- **holds open:** `canary-agent1-ceiling` 10,023,033,480 and `stage1-continuation-cap` 841,635,200;
+- **timers:** hourly guard (next 17:00Z); end **2026-10-29T13:44:01Z** — the safe stop pauses, holds the offer, keeps sales
+  closed, turns Fleet Control off, and releases `canary-agent1-ceiling` only if no reservation is open. It does **not**
+  release `stage1-continuation-cap`: the owner decides.

@@ -1,0 +1,60 @@
+{
+ "runId": "probe-e0dc223-v2",
+ "calls": [
+  {
+   "call": 1,
+   "ok": true,
+   "sent": "0:user[text]",
+   "decisive": false,
+   "thinkingBlocksReturned": 0,
+   "toolCalls": [
+    "view_image"
+   ],
+   "providerRequestId": "msg_011CgUuf6dtNgnoVab8rgeuu",
+   "usage": {
+    "in": 625,
+    "out": 50
+   }
+  },
+  {
+   "call": 2,
+   "ok": true,
+   "sent": "0:user[text] 1:assistant[tool_use] 2:user[tool_result+image]",
+   "decisive": false,
+   "thinkingBlocksReturned": 1,
+   "toolCalls": [
+    "deliverable"
+   ],
+   "providerRequestId": "msg_011CgUufEzSVwckP71fhX1kN",
+   "usage": {
+    "in": 731,
+    "out": 163
+   }
+  },
+  {
+   "call": 3,
+   "ok": true,
+   "sent": "0:user[text] 1:assistant[tool_use] 2:user[tool_result+image] 3:assistant[thinking,text,tool_use] 4:user[tool_result]",
+   "decisive": true,
+   "thinkingBlocksReturned": 1,
+   "toolCalls": [
+    "sleep"
+   ],
+   "providerRequestId": "msg_011CgUufRNmLDZQuup2rj4Ag",
+   "usage": {
+    "in": 971,
+    "out": 176
+   }
+  }
+ ],
+ "spentAllInMicro": "1538593",
+ "usdCeilingMicro": "25000000",
+ "maxTokens": 4000,
+ "config": {
+  "model": "claude-opus-5-5",
+  "thinking": "adaptive",
+  "effort": "medium",
+  "promptCache": "prefix"
+ },
+ "verdict": "PASS: signed thinking replayed after an image-bearing tool result was accepted by the provider"
+}

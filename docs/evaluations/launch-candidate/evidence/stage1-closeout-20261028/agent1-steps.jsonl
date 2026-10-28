@@ -1,0 +1,14 @@
+{"at": "2026-10-28T16:00:19.201Z", "turn": 1}
+{"at": "2026-10-28T16:00:25.145Z", "turn": 1, "step": 0, "expectedTier": "T3", "tools": [{"name": "offer", "ok": true}]}
+{"at": "2026-10-28T16:00:31.115Z", "turn": 1, "step": 1, "expectedTier": "T3", "tools": [{"name": "exec", "ok": true}]}
+{"at": "2026-10-28T16:00:36.375Z", "turn": 1, "step": 2, "expectedTier": "T3", "tools": [{"name": "exec", "ok": true}]}
+{"at": "2026-10-28T16:00:38.777Z", "turn": 1, "step": 3, "expectedTier": "T3", "tools": [{"name": "view_image", "ok": true}, {"name": "view_image", "ok": true}]}
+{"at": "2026-10-28T16:00:45.913Z", "turn": 1, "step": 4, "expectedTier": "T3", "tools": [{"name": "exec", "ok": true}]}
+{"at": "2026-10-28T16:00:45.950Z", "turn": 1, "step": 5, "stopped": "FLEET_TURN_CONTEXT_BUDGET"}
+{"at": "2026-10-28T16:01:49.439Z", "turn": 2}
+{"at": "2026-10-28T16:01:54.892Z", "turn": 2, "step": 0, "expectedTier": "T3", "tools": [{"name": "offer", "ok": true}, {"name": "exec", "ok": true}]}
+{"at": "2026-10-28T16:01:57.239Z", "turn": 2, "step": 1, "expectedTier": "T3", "tools": [{"name": "exec", "ok": true}]}
+{"at": "2026-10-28T16:01:58.927Z", "turn": 2, "step": 2, "expectedTier": "T3", "tools": [{"name": "view_image", "ok": true}]}
+{"at": "2026-10-28T16:02:01.340Z", "turn": 2, "step": 3, "expectedTier": "T3", "tools": [{"name": "view_image", "ok": true}]}
+{"at": "2026-10-28T16:02:25.670Z", "turn": 2, "step": 4, "expectedTier": "T3", "tools": [{"name": "deliverable", "ok": true}]}
+{"at": "2026-10-28T16:02:25.731Z", "turn": 2, "step": 5, "stopped": "FLEET_TURN_CONTEXT_BUDGET"}

@@ -1,0 +1,5 @@
+== e0dc223 Agent-1 upgrade / continuation (continue) 2026-10-28T16:00:04Z
+  total: used 458364800 µ¢ since 2026-10-28T12:12:16Z, left 1041635200 µ¢; free now 1041635200; holds: canary-agent1-ceiling 10023033480
+== $2 hard ceiling: hold the rest (841635200 µ¢) so the controller's free credit is exactly 200000000 µ¢ for every call and reservation
+  free credit now 200000000 µ¢; holds canary-agent1-ceiling 10023033480,stage1-continuation-cap 841635200
+== CONTINUING 2026-10-28T16:00:07Z: Agent-1 resumed on e0dc223; free credit 200000000 µ¢ (hard $2); deadline 2026-10-29T13:44:01Z unchanged; hourly guard active

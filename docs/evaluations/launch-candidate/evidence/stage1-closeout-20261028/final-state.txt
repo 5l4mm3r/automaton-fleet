@@ -1,0 +1,18 @@
+CONT 10 81547260 81547260 0 0 122213 3134 319928 39991 0
+RESUME1 85 456656000 3
+RETRY1 0 0
+PROBES probe-e0dc223:1:0 probe-e0dc223-v2:3:1708800
+USED 539912060
+CREDIT balance 10983121420 held 10864668680 free 118452740 inflight 0
+HOLDS canary-agent1-ceiling 10023033480 open | stage1-continuation-cap 841635200 open
+LOTS owner remaining 1722000000 | promotional remaining 9261121420
+USAGE24 403811802
+LEDGER head 1182 08881fec3c34386f verify true unallocated 0 owner_payable 1081 A1cash 8943 A2cash 10000
+FC 30 spent 0 inflight 0 reservations 0
+AGENTS 01M3F50SH7PNX2E3GST13J52AS active hb 16:03:55 paused=true e0dc223 754p/120 | 01M4C4NXT786Q4E9725N5A15KV active hb 16:03:46 paused=true b60e262 3000p/60 units 2291632/0/2241491/0/
+CHALLENGES since 16:00 01M3F5:passed=3 01M4C4:passed=4; lifecycle events 0
+POLICY true anthropic claude-opus-5-5 breaker t sales f outward 0 refund_auth 0
+TIMERS Wed 2026-10-28 17:00:00 UTC automaton-fleet-canary-check.service;Thu 2026-10-29 13:44:01 UTC automaton-fleet-canary-end.service; conf STARTED_AT=2026-10-28T13:44:01Z ENDS_AT=2026-10-29T13:44:01Z 
+GUARDLOG {"at":"2026-10-28T16:00:01Z","canary":"agent1-c1","mode":"check","dryRun":false,"measures":{"ledgerOk" : true, "agentChargedMinor" : 0, "agentUsageMicro" : 342627215, "creditConsumedUsdMicro" : 456656
+PROVIDER_REJECTIONS since 16:00 0
+NOTIFS none

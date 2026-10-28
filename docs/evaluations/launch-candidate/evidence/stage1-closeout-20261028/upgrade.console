@@ -1,0 +1,28 @@
+== e0dc223 Agent-1 upgrade / continuation (upgrade) 2026-10-28T15:59:38Z
+  total: used 458364800 µ¢ since 2026-10-28T12:12:16Z, left 1041635200 µ¢; free now 1041635200; holds: canary-agent1-ceiling 10023033480
+  before: agent=01M3F50SH7PNX2E3GST13J52AS 2026-09-26 15:23:26.111519+00 dd017a31003a281c3337ba532c3f6017 active
+  before: credential=4297d562f4d98083 revoked=false
+  before: memory=56fbc538ed518a0f workspace=a8affb450389d189
+  before: files=d8a8beb418409def f25654bace32d607 
+6a147e38bede02a"
+  },
+  "health": {
+    "ok": true,
+    "pid": 2291632,
+    "uid": 65037,
+    "instanceId": "L5mJhc_GOLQ5YWNF6X-whEG6",
+    "commit": "e0dc22321c0a6633ae74aadef0279074011a5b0a",
+    "buildId": "54dd29fd82b56e2b62fbcdb5b8e44a270d7f46ae3088e6fbb064ee506334cb73",
+    "lockfileSha256": "1df54e3526cb39c847d18fec14f1d4e3595557e34d94040c5b774f9b2f2a21c1",
+    "heartbeatAfter": true,
+    "challengesPassed": 1,
+    "challengesFailed": 0,
+    "status": "active",
+    "waitedMs": 1409
+  }
+}
+
+  identity, credential, memory, workspace, identity files: IDENTICAL
+  new process 2291632 (was 2270377); latest challenge: passed at 15:59:45
+  Agent-2 unchanged: active b60e262 3000 60 paused=true pid 2241491
+== UPGRADED 2026-10-28T15:59:47Z: Agent-1 on e0dc223, same identity, paused.
