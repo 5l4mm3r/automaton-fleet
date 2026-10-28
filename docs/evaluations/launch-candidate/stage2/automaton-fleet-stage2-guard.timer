@@ -1,0 +1,10 @@
+[Unit]
+Description=Automaton Fleet Stage 2 guard — every minute for the 15-minute purchase window (armed before the purchase)
+
+[Timer]
+OnActiveSec=0
+OnUnitActiveSec=60s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

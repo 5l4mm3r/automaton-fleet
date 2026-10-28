@@ -5367,3 +5367,93 @@ not repeated.
 2. The $3.00 API cap and ≤ 30p Fleet Control.
 3. Publishing on 17a35f88 and a ≤ 15-minute sales window.
 4. The owner's £5 purchase, message and manual refund.
+
+## Stage 2 package: controlled purchase / message / refund — EXECUTABLE, PREPARED, NOT RUN (28 Oct 18:10Z)
+
+**Files** (`docs/…/stage2/`; staged in `~/rlc142/`):
+
+| File | sha256 |
+|---|---|
+| `stage2-proof.sh` | `7185c7699099ec091e561c46dcf2ce87d27879435f6e79500c0b433733382875` |
+| `stage2-costs.sh` | `7a22845e09f4a89fbbdcc88566781db5ff1f48292755d3ed3dca63d697771cfa` |
+| `automaton-fleet-stage2-guard.service` | `88c1f071b75b0d090806aa5c91083d48cb9db16a04a056b3f980670d925c0638` |
+| `automaton-fleet-stage2-guard.timer` | `90363ce14505168e156eb0ced8402cc4d889dae2e8dc1850b84b3827e953e2f3` |
+
+`--check` at 18:07Z passed (read-only); the output is shown in the session report.
+
+**The design comes from the code, verified 28 Oct (research report + direct reads):**
+- `economy-offer-proof` needs the offer **published**, but **not sales open and not un-held**. It creates the order with
+  `owner_proof = true` **before** payment (immutable flag). Booking at capture: owner funding net of fee (D unallocated /
+  C owner capital), never agent revenue.
+- The buyer's order page, country, consent and payment (`svc_order_pay` v108), the controller's automatic delivery
+  (`svc_offer_tick`, **no model call**), buyer messages and Fleet Control's checks are **not gated** by `sales_open` or the
+  offer hold.
+- **Therefore Stage 2 never opens sales,** and holds the offer the moment it is published. No public buyer can order at any
+  time; `svc_offer_buy` needs sales open AND the offer not held.
+
+**Steps** (each a mode of `stage2-proof.sh`; out-of-order runs refuse; every failure → `stopall`: Agent-1 paused, cognition
+off, sales closed, offer held, holds KEPT, report):
+
+1. `--check`: reconciliation, the hold arithmetic, gates.
+2. `fund <paypalTxnId>`, after the owner sends ≥ £1.00 to the treasury PayPal.
+   - Reads the transaction from the treasury rail's evidence: settled GBP, unmatched, unattributed; **net = gross + fee**
+     (actual fee); requires ≥ 75p.
+   - **Idempotency:** the ref `paypal:b71b3f3c:<txn>` must be unused (journal external ref, claims, backings) before
+     anything posts. Postgres' unique `(kind, external_ref)` and the per-transaction attribution also prevent a second entry.
+   - Then `ledger-record-funding <net> <ref>` and `economy-paypal-attribute … owner_funding <ref>`; verifies unallocated rose
+     by exactly the net, once.
+3. `publish`:
+   - holds `stage2-cap` = free − $3.00, so **$3.00 TOTAL** for every model call (Agent-1, Fleet Control, anything);
+   - of that, `stage2-obligation-reserve` $0.50 kept for an unexpected real order, so **$2.50 usable** by the proof;
+   - Fleet Control sublimit 30p/day (inside the $3);
+   - policy on (read-back);
+   - an owner task: publish on review 17a35f88, run a capability check if asked (the last is 21 Oct, older than 7 days),
+     change nothing, then sleep;
+   - Agent-1 resumed.
+4. `publish-verify`:
+   - offer `published` **with `review_id = 17a35f88`**, files digest = `f3e6193a…`;
+   - **`economy-offer-hold` at once**; Agent-1 paused; task closed.
+5. `purchase` — **only after the owner says "ready"**:
+   1. **the guard timer is armed first** (`automaton-fleet-stage2-guard`: every 60 s, independent of the session, re-asserts
+      sales closed + offer held, logging `guard.jsonl`);
+   2. then `economy-offer-proof` designates the owner-proof order and prints its private page;
+   3. the owner states the United Kingdom, consents and pays £5 within 15 minutes (otherwise stop; the checkout expires by
+      itself);
+   4. on capture: a final guard pass, guard disarmed;
+   5. **the fee is taken from the capture's T0006 evidence** (45p was only an estimate);
+   6. the controller's automatic delivery is verified: **exactly one sent delivery, bound to review 17a35f88**.
+6. `message`, after the owner sends **one** buyer message: Agent-1 resumed (unallocated must fund the check).
+7. `message-verify`:
+   - exactly **one** agent reply;
+   - **one** Fleet Control check;
+   - its reservation **settled once** (one `fcai:charge`, one credit consumption row);
+   - Agent-1 paused.
+8. `refund-check`:
+   - before: unallocated ≥ 500p (else do NOT refund), and no refund authority live;
+   - **the owner refunds £5 in the PayPal app**;
+   - after: waits up to 24 h for `refunded`, then requires exactly one 500p proof return and evidence from webhook and/or
+     Search.
+9. `cleanup`:
+   - Agent-1 paused → tasks closed → cognition off → Fleet Control off → offer held → guard disabled;
+   - **holds released only if nothing is unresolved** (0 in flight, 0 open/unknown Fleet Control reservations, every
+     cognition call with provider usage or a certain zero); otherwise kept and reported;
+   - then the cost report.
+
+**Unexpected customer order** (impossible by design: sales closed and offer held; handled anyway):
+- `base_gates` stops the proof on any non-owner order since 17:00Z.
+- **Its obligation does not depend on the cap:** delivery of a paid product is the controller's automatic delivery (no model
+  call), so it completes even at $0 free.
+- The $0.50 reserve is released **only** for that buyer's messages (pre-authorised in this package), so Agent-1 can answer
+  them.
+- It is never auto-refunded (no refund authority); the owner decides. It is reported as a real sale, not part of the proof.
+
+**Costs, reported separately** (`stage2-costs.sh`, by phase window from `phases.log`):
+- publish (setup, including the capability check);
+- delivery (expected: 0 model calls);
+- reply (Agent-1 answer + classification);
+- Fleet Control (reservation: actual µ¢, promotional part, posted pence);
+- PayPal fees from evidence;
+- any call outside the phases (expected 0).
+
+**Marginal cost of serving an existing download** = delivery + reply + Fleet Control (+ the PayPal fee on a real sale).
+Setup = publish. Promotional credit is charged to no one (shown separately).

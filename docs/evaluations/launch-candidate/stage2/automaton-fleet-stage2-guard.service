@@ -1,0 +1,9 @@
+[Unit]
+Description=Automaton Fleet Stage 2 guard: sales closed and the tracker offer held (independent of the operator's session)
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/opt/automaton-fleet/current
+ExecStart=/bin/bash -c 'N=/opt/automaton-fleet/node/bin/node; open=$(sudo -n -u postgres psql -X -q -At -d automaton_fleet -c "SELECT fleet.fleet_sales_open()"); [ "$open" = f ] || $N dist/fleet/postgres/cli.js economy-sales closed; held=$(sudo -n -u postgres psql -X -q -At -d automaton_fleet -c "SELECT held_at IS NOT NULL OR status <> \x27published\x27 FROM fleet.fleet_offers WHERE offer_id = \x27d7063a0a-9aab-4d0a-800d-ee2547e89ce7\x27"); [ "$held" = t ] || $N dist/fleet/postgres/cli.js economy-offer-hold uk-landlord-compliance-tracker-england-g-a9ddde "stage 2 guard"; echo "{\"at\":\"$(date -u +%%FT%%TZ)\",\"salesOpenBefore\":\"$open\",\"heldOrUnpublishedBefore\":\"$held\"}" >> /home/ubuntu/rlc142/guard.jsonl'
+TimeoutStartSec=120s
