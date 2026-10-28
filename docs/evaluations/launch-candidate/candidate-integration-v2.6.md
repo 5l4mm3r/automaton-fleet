@@ -5016,3 +5016,73 @@ only line 19 (release pin) and line 12 (pointer). 1838f80 pushed `fef13a7..1838f
 - Task `a11941fe…` **open**.
 - Guard hourly; **end 2026-10-29T13:44:01Z** (safe stop: pause, offer hold, sales closed, Fleet Control off, the hold
   released only if no reservation is open).
+
+## Stage 1 blocker diagnosed and repaired locally (28 Oct 14:10–14:45Z): candidate e0dc223 (NOT deployed)
+
+Both agents paused and the policy off throughout. No paid call, no production change.
+
+**1. Root cause: signed thinking replayed after a changed prefix (demonstrated, not assumed).**
+
+The trace, provider response → stored → replayed:
+- `parseAnthropicMessage` keeps thinking blocks byte-for-byte with their order (`blockOrder`).
+- The founder stores them on the assistant message and replays them on the latest assistant message only
+  (`onlyLatestThinking`).
+- `toAnthropicMessages` returns them in the original order.
+- **But `onlyLatestImages` replaced a viewed image with a note as soon as any later assistant message existed.**
+- So assistant step *k*, generated while step *k*−1's `view_image` result still held its image, was replayed with a
+  *changed* earlier tool result. The provider binds signed thinking to the exact prior conversation and refused it.
+- Only steps that produced thinking are affected: Opus thought before its review decisions and not before plain `exec`
+  steps.
+- The block index `messages.1.content.6/10` counts across the tool loop, which places it at the latest step's thinking.
+
+**Evidence (read-only; no reasoning text or signatures read):**
+- `hypothesis-test.txt`: the prediction "replayed step has thinking AND an image result precedes it in the loop" against
+  every request → **3 true positives (13:49:49, 13:54:09, 13:58:36Z), 0 false positives, 0 false negatives, 67 true
+  negatives**.
+- `recorded-replay.txt`: Agent-1's recorded 85-request structure replayed through both rules → **old: 3 changed-prefix
+  replays (turns 4, 7, 10 = the three rejections); new: 0**.
+
+**Why rehearsals missed it:** the fake Messages API bound thinking to the prefix's *structure* (roles, types, ids), not its
+content. It now binds to content: text, tool inputs, tool-result content including image data.
+
+**2. Why the turns looped:**
+- Each rejection discarded the conversation.
+- From turn 8 on, every packet (≈14,750 of 15,000 characters, so high reduction levels) showed the refusal *code* but not its
+  required wording: carried refusal reasons were cut to 160 characters.
+- All 19 carried call results had been emptied, so no inspection evidence survived; each turn re-inspected and hit its
+  context budget.
+
+**3. Repair `e0dc22321c0a6633ae74aadef0279074011a5b0a` (on dd29a53; 6 files):**
+- **F1 (`mind.ts`).** An image result is replaced by its note only once an assistant message *without* signed thinking
+  follows it. That message binds nothing, and everything generated after it already saw the note, so every replayed thinking
+  block sees its exact generation-time prefix. Images still go once a plain step follows (seen once).
+- **F2 (`continuity.ts`, `mind.ts`).** The carry keeps the latest refused review:
+  - the platform's exact correction (≤1,200 characters);
+  - the founder's own criteria and evidence (≤2,500);
+  - a fingerprint of the files it named.
+  
+  The next turn is told the correction verbatim, and "files UNCHANGED since: your evidence still applies — do not inspect
+  them again; resubmit with the correction" (or "CHANGED: inspect what changed"). That line and the refusal reasons are
+  never shortened at any reduction level. An accepted review clears the record.
+- **F3 (`types.ts`, tool guidance only).** The `deliverable` description now says an offer or order review needs one met
+  criterion worded *exactly* as each listed deliverable. **The SQL gate is unchanged** (exact, case-insensitive match).
+- **Test infrastructure:** the fake binds thinking to prefix content.
+
+**Tests (all deterministic, no paid call):**
+- `fleet-context-continuity` 7/7: the image → thinking → replay sequence through the **real adapter** and the content-strict
+  fake. The old preparation is refused on the 3rd request with exactly `Invalid signature in thinking block`; the new one
+  passes; images are still dropped after a plain step.
+- `fleet-founder-work-continuity` 34/34, including:
+  - **12:** refused review, then a provider rejection, then the next turn carries the exact correction, the founder's
+    evidence and "UNCHANGED"; the corrected review is accepted with **no re-inspection**; the carried review is cleared.
+    This test fails without the continuity change.
+  - **13:** the correction and evidence survive at the 6,000 / 3,000 / 1,500 / 600-character levels.
+- `fleet-r23-cognition` 24/24, `fleet-cognition-routing` 26/26, new-work 2/2, customer-obligations 10/10, preflight 7/7
+  (110/110). Typecheck: 0 errors. S2 image end-to-end passed against the stricter fake.
+- **Pre-existing, unchanged by this candidate** (identical on the unmodified tree): `fleet-cognition-anthropic` 4 and
+  `fleet-f1-eval-02` 1, all `FLEET_INFERENCE_LOCAL_ONLY` (the test environment's default local_only profile since 17019f2).
+
+**Allowance (fresh reconciliation, 14:33Z):**
+- used across all attempts **$4.56656**; remaining of the $15 total **$10.43344**, equal to the controller's free figure;
+  0 in flight;
+- deadline unchanged: end timer **2026-10-29T13:44:01Z**.

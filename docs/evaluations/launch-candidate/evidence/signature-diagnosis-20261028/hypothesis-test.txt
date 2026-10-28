@@ -1,0 +1,4 @@
+13:49:49 4 4 thinking_tokens=103 image-before=True REJECTED
+13:54:09 7 3 thinking_tokens=151 image-before=True REJECTED
+13:58:36 10 5 thinking_tokens=197 image-before=True REJECTED
+prediction (latest step has thinking AND an earlier image result in the loop): true-pos 3, false-pos 0, false-neg 0, true-neg 67

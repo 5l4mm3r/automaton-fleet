@@ -1,0 +1,4 @@
+  turn 4 final request: replayed thinking after a changed prefix under rule old | production outcome: FLEET_COGNITION_PROVIDER_REJECTED
+  turn 7 final request: replayed thinking after a changed prefix under rule old | production outcome: FLEET_COGNITION_PROVIDER_REJECTED
+  turn 10 final request: replayed thinking after a changed prefix under rule old | production outcome: FLEET_COGNITION_PROVIDER_REJECTED
+requests replayed: 85 | replays of signed thinking after a CHANGED prefix — old rule: 3 new rule: 0
