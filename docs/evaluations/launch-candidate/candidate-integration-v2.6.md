@@ -4957,3 +4957,62 @@ deleted):
   - In `resume` mode the pin is used only in that one gate.
 
 Evidence: `evidence/repair-a-20261028/`.
+
+## Stage 1 resume (28 Oct 13:43–14:07Z): files adopted; review NOT recorded; stopped on a no-progress loop after provider thinking-signature rejections
+
+**Before:** `stage1-retry-dd29a53.sh` `ac1a28c8…` and `upgrade-agent1-resume-v2.sh` `6f82c3fc…` were verified; their diffs are
+only line 19 (release pin) and line 12 (pointer). 1838f80 pushed `fef13a7..1838f80`.
+
+**Resume (13:43:57–13:44:02Z, exit 0):**
+- policy on, read-back unchanged;
+- end timer armed and verified before the resume, then **re-armed at exactly STARTED_AT 2026-10-28T13:44:01Z + 24 h =
+  ENDS_AT 2026-10-29T13:44:01Z**; the drop-in now holds a single `OnCalendar=2026-10-29 13:44:01 UTC`, so the old 12:12:16Z
+  deadline is replaced;
+- hourly guard active.
+
+**What Agent-1 did (dd29a53; the packet fix works: no packet refusal in 85 calls):**
+- **Turn 1:** two input mistakes corrected; then the offer's files were replaced as tasked. `Landlord_Compliance_Tracker.xlsx`
+  `f45c3d00` removed and the corrected `7793dff2` attached; `README.txt` `4494dff2` kept (files version 7).
+- **Turns 2–15:** inspection with `exec` and `view_image` of the rendered pages.
+- **Turns 7 and 10: the exact-file review** of `from-owner/tracker-v6/Landlord_Compliance_Tracker.xlsx` + `README.txt` was
+  attempted and **refused `FLEET_REVIEW_PROMISE_UNCOVERED`**: "add a met criterion worded exactly as each listed deliverable,
+  with the evidence you checked: Landlord_Compliance_Tracker.xlsx (property tracker + rent increase log) | README.txt (how to
+  use, intervals and sources)".
+  - Its criteria were substantive (all 15 columns on one landscape page, due-date formulas, both hashes) but not worded as
+    the offer's two listed deliverables.
+- **The step after each refusal**, and one earlier step after a `deliverable` call (13:49:49, 13:54:09, 13:58:36Z), was
+  **rejected by the provider (HTTP 400):** `invalid_request_error: messages.1.content.6 / .10: Invalid signature in thinking
+  block` (`provider-rejections.jsonl`).
+  - The runtime then discards the conversation (`FLEET_COGNITION_PROVIDER_REJECTED`), so the refusal's guidance is lost.
+- **Turns 11–15 made no progress:** each re-read the offer, repeated `reviews` (refused by the loop guard as unchanged),
+  re-inspected, and ended at `FLEET_TURN_CONTEXT_BUDGET` before any review.
+- **Paused at 14:07:24Z and policy disabled** (kill switch), as instructed for an unchanged repeated failure. No database
+  touched.
+
+**Diagnosis (as far as it goes without a paid call):**
+- The founder sends signed thinking only on the latest assistant message (`onlyLatestThinking`), and no tier change occurred
+  (T3 Opus throughout). So the invalid signature at `messages.1` points at how the request is assembled or altered between
+  the founder and the provider. Candidates: the controller's Anthropic message mapping, or block ordering around tool
+  results that follow a `deliverable` call.
+- The fake-provider rehearsals cannot validate signatures. This is a **material blocker** for the exact-file review: the
+  step that would correct the review is the one rejected.
+- **Secondary:** progress is lost when a rejected step discards the conversation. Inspection with images fills the
+  per-turn budget in about 5 steps, so a new turn never gets back to the review.
+
+**Accounting:**
+- 85 calls, all T3 `claude-opus-5-5`; 82 credit consumption events; **456,656,000 µ¢ = $4.56656 of provider credit, all
+  promotional**.
+- Charged to Agent-1: 0. Ledger postings: 0 (head 1182, verifies).
+- **$15 TOTAL allowance:** used $4.56656 across all attempts (the first retry used 0); **free $10.43344**, matching the
+  controller's figure (balance 11,066,377,480 − held 10,023,033,480 = 1,043,344,000 µ¢); 0 in flight.
+- Agent-1 rolling 24 h usage (intended): 342.627215p of 754p.
+- Fleet Control: 30p, spent 0, no reservation.
+
+**State at 14:09Z (`evidence/stage1-resume-20261028/final-status.txt`):**
+- Agent-1: `active`, **paused**, dd29a53, heartbeats current.
+- Agent-2: `active`, **paused**, b60e262, PID 2241491, no calls.
+- Policy off. Breaker tripped; sales closed; no outward release or refund authority.
+- Offer paused, not newly published (published 18 Oct as before).
+- Task `a11941fe…` **open**.
+- Guard hourly; **end 2026-10-29T13:44:01Z** (safe stop: pause, offer hold, sales closed, Fleet Control off, the hold
+  released only if no reservation is open).
