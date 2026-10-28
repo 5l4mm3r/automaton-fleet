@@ -4441,3 +4441,38 @@ Recovery preconditions (checked before any reinstatement; recovery itself not re
 **Proposed launch (on approval of `0a94b3d3…`):** `setsid nohup bash -c 'bash ~/rlc139/install.sh; echo EXIT=$? > ~/rlc139/install.exit' < /dev/null > ~/rlc139/install.console 2>&1 &`,
 then, only on `INSTALL COMPLETE` with EXIT=0, `setsid nohup bash ~/rlc139/recover-run.sh < /dev/null > /dev/null 2>&1 &`
 (logs: recover-guard.log, recover.console, recover.log, recover-evidence/). Rehearsal deadline 28 Oct 22:45Z.
+
+## Group B executed 28 Oct 11:11–11:15Z: c448d98 INSTALLED; Agent-1 and Agent-2 RECOVERED (active, paused); no fallback needed
+
+- Approvals amended (owner): installer `0a94b3d3…` (diff from `a788fd7d…`: line 25 only, the UISHA assignment), supervisor
+  `recover-run.sh` `f6a8d7e1…` invoking the unchanged `recover.sh` `454ec43e…`; all three full hashes verified immediately before
+  each launch. d6bc595 pushed (3 files as described, secret scan clean; `cebfbf5..d6bc595`, no force).
+- **Install** (detached, 11:11:49Z): pre-install backup `baseline-pre-install-c448d98-20261028T111150Z` (5475 entries); controller
+  outage 11:12:51–11:13:37Z (46 s; both agents were dead, so no lives were at risk); reconciliation OK (2810 events preserved);
+  `RELEASE c448d98 DEPLOYED` 11:13:45Z, schema 122; all post-install checks passed; **INSTALL COMPLETE, EXIT=0** at 11:13:50Z.
+- **Recovery** (supervisor detached, 11:14:09Z): pre-recovery backup `baseline-pre-recovery-c448d98-20261028T111411Z` (5486
+  entries) → `founder-reinstate` at 11:14:14Z (both unresponsive, holds to 12:14:14Z, reversals 1180>1179, 1181>1177, 1182>1178,
+  all seven step-1 checks passed) → units started at 11:14:16Z → Agent-2 heartbeat and challenge passed at 11:14:17Z, Agent-1 at
+  11:14:18Z, `agent_recovered via health_challenge`, holds ended at active. Step 5 confirmed both holds ended, the latest
+  challenges passed, containment intact, and no cognition turn. **Then a false stop:** "the ledger moved after the
+  reinstatement". Script defect: `H0` was taken at step 0, BEFORE the reinstatement, so the three expected reversals (head
+  1179→1182, logged by the script right after step 1) tripped the check. The head stayed at 1182 from step 1 onward, so
+  the ledger did not move after the reinstatement. recover.sh exited 1. The supervisor found nothing exposed (both active)
+  and correctly applied no fallback. The one remaining step-5 check (timings) was verified read-only: production values.
+- **Final state** (read-only, ~11:16Z):
+  - Registry: both `active`, runtimes 7c194b8 / b60e262 (verified), no holds; cap 2, living 2.
+  - Units: active/running, PIDs 2241482 (Agent-1) / 2241491 (Agent-2), started 11:14:16Z, NRestarts 0.
+  - Credentials: same token hashes, not revoked. Challenges passed at 11:14:17/18Z and again at 11:15:18Z.
+  - Ledger: reversals 1180–1182 posted; originals 1177–1179 and death events 11469/11472 kept; estates `reverted`. Head 1182
+    `08881fec3c34386f`, verify ok, 1123 journals, 0 unbalanced.
+  - Balances (from SQL): owner payable 1081 (was 1267; −186 = `ai_cost_unwound` amountMinor 186), unallocated 0,
+    unbacked_estates 0, Agent-1 cash 8943, Agent-2 cash 10000; credit 11523033480 µ¢ (unchanged).
+  - Lifecycle timings: `120 600 480 300` (production; no fallback applied).
+  - Containment: breaker tripped, Fleet Control budget unset, canary hold 10023033480 kept, policy disabled, provider none,
+    both paused, sales closed, 0 live refund authorities; the four safety flags false.
+- **State checksums** vs the incident snapshot tarballs (hashes only):
+  - Agent-1: 1087 of 1089 files identical; Agent-2: 13 of 15.
+  - For both, the only changed files are `runtime-instance.json` and `runtime-report.json` (rewritten by the new process at
+    start); `founder.json` and `fleet-credentials.json` are identical.
+- Follow-up: fix the `H0` placement in recover-c448d98.sh if the script is ever reused (the record keeps it as run). The
+  founder upgrade/revision rehearsals are now runnable (living founders) and still recorded as not run. R3/R4 remain open.
