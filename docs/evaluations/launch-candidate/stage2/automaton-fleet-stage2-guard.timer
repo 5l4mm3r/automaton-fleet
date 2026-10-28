@@ -1,5 +1,5 @@
 [Unit]
-Description=Automaton Fleet Stage 2 guard — every minute for the 15-minute purchase window (armed before the purchase)
+Description=Automaton Fleet Stage 2 guard — every minute from before the purchase until the capture (or cleanup)
 
 [Timer]
 OnActiveSec=0

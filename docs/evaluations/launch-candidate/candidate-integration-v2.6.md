@@ -5370,7 +5370,7 @@ not repeated.
 
 ## Stage 2 package: controlled purchase / message / refund — EXECUTABLE, PREPARED, NOT RUN (28 Oct 18:10Z)
 
-**Files** (`docs/…/stage2/`; staged in `~/rlc142/`):
+**Files** (`docs/…/stage2/`; staged in `~/rlc142/`) — **SUPERSEDED by the verified package below (28 Oct 20:00Z):**
 
 | File | sha256 |
 |---|---|
@@ -5439,7 +5439,7 @@ off, sales closed, offer held, holds KEPT, report):
      cognition call with provider usage or a certain zero); otherwise kept and reported;
    - then the cost report.
 
-**Unexpected customer order** (impossible by design: sales closed and offer held; handled anyway):
+**Unexpected customer order** (CORRECTED below: not demonstrated impossible — no route was found and the found routes are refused; handled anyway):
 - `base_gates` stops the proof on any non-owner order since 17:00Z.
 - **Its obligation does not depend on the cap:** delivery of a paid product is the controller's automatic delivery (no model
   call), so it completes even at $0 free.
@@ -5457,3 +5457,122 @@ off, sales closed, offer held, holds KEPT, report):
 
 **Marginal cost of serving an existing download** = delivery + reply + Fleet Control (+ the PayPal fee on a real sale).
 Setup = publish. Promotional credit is charged to no one (shown separately).
+
+## Stage 2 package VERIFIED (28 Oct 19:20–20:05Z): rehearsed end to end on PostgreSQL; one production-blocking defect found and fixed — still NOT RUN
+
+**Corrections to the 18:10Z package**
+- "Unexpected orders are impossible" was not demonstrated and is withdrawn. What is shown: the public order route refuses
+  while sales are closed, and separately while the offer is held; an agent cannot send anyone a link (outward actions held);
+  production has no other payable checkout. A route not found in review cannot be excluded, so the detection and the
+  `unexpected` handling stay.
+- **Two clocks.** The 15-minute window is the operator's watch window only. The checkout stays payable server-side for
+  **72 h** from its creation (`fleet_paypal_checkouts.expires_at` default `now() + 72 h`; the proof uses it unchanged;
+  production's two earlier checkouts both had exactly 3 days). A payment approved before expiry is still captured, and a late
+  capture on an expired checkout is still booked. No owner command shortens or cancels a checkout; only the agent's own
+  `paypal.cancel` exists. PayPal's approval link has its own shorter lifetime; custody renews it within the 72 h.
+- **Defect (would have blocked funding in production):** `fund` compared SQL-concatenated booleans with `t`, but PostgreSQL
+  renders a boolean inside a text concatenation as `true` (confirmed on production read-only). Every genuine receipt would
+  have been refused. Fixed; rehearsed.
+- Cosmetic: the "booked" ledger line queried `journal.order_id`; the proof capture's journal is linked from its checkout.
+  Fixed.
+- **Defect (found by the rehearsal's second full run):** `refund-check` chose "before" or "after" from the order's status.
+  Run right after the owner's refund, before the webhook or Search recorded it, it printed "ready" again instead of waiting.
+  Split into `refund-check` (before; requires paid) and **`refund-verify`** (after; requires the "covered" phase; waits up to
+  24 h). Rehearsed: a re-run before the refund still says ready; `refund-verify` waits and books once.
+
+**Changes (substantive; in the preparation scope, not run)**
+- The script's host bindings and production identities are now two marked blocks; a rehearsal replaces only those (asserted).
+- `guard` is a mode of the script; the guard unit runs `stage2-proof.sh guard`. It re-asserts sales closed and offer held,
+  and logs before/after and the non-owner order count to `guard.jsonl`.
+- `purchase` is re-runnable:
+  - an unpaid window ends with exit 3 (WINDOW CLOSED), keeping the order and the guard armed;
+  - a re-run reuses the same order (`economy-offer-proof` replays an open proof checkout);
+  - a payment made after the window is verified by a re-run.
+- New gate (all steps): **no payable checkout other than the owner-proof order** (an earlier link stays payable after sales
+  close). `others()` now also counts an older non-owner order captured since Stage 2 began.
+- `unexpected` (pre-authorised contingency):
+  - re-enables cognition with the same policy (the kill switch turned it off) under the same $3 cap hold;
+  - releases only the $0.50 reserve;
+  - gives Agent-1 a task to serve that buyer and resumes it.
+  - No refund.
+- `cleanup` refuses while a real buyer is owed a delivery or an answer, and changes nothing in that case.
+
+**Rehearsal** — `src/__tests__/fleet/fleet-stage2-proof-script-pg.test.ts`: the real script, the real CLI (`dist`, rebuilt
+from e0dc223 sources), schema 122, an ephemeral PostgreSQL. Custody, PayPal, the controller's passes and Agent-1 are played
+by their own database functions. Result: **13/13 passed** (final full run, 213 s, after the refund split; the run before it
+was 12/13 — the refund defect above).
+
+**Verified files:**
+
+| File | sha256 |
+|---|---|
+| `stage2-proof.sh` | `5a25b254bc35a4cc53fc96e7109a065b19a55187619565f1d50f93b35455e1e2` |
+| `stage2-costs.sh` | `7a22845e09f4a89fbbdcc88566781db5ff1f48292755d3ed3dca63d697771cfa` |
+| `automaton-fleet-stage2-guard.service` | `7c2c29d944611a9c7e6d5e820ee1f069a6a44c9aafeae65b0a6a1c3b29698ef7` |
+| `automaton-fleet-stage2-guard.timer` | `dc8e58ded5da63998dcecf4b64b9b779f8fe7c320edc2cee04f7cb1f6bdb03c8` |
+
+
+1. `--check` passes on the Stage 1 closed state and writes nothing (journal, holds and events unchanged).
+2. `fund`:
+   - 134p gross / −34p fee records **100p net once**; unallocated +100.
+   - The same transaction again: refused before posting. A direct `ledger-record-funding` with the same ref: refused by the
+     ledger.
+   - 67p net: refused (minimum 75p). An unknown transaction: refused.
+3. `publish`: two holds; **free = 250,000,000 µ¢ ($2.50)**; Fleet Control ceiling 30p.
+   - Fleet Control alone cannot reserve $0.45: its 30p sublimit refuses it even with $2.50 free.
+   - Agent $2.40 + Fleet Control $0.10 = the whole $2.50: Fleet Control's $0.20 was refused `UNFUNDED`, and once the $2.50
+     is gone even 1,000 µ¢ is refused.
+   - After settling, an agent call above $2.50 is refused `EXHAUSTED`.
+   - The $0.50 reserve was never reachable.
+4. `publish-verify`: published on the reviewed bytes, then held; Agent-1 paused; task closed.
+5. **Ordinary purchases refused** with sales closed + held, sales open + held, and sales closed + unheld.
+   - The guard closed sales again, and held the offer again; `guard.jsonl` recorded both corrections.
+   - 0 orders were created. The agent's `mail.send` was refused.
+6. `purchase` with a 3-second window: exit 3 (WINDOW CLOSED); guard still armed.
+   - The order is owner-proof and awaiting payment; the checkout's life is exactly 72 h.
+   - The page still accepted country, consent and "pay" afterwards.
+7. `purchase` re-run: the same order is reused.
+   - Capture 500p, fee 45p from the T0006 evidence; booked D unallocated 455.
+   - The guard ran a final pass and was disarmed.
+   - **Exactly one `sent` delivery, bound to the reviewed review id, with 0 model calls**: Agent-1 paused, offer held, sales
+     closed.
+8. `message`: one buyer message, then Agent-1's reply and classification.
+   - The real `MessageChecker` with a fake provider: **1 check, then 0 on a second pass**.
+   - `message-verify`: the reservation was settled once.
+9. `refund-check`: covered before (and still only "ready" on a re-run); `refund-verify` waited, then the refund was booked through `cx_paypal_refund_record`, and **its replay posted
+   nothing**. Exactly one 500p proof return; no refund authority; ledger verifies.
+10. `cleanup` with an open Fleet Control reservation: **both holds KEPT** ("0 1 0"). After settling: released.
+    - The cost report runs with no SQL errors; delivery shows 0 calls.
+    - Final state: cognition off, Fleet Control off, sales closed, offer held, Agent-1 paused.
+11. **Failure clean-up** (resume injected to fail in `publish`): STOP leaves cognition disabled, Agent-1 paused, sales
+    closed and **2 holds kept**. A retry is refused (holds exist); `cleanup` restores free credit exactly.
+12. **An earlier payable link:**
+    - an order made while the shop was open stays payable after sales close and the hold (`svc_order_pay` ok);
+    - every step stops ("a checkout other than the proof order is payable");
+    - after its 72 h (time moved in the test) custody's pass marks it expired; the page answers `expired` and `--check`
+      passes.
+13. **Unexpected real order** while all $2.50 was spent (0 free):
+    - **delivered (`sent`) with no credit free**;
+    - every proof step stops;
+    - `cleanup` is refused while the buyer is owed an answer, and nothing changes;
+    - `unexpected` re-enables cognition, frees exactly $0.50, creates the task and resumes Agent-1, which then answers;
+    - `cleanup` completes;
+    - the order stays `paid` (never auto-refunded).
+
+**Production, read-only (19:59Z):**
+- payable checkouts other than an owner-proof order: 0;
+- non-owner orders since 17:00Z: 0 (the only order ever, 19 Oct, is captured and refunded; its retired PayPal order cannot
+  be paid);
+- holds 0; sales closed; agents `active e0dc223,active b60e262`, both paused; schema 122;
+- policy row `false … 754 20` (`publish` turns it on, and the read-back expects `true … 754 20`);
+- free 10,983,121,420 µ¢; unallocated 0p.
+
+**Staging:** copying the corrected files to `~/rlc142/` was refused by the session's permission classifier. **The VPS still
+holds the 18:10Z files**, which carry the funding defect. They must be replaced (verify the hashes) before any step runs.
+
+**Remaining limitations (disclosed):**
+- The rehearsal plays PayPal, custody and the controller's passes by their database functions. The live PayPal capture,
+  webhook and Transaction Search timing are not exercised. The fee is read from evidence at run time.
+- No owner command closes the proof checkout early: after the window it stays payable for up to 72 h, to the owner only
+  (private link).
+- Unexpected orders are detected and handled, not proven impossible.
