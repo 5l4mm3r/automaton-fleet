@@ -45,7 +45,7 @@ function rig(script: (turn: number, step: number, packet: string) => Step, o: { 
     fs.writeFileSync(path.join(d.m, "goals.json"), JSON.stringify([{ id: "g1", title: "Publish the landlord compliance tracker", status: "open" }]));
   }
   const world = { eventsDigest: hex32(1), notices: [] as Array<{ id: string; at: string; body: string }>, ownerPending: 0, cash: 9_906,
-    requests: [] as unknown[], storefrontStatus: "draft", economyCalls: [] as string[], refuse: {} as Record<string, string>,
+    requests: [] as unknown[], storefrontStatus: "draft", economyCalls: [] as string[], refuse: {} as Record<string, string>, refuseReason: {} as Record<string, string>,
     recentEvents: [] as Array<{ kind: string; id: string; at: string; tool?: string }>, obligations: undefined as unknown[] | undefined,
     ownerTasks: undefined as Array<{ id: string; at: string; title: string; body: string }> | undefined, ownerTasksDigest: undefined as string | undefined };
   const packets: string[] = [];
@@ -89,8 +89,9 @@ function rig(script: (turn: number, step: number, packet: string) => Step, o: { 
     ledger: async () => ({}), ownerRequests: async () => ({ ok: true, requests: world.requests }),
     economy: async (op: string, args?: Record<string, unknown>) => {
       world.economyCalls.push(op);
-      const refusal = world.refuse[`${op}:${String((args?.args as { offerId?: unknown } | undefined)?.offerId ?? args?.offerId ?? "")}`];
-      if (refusal) return { ok: false, code: refusal };                  // the controller refuses (its authority, per call)
+      const key = `${op}:${String((args?.args as { offerId?: unknown } | undefined)?.offerId ?? args?.offerId ?? "")}`;
+      const refusal = world.refuse[key];
+      if (refusal) return { ok: false, code: refusal, ...(world.refuseReason[key] ? { reason: world.refuseReason[key] } : {}) };   // the controller refuses (its authority, per call)
       if (op === "storefront.products" || op === "offer.list") return { ok: true, products: [{ id: "p1", status: world.storefrontStatus }] };
       if (op === "owner.reply") return { ok: true };
       return { ok: true, op, args };
@@ -853,5 +854,63 @@ describe("work continuity (owner acceptance, 2026-10-18)", () => {
     await beats(r, 2);
     expect(r.packets.at(-1)).not.toContain(TASK.body);
     expect(r.world.economyCalls).not.toContain("owner.claim");
+  });
+
+  it("12. 2026-10-28 (Stage 1): a refused review survives a provider rejection — the next turn carries the exact correction, the founder's own evidence and the unchanged files, and the corrected review is accepted without re-inspection", async () => {
+    const PROMISES = "tracker.csv (property tracker + rent increase log) | README.txt (how to use, intervals and sources)";
+    const REASON = `add a met criterion worded exactly as each listed deliverable, with the evidence you checked: ${PROMISES}`;
+    let world: ReturnType<typeof rig>["world"] | null = null;
+    const evidence = "EVIDENCE-7731: all 15 columns fit one landscape page; due dates recalculate";
+    const review = (criteria: Array<{ criterion: string; met: boolean; evidence: string }>) =>
+      c("deliverable", { op: "review", args: { subject: "offer", offerId: "off1", paths: ["product/tracker.csv"], criteria, verdict: "pass" } });
+    const firstTry = [{ criterion: "Printed tracker shows every column", met: true, evidence }, { criterion: "Due dates calculate", met: true, evidence }, { criterion: "Hashes match", met: true, evidence }];
+    const corrected = [...firstTry, { criterion: "tracker.csv (property tracker + rent increase log)", met: true, evidence }, { criterion: "README.txt (how to use, intervals and sources)", met: true, evidence }];
+    const inspections: number[] = [];
+    const script = (t: number, s: number, packet: string): Step | Promise<Step> => {
+      if (t === 1 && s === 1) return { calls: [c("read_file", { path: "product/tracker.csv" })] };
+      if (t === 1 && s === 2) return { calls: [review(firstTry)] };                                  // refused: promises uncovered
+      if (t === 1 && s === 3) return Promise.reject(Object.assign(new Error("rejected"), { code: "FLEET_COGNITION_PROVIDER_REJECTED" }));  // the next step is lost
+      if (t === 2 && s === 1) {
+        // The new turn has the platform's exact correction, its own evidence and "unchanged": it corrects instead of inspecting.
+        const ready = packet.includes("Your last review (") && packet.includes(PROMISES) && packet.includes("EVIDENCE-7731") && packet.includes("UNCHANGED since");
+        if (!ready) { inspections.push(t); return { calls: [c("read_file", { path: "product/tracker.csv" })] }; }
+        delete world!.refuse["review.record:off1"];                                                   // the controller accepts a corrected review
+        return { calls: [review(corrected)] };
+      }
+      return { calls: [c("sleep", { reason: "review recorded; waiting" })] };
+    };
+    const r = rig(script);
+    world = r.world;
+    r.world.refuse["review.record:off1"] = "FLEET_REVIEW_PROMISE_UNCOVERED";
+    r.world.refuseReason["review.record:off1"] = REASON;
+    await beats(r, 1);
+    const carry1 = JSON.parse(fs.readFileSync(path.join(r.d.s, CARRY_FILE), "utf8"));
+    expect(carry1.stopCode).toBe("FLEET_COGNITION_PROVIDER_REJECTED");
+    expect(carry1.review).toMatchObject({ code: "FLEET_REVIEW_PROMISE_UNCOVERED", paths: ["product/tracker.csv"] });
+    expect(carry1.review.reason).toContain(PROMISES);
+    await beats(r, 1);
+    expect(inspections).toEqual([]);                                                                   // no re-inspection
+    expect(r.packets[1]).toContain(PROMISES);                                                           // the exact correction, whole
+    expect(r.world.economyCalls.filter((op) => op === "review.record")).toHaveLength(2);                // refused, then accepted
+    // An accepted review clears the carried one: the next working turn no longer carries it.
+    const carry2 = fs.existsSync(path.join(r.d.s, CARRY_FILE)) ? JSON.parse(fs.readFileSync(path.join(r.d.s, CARRY_FILE), "utf8")) : null;
+    expect(carry2?.review).toBeUndefined();
+  });
+
+  it("13. the carried review and the platform's refusal reasons are never shortened at any reduction level; a changed file is said to be changed", async () => {
+    const { saveCarry, carryLinesWithin, reviewLine } = await import("../../fleet/founder/continuity.js");
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "wc-13-"));
+    const long = `add a met criterion worded exactly as each listed deliverable, with the evidence you checked: ${"Deliverable-X (a long promise line) | ".repeat(12)}END-OF-LIST`;
+    const call = c("deliverable", { op: "review", args: { subject: "offer", offerId: "o", paths: ["a.xlsx"], criteria: [{ criterion: "c", met: true, evidence: "EVIDENCE-1" }] } });
+    const carry = saveCarry(root, null, { turn: 1, steps: 3, notRun: [], plan: "p".repeat(700),
+      calls: [...Array.from({ length: 12 }, (_, i) => ({ call: c("exec", { command: `echo ${i}` }), ok: true, output: "o".repeat(500) })),
+        { call, ok: false, refused: "FLEET_REVIEW_PROMISE_UNCOVERED", output: `REFUSED ${long}`, fp: "a.xlsx=1:1" }] });
+    for (const max of [6_000, 3_000, 1_500, 600]) {
+      const lines = carryLinesWithin(carry, max).join("\n");
+      expect(lines).toContain("END-OF-LIST");
+      expect(lines).toContain("EVIDENCE-1");
+    }
+    expect(reviewLine({ ...carry.review!, unchanged: false })).toContain("CHANGED since");
+    expect(reviewLine({ ...carry.review!, unchanged: true })).toContain("UNCHANGED since");
   });
 });

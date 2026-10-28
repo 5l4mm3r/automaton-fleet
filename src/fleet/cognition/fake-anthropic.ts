@@ -22,11 +22,18 @@ import crypto from "crypto";
 import { imageDimensions, type ChatMessage, type ToolSpec } from "./types.js";
 import { REHEARSAL_AGENT_HEADER, type FakeFault } from "./fake-openai.js";
 
-/** Structural key of a conversation prefix: roles, block types and tool ids — thinking blocks excluded (they may be stripped). */
+/**
+ * Key of a conversation prefix a signed thinking block is bound to: roles and every non-thinking block WITH ITS CONTENT
+ * (text, tool_use input, tool_result content including image data) — thinking blocks excluded (older ones may be stripped).
+ * 2026-10-28: the key was structural only (roles, types, ids), so a prefix whose CONTENT changed (an image result replaced by
+ * a note) passed here while the real API refused it ("Invalid `signature` in `thinking` block", Stage 1, three times).
+ */
 function prefixKey(msgs: Array<{ role: string; content: string | Array<Record<string, unknown>> }>): string {
-  return JSON.stringify(msgs.map((m) => [m.role, (typeof m.content === "string" ? [{ type: "text" }] : m.content)
+  const h = (v: unknown) => crypto.createHash("sha256").update(JSON.stringify(v ?? null)).digest("hex").slice(0, 16);
+  return JSON.stringify(msgs.map((m) => [m.role, (typeof m.content === "string" ? [{ type: "text", text: m.content }] : m.content)
     .filter((b) => b.type !== "thinking" && b.type !== "redacted_thinking")
-    .map((b) => (b.type === "tool_use" ? `u:${String(b.id)}` : b.type === "tool_result" ? `r:${String(b.tool_use_id)}` : String(b.type)))]));
+    .map((b) => (b.type === "tool_use" ? `u:${String(b.id)}:${h(b.input)}` : b.type === "tool_result" ? `r:${String(b.tool_use_id)}:${h(b.content)}:${b.is_error ? 1 : 0}`
+      : b.type === "text" ? `t:${h(b.text)}` : `${String(b.type)}:${h(b)}`))]));
 }
 
 export type FakeAnthropicFault =

@@ -9,6 +9,48 @@ import { describe, it, expect } from "vitest";
 import { startFakeAnthropic } from "../../fleet/cognition/fake-anthropic.js";
 import { AnthropicProvider, describeAnthropicError, toAnthropicMessages } from "../../fleet/cognition/anthropic.js";
 import { runContextRepro } from "../../fleet/cognition/context-repro.js";
+import { onlyLatestImages, onlyLatestThinking } from "../../fleet/founder/mind.js";
+import type { ChatMessage, ToolSpec } from "../../fleet/cognition/types.js";
+import type { ScriptedProvider } from "../../fleet/cognition/providers.js";
+
+// A valid 1×1 PNG (the fake checks image blocks as the real API does).
+const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+
+/**
+ * Stage 1 (28 Oct), the founder's three "Invalid `signature` in `thinking` block" rejections: view_image → a step WITH
+ * thinking → the next request. Runs the real adapter against the fake (prefix-bound by CONTENT, as the real API), preparing
+ * each request with `prep` exactly as the routed mind does. Returns each request's outcome.
+ */
+async function imageThenThinking(prep: (m: ChatMessage[]) => ChatMessage[]): Promise<Array<{ ok: boolean; detail?: string }>> {
+  const plan = ["view_image", "deliverable", "deliverable", "sleep"];
+  let k = 0;
+  const script = { chat: async () => ({ content: "", toolCalls: [{ id: "x", name: plan[Math.min(k++, plan.length - 1)], arguments: { op: "review" } }], usage: { inputTokens: 5, outputTokens: 5 } }) } as unknown as ScriptedProvider;
+  const fake = await startFakeAnthropic({ apiKey: "k", model: "m", thinking: true, script, fault: () => null });
+  const out: Array<{ ok: boolean; detail?: string }> = [];
+  try {
+    const p = new AnthropicProvider({ baseUrl: fake.url, apiKey: "k", model: "m", attemptTimeoutMs: 5000, maxAttempts: 1, backoffMs: 10 });
+    const tools: ToolSpec[] = ["view_image", "deliverable", "sleep"].map((name) => ({ name, description: name, parameters: { type: "object", properties: {} }, capability: "planning" } as unknown as ToolSpec));
+    const messages: ChatMessage[] = [{ role: "user", content: "TASK PACKET (test)" }];
+    for (let step = 0; step < 3; step++) {
+      try {
+        const r = await p.chat({ agentId: "01M3F50SH7PNX2E3GST13J52AS", system: "s", messages: prep(messages), tools, maxTokens: 1000 });
+        out.push({ ok: true });
+        messages.push({ role: "assistant", content: r.content, toolCalls: r.toolCalls, ...(r.thinking?.length ? { thinking: r.thinking, ...(r.blockOrder ? { blockOrder: r.blockOrder } : {}) } : {}) });
+        for (const c of r.toolCalls) {
+          messages.push(c.name === "view_image"
+            ? { role: "tool", toolCallId: c.id, content: "page 1 rendered", images: [{ mediaType: "image/png", dataB64: PNG }] }
+            : { role: "tool", toolCallId: c.id, isError: true, content: "REFUSED FLEET_REVIEW_PROMISE_UNCOVERED: add a met criterion worded exactly as each listed deliverable" });
+        }
+      } catch (e) {
+        out.push({ ok: false, detail: String((e as { info?: { detail?: unknown } }).info?.detail ?? (e as Error).message) });
+        break;
+      }
+    }
+  } finally {
+    await fake.close();
+  }
+  return out;
+}
 
 describe("founder context continuity across history truncation (signed thinking is prefix-bound)", () => {
   it("many turns through the real mind, toolbox and native adapter: no rejection, no conversation reset", async () => {
@@ -28,6 +70,38 @@ describe("founder context continuity across history truncation (signed thinking 
       await fake.close();
     }
   }, 60_000);
+
+  it("2026-10-28: an image result before a signed-thinking step is not rewritten while that thinking is replayed (Stage 1 rejection)", async () => {
+    // The previous preparation (images kept only after the latest assistant message, applied after thinking was stripped)
+    // reproduces production exactly: the third request is refused on the latest step's signed thinking.
+    const before = await imageThenThinking((m) => {
+      const t = onlyLatestThinking(m);
+      const last = t.map((x) => x.role === "assistant").lastIndexOf(true);
+      return t.map((x, i) => (x.images && i < last ? { ...x, images: undefined, content: `${x.content}\n[1 image(s) were shown in that step; view_image again to look again]` } : x));
+    });
+    expect(before.map((r) => r.ok)).toEqual([true, true, false]);
+    expect(before[2].detail).toMatch(/Invalid `signature` in `thinking` block/);
+    // The repair: images are replaced only once an assistant message WITHOUT signed thinking follows them.
+    const after = await imageThenThinking((m) => onlyLatestThinking(onlyLatestImages(m)));
+    expect(after.map((r) => r.ok)).toEqual([true, true, true]);
+  }, 30_000);
+
+  it("images are still replaced once a step without signed thinking follows them (they are seen once, not carried)", () => {
+    const img = { mediaType: "image/png" as const, dataB64: PNG };
+    const think = [{ type: "thinking" as const, thinking: "t", signature: "c2ln" }];
+    const base: ChatMessage[] = [
+      { role: "user", content: "p" },
+      { role: "assistant", content: "", toolCalls: [{ id: "a", name: "view_image", arguments: {} }] },
+      { role: "tool", toolCallId: "a", content: "r", images: [img] },
+    ];
+    // Followed by a thinking step: kept (that step's thinking is bound to it).
+    const withThinking = onlyLatestImages([...base, { role: "assistant", content: "", toolCalls: [{ id: "b", name: "x", arguments: {} }], thinking: think }, { role: "tool", toolCallId: "b", content: "r2" }]);
+    expect(withThinking[2].images).toHaveLength(1);
+    // Followed by a step without thinking: replaced by the note (seen once).
+    const plain = onlyLatestImages([...base, { role: "assistant", content: "", toolCalls: [{ id: "b", name: "x", arguments: {} }] }, { role: "tool", toolCallId: "b", content: "r2" }]);
+    expect(plain[2].images).toBeUndefined();
+    expect(plain[2].content).toMatch(/image\(s\) were shown/);
+  });
 
   it("within a tool loop the latest thinking is kept verbatim; at a new observation earlier thinking is dropped", () => {
     const think = { type: "thinking" as const, thinking: "t", signature: "c2ln" };

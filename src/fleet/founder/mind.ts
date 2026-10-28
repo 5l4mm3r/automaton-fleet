@@ -168,18 +168,24 @@ function compactArgs(args: Record<string, unknown>): Record<string, unknown> {
 }
 
 /** Signed thinking is carried only on the latest assistant message (the provider needs no older ones). */
-function onlyLatestThinking(messages: ChatMessage[]): ChatMessage[] {
+export function onlyLatestThinking(messages: ChatMessage[]): ChatMessage[] {
   const last = messages.map((m) => m.role === "assistant").lastIndexOf(true);
   return messages.map((m, i) => ((m.thinking || m.blockOrder) && i !== last ? { ...m, thinking: undefined, blockOrder: undefined } : m));
 }
 
 /**
- * v79: images (view_image) are seen once — they stay only on the tool results after the latest assistant message, are
- * never kept in the saved history, and never count against the text size bound.
+ * v79: images (view_image) are seen once — they are never kept in the saved history and never count against the text size
+ * bound. 2026-10-28 (Stage 1, three provider rejections "Invalid `signature` in `thinking` block"): signed thinking is bound by
+ * the provider to the EXACT conversation before it, images included. A tool result's images were replaced by a note as soon as
+ * any later assistant message existed, so the latest assistant message — generated while those images were present — was
+ * replayed after a changed prefix and refused. Now a result's images are replaced only once an assistant message WITHOUT
+ * signed thinking follows it: that message binds nothing, and everything generated after it saw the note. Every replayed
+ * thinking block therefore sees the conversation exactly as when it was produced. (Call on the messages BEFORE older thinking
+ * is stripped: which messages were generated with thinking decides the boundary.)
  */
-function onlyLatestImages(messages: ChatMessage[]): ChatMessage[] {
-  const last = messages.map((m) => m.role === "assistant").lastIndexOf(true);
-  return messages.map((m, i) => (m.images && i < last ? withoutImages(m) : m));
+export function onlyLatestImages(messages: ChatMessage[]): ChatMessage[] {
+  const boundary = messages.map((m) => m.role === "assistant" && !(m.thinking?.length)).lastIndexOf(true);
+  return messages.map((m, i) => (m.images && i < boundary ? withoutImages(m) : m));
 }
 function withoutImages(m: ChatMessage): ChatMessage {
   if (!m.images) return m;
@@ -189,7 +195,7 @@ function withoutImages(m: ChatMessage): ChatMessage {
 
 /** Drop the oldest exchanges until the request fits; a conversation always starts with an observation. */
 function fit(messages: ChatMessage[]): ChatMessage[] {
-  let m = onlyLatestImages(onlyLatestThinking(messages));
+  let m = onlyLatestThinking(onlyLatestImages(messages));
   const size = (x: ChatMessage[]) => Buffer.byteLength(JSON.stringify({ messages: x.map((y) => (y.images ? { ...y, images: y.images.length } : y)) }), "utf8");
   while (m.length > 1 && size(m) > MAX_REQUEST_BYTES) {
     m = m.slice(1);
@@ -827,6 +833,11 @@ export class FounderMind {
     // 2026-10-18 (work continuity): the cut-off turn's record, Fleet Control's unseen notices, and a stall to assess.
     const W = this.o.workContinuity === true;
     const carried = W ? loadCarry(this.o.stateDir) : null;
+    // 2026-10-28: are the files of a carried refused review unchanged? Then its evidence still applies (no re-inspection).
+    if (carried?.review?.fp) {
+      const now = filesState(R.workspaceDir, { id: "carried-review", name: "deliverable", arguments: { op: "review", args: { paths: carried.review.paths } } });
+      carried.review.unchanged = now === carried.review.fp;
+    }
     const notices = noticeLines(status.attention, new Set(prev?.noticesShown ?? []));
     // v120: the owner's open tasks — essential, in every packet (never shortened), until the owner closes them.
     const tasks = ownerTaskLines(status.attention);
@@ -1070,7 +1081,7 @@ export class FounderMind {
       }
       let r;
       try {
-        r = await this.o.ports.infer(onlyLatestImages(onlyLatestThinking(messages)), waitMs, cls.route, FOUNDER_RUNTIME_DOCTRINE, owner ? { conversationTurn: owner.turnId } : undefined);
+        r = await this.o.ports.infer(onlyLatestThinking(onlyLatestImages(messages)), waitMs, cls.route, FOUNDER_RUNTIME_DOCTRINE, owner ? { conversationTurn: owner.turnId } : undefined);
       } catch (err) {
         const code = (err as { code?: string }).code ?? "FLEET_COGNITION_ERROR";
         if (code === "FLEET_COGNITION_PROVIDER_RATE_LIMITED" || code === "FLEET_RATE_LIMITED") { this.restUntil = Date.now() + restMs(err); this.restReason = "rate limit"; }
@@ -1148,7 +1159,9 @@ export class FounderMind {
           } catch { /* the delivery stands; only the record of its method is missing */ }
         }
         if (W) {
-          const fp = out.ok && isExternal(call) ? filesState(R.workspaceDir, call) : "";
+          // 2026-10-28: a refused review keeps the state of the files it named, so the next turn knows whether its evidence still applies.
+          const refusedReview = !out.ok && call.name === "deliverable" && (call.arguments as { op?: unknown } | undefined)?.op === "review";
+          const fp = (out.ok && isExternal(call)) || refusedReview ? filesState(R.workspaceDir, call) : "";
           records.push({ call, ok: out.ok, ...(out.refused ? { refused: out.refused } : {}), output: out.output, ...(fp ? { fp } : {}) });
           progressMem!.note(call, out.ok, out.output);
         }
