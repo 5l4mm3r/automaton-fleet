@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Founder recovery after INCIDENT 2026-10-27 (Group B, part 2). PREPARED 2026-10-27, NOT RUN — needs the owner's explicit
-# approval, and runs only after install-c448d98.sh completed (c448d98 on schema 122).
+# Founder recovery after INCIDENT 2026-10-27 (Group B, part 2). EXECUTED 28 Oct 11:14Z as 454ec43e (recovery succeeded; the script
+# exited 1 on a false ledger check, see candidate-integration-v2.6.md). This is the CORRECTED version (ledger baseline after the
+# reinstatement) for any reuse; the executed version is cebfbf5:docs/evaluations/launch-candidate/recover-c448d98.sh.
 #
 #   bash ~/rlc139/recover.sh                  reinstate → start → verify (with the containment fallback)
 #   bash ~/rlc139/recover.sh restore-timings  after a fallback, once BOTH agents are active: the production timings again
@@ -13,8 +14,8 @@
 #      kept), the acquisition cost 1179 back to waiting, a 60-minute verification hold (no automatic termination meanwhile).
 #   2. `systemctl start` of the two founder units (their state directories untouched since the incident).
 #   3. watch up to 15 minutes: heartbeat → challenge → active (the hold ends at active).
-#   4. FALLBACK, automatically, at 15 minutes (45 minutes before the hold would end) for any agent not active, or at once if a
-#      unit fails: the lifecycle death timings are raised to 24 h with the existing audited owner commands (set-timeouts
+#   4. FALLBACK, automatically: the timings at once when a unit fails (the other agent keeps its full verification time), and
+#      at 15 minutes (45 minutes before the hold would end) for any agent not active: the lifecycle death timings are raised to 24 h with the existing audited owner commands (set-timeouts
 #      dead=86400, lifecycle-policy terminationGrace=86400; the v122 reaper counts them from the hold's end), the failing
 #      agent's unit is stopped (no restart loop), its journal and registry rows are kept as evidence. The agent stays
 #      unresponsive, paused, without inference, spending blocked (breaker tripped) — alive and contained, not dying. The
@@ -81,7 +82,7 @@ contained || die "containment is not as left (breaker tripped, budget unset, can
 LABEL=pre-recovery-${C:0:7}; bash $R/baseline.sh $LABEL 2>&1 | sed -n "2,3p"
 B=$(ls -d $R/baseline-$LABEL-* | tail -1); n=$(sudo -n -u postgres pg_restore -l < $B/automaton_fleet-full.dump | wc -l); (( n > 4000 )) || die "pre-recovery dump unreadable ($n entries)"
 echo "  pre-recovery backup $B ($n dump entries; kept, never restored by this script)"
-CL0=$(Q "SELECT count(*) FROM fleet_cognition_log WHERE agent_id IN ('$A1','$A2')"); H0=$(head_)
+CL0=$(Q "SELECT count(*) FROM fleet_cognition_log WHERE agent_id IN ('$A1','$A2')")
 mkdir -p -m 700 $R/recover-evidence; state
 
 echo "== 1. reinstate (one atomic owner transaction; hold $HOLD_MIN min) $(ts)"
@@ -94,6 +95,9 @@ cli founder-reinstate "$INCIDENT" "$A1,$A2" "$J1179" $HOLD_MIN > $R/recover-evid
 [[ "$(Q "SELECT count(*) FROM fleet_ledger_journal WHERE seq BETWEEN 1177 AND 1179") $(Q "SELECT count(*) FROM fleet_events WHERE event_type = 'agent_died'")" == "3 2" ]] || die "an original journal or death event is missing"
 [[ "$(Q "SELECT fleet_ledger_balance('fleet:treasury:unallocated')") $(Q "SELECT fleet_ledger_balance('fleet:treasury:unbacked_estates')") $(Q "SELECT fleet_ledger_verify()->>'ok'")" == "0 0 true" ]] || die "unallocated / unbacked / ledger not as rehearsed"
 contained || die "containment changed"
+# The ledger baseline is taken AFTER the reinstatement: its three mirrored reversals (1180-1182) are the expected movement.
+# (Executed 28 Oct with H0 taken at step 0, before them: a false "ledger moved" stop after both agents were active.)
+H1=$(head_)
 state
 
 echo "== 2. start the founder units (state untouched since the incident) $(ts)"
@@ -101,28 +105,38 @@ T0=$(date +%s)
 for a in $A1 $A2; do sudo systemctl start $(unit $a) || echo "  start of $a returned non-zero"; done
 
 echo "== 3. verification: heartbeat → challenge → active (up to $((CHECKPOINT_S / 60)) min; the hold ends at active)"
+apply_fallback() {   # idempotent: the owner-authorised death timings, applied the moment one unit fails (no waiting)
+  [[ "$(timings)" == "120 $FALLBACK_S $FALLBACK_S 300" ]] && return 0
+  echo "== 4a. FALLBACK TIMINGS ($1) $(ts)"
+  cli set-timeouts dead=$FALLBACK_S | tail -1 | cut -c1-200
+  cli lifecycle-policy terminationGrace=$FALLBACK_S > /dev/null
+  [[ "$(timings)" == "120 $FALLBACK_S $FALLBACK_S 300" ]] || die "THE FALLBACK TIMINGS DID NOT APPLY ($(timings)) — the owner must act before the holds end"
+}
+# Watch until EVERY agent is resolved (active, or its unit failed) or the checkpoint passes. One agent's failure applies the
+# fallback timings at once but does not end the watch: an agent still between heartbeat and challenge is given its full
+# time, and only agents that failed or never became active are stopped. (Rehearsal 28 Oct: breaking at the first failure
+# counted the other, still-verifying agent as failing and stopped its healthy unit.)
 declare -A FAILED=()
 while :; do
-  done_=1
+  pending=0
   for a in $A1 $A2; do
-    [[ "$(status $a)" == active ]] && continue
-    done_=0
-    [[ "$(systemctl show -p ActiveState --value $(unit $a))" == failed ]] && FAILED[$a]="unit failed ($(ustate $a))"
+    [[ "$(status $a)" == active || -n "${FAILED[$a]:-}" ]] && continue
+    if [[ "$(systemctl show -p ActiveState --value $(unit $a))" == failed ]]; then FAILED[$a]="unit failed ($(ustate $a))"; echo "  $(ts) $a: ${FAILED[$a]}"; apply_fallback "$a unit failed"; continue; fi
+    pending=$((pending + 1))
   done
-  (( done_ )) && break
-  (( ${#FAILED[@]} > 0 || $(date +%s) - T0 >= CHECKPOINT_S )) && break
+  (( pending == 0 )) && break
+  (( $(date +%s) - T0 >= CHECKPOINT_S )) && break
   sleep 10
 done
 state
 
 FALLBACK=0
 for a in $A1 $A2; do [[ "$(status $a)" == active ]] || { FALLBACK=1; FAILED[$a]="${FAILED[$a]:-not active after $(( ($(date +%s) - T0) / 60 )) min}"; }; done
+for a in "${!FAILED[@]}"; do [[ "$(status $a)" == active ]] && unset "FAILED[$a]"; done   # a unit that failed once but whose agent is active is not failing
 if (( FALLBACK )); then
   echo "== 4. FALLBACK (before the holds end at $(Q "SELECT to_char(min(lifecycle_hold_until),'HH24:MI:SS') FROM fleet_agents WHERE lifecycle_hold_until IS NOT NULL")) $(ts)"
   for a in "${!FAILED[@]}"; do echo "  $a: ${FAILED[$a]}"; done
-  cli set-timeouts dead=$FALLBACK_S | tail -1 | cut -c1-200
-  cli lifecycle-policy terminationGrace=$FALLBACK_S > /dev/null
-  [[ "$(timings)" == "120 $FALLBACK_S $FALLBACK_S 300" ]] || die "THE FALLBACK TIMINGS DID NOT APPLY ($(timings)) — the owner must act before the holds end"
+  apply_fallback "not active: ${!FAILED[*]}"
   for a in "${!FAILED[@]}"; do
     sudo systemctl stop $(unit $a) 2>/dev/null
     sudo journalctl -u $(unit $a) --since "@$T0" --no-pager > $R/recover-evidence/journal-$a.txt 2>&1
@@ -145,7 +159,7 @@ for a in $A1 $A2; do
 done
 contained || die "containment changed"
 [[ "$(Q "SELECT count(*) FROM fleet_cognition_log WHERE agent_id IN ('$A1','$A2')")" == "$CL0" ]] || die "a cognition turn happened (none may while paused)"
-[[ "$(head_)" == "$H0" ]] || die "the ledger moved after the reinstatement"
+[[ "$(head_)" == "$H1" ]] || die "the ledger moved after the reinstatement ($(head_ | cut -c1-20), was ${H1:0:20} after it)"
 [[ "$(timings)" == "$TIMINGS" ]] || die "timings changed"
 state
 echo "== RECOVERY COMPLETE $(ts): Agent-1 and Agent-2 ACTIVE (same identities, new processes), PAUSED, inference off; containment"

@@ -1,0 +1,20 @@
+== install c448d98 (release 1116576 -> c448d98; schema 121 -> 122; UI 0.27.0 reused; no agent change, no reinstatement) start 2026-10-28T11:11:49Z
+== 0. gates + guards + pre-install backup
+stamp 20261028T111150Z /opt/automaton-fleet/releases/1116576f3663a9f2289422b226b7e12232ff57ee
+dump 702040a89e5eeb43 toc 5475 lines; size 16M
+schema 121
+  pre-install backup /home/ubuntu/rlc139/baseline-pre-install-c448d98-20261028T111150Z (5475 dump entries; kept, never restored by this script)
+  -- state 2026-10-28T11:11:53Z: current 1116576; schema 121; ledger head 1179 1e64694cbc6821e; verify true
+     Agent-1 7c194b8 paused=t pid 0; Agent-2 b60e262 paused=t pid 0
+     inference off: yes; credit 11523033480 µ¢; owner payable 1267
+== 1. release 1116576 -> c448d98, schema 121 -> 122, UI 0.27.0 reused (2026-10-28T11:11:53Z)
+OUTAGE START 2026-10-28T11:12:51Z
+reconciliation: OK (/home/ubuntu/rollout-c448d98-cutover-reconcile.json: events 2810 before, purged {}, preserved 2810)
+OUTAGE END 2026-10-28T11:13:37Z
+== ROLLOUT c448d98 DEPLOYED 2026-10-28T11:13:45Z: schema 122, readyz 200
+== RELEASE c448d98 DEPLOYED 2026-10-28T11:13:45Z: schema 122, root UI 0.27.0 (production_deployed recorded)
+== 2. verification (2026-10-28T11:13:45Z)
+  -- state 2026-10-28T11:13:49Z: current c448d98; schema 122; ledger head 1179 1e64694cbc6821e; verify true
+     Agent-1 7c194b8 paused=t pid 0; Agent-2 b60e262 paused=t pid 0
+     inference off: yes; credit 11523033480 µ¢; owner payable 1267
+== INSTALL COMPLETE 2026-10-28T11:13:50Z: c448d98 on schema 122 (v122 recovery surfaces, inert) with UI 0.27.0 (reused); Agent-1 7c194b8 and Agent-2 b60e262 still DEAD and untouched (units failed, state kept); containment unchanged (breaker tripped, budget unset, canary hold kept); inference off; nothing posted. NEXT (separate approval): recover-c448d98.sh

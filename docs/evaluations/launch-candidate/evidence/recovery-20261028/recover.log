@@ -1,0 +1,19 @@
+== founder recovery on c448d98 start 2026-10-28T11:14:09Z
+== 0. gates + pre-recovery backup
+stamp 20261028T111411Z /opt/automaton-fleet/releases/c448d98a1c32c63af89288758240fc5787f9f9d6
+dump fa41bec014782248 toc 5486 lines; size 16M
+  pre-recovery backup /home/ubuntu/rlc139/baseline-pre-recovery-c448d98-20261028T111411Z (5486 dump entries; kept, never restored by this script)
+  -- 2026-10-28T11:14:13Z: 01M3F50SH7PNX2E3GST13J52AS dead hold=none hb=21:22:53 | 01M4C4NXT786Q4E9725N5A15KV dead hold=none hb=21:22:53
+     units: A1 failed/3 pid 0; A2 failed/3 pid 0; timings 120 600 480 300; ledger head 1179 1e64694cbc6821e verify true; contained yes
+== 1. reinstate (one atomic owner transaction; hold 60 min) 2026-10-28T11:14:14Z
+  -- 2026-10-28T11:14:15Z: 01M3F50SH7PNX2E3GST13J52AS unresponsive hold=12:14:14 hb=21:22:53 | 01M4C4NXT786Q4E9725N5A15KV unresponsive hold=12:14:14 hb=21:22:53
+     units: A1 failed/3 pid 0; A2 failed/3 pid 0; timings 120 600 480 300; ledger head 1182 08881fec3c34386 verify true; contained yes
+== 2. start the founder units (state untouched since the incident) 2026-10-28T11:14:16Z
+== 3. verification: heartbeat → challenge → active (up to 15 min; the hold ends at active)
+  -- 2026-10-28T11:14:27Z: 01M3F50SH7PNX2E3GST13J52AS active hold=none hb=11:14:18 | 01M4C4NXT786Q4E9725N5A15KV active hold=none hb=11:14:17
+     units: A1 active/0 pid 2241482; A2 active/0 pid 2241491; timings 120 600 480 300; ledger head 1182 08881fec3c34386 verify true; contained yes
+== 5. verified 2026-10-28T11:14:27Z
+!! the ledger moved after the reinstatement
+  -- 2026-10-28T11:14:28Z: 01M3F50SH7PNX2E3GST13J52AS active hold=none hb=11:14:18 | 01M4C4NXT786Q4E9725N5A15KV active hold=none hb=11:14:17
+     units: A1 active/0 pid 2241482; A2 active/0 pid 2241491; timings 120 600 480 300; ledger head 1182 08881fec3c34386 verify true; contained yes
+== RECOVERY STOPPED 2026-10-28T11:14:29Z — no database was restored; containment unchanged; stop and ask the owner

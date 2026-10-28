@@ -1,0 +1,27 @@
+{
+  "ok": true,
+  "note": "agents are unresponsive and paused, protected from automatic termination until the hold ends; each becomes active only by passing the health challenge due at its next heartbeat (which ends its hold)",
+  "unwound": [
+    {
+      "seq": 1179,
+      "journalId": "3cb79f23-c4fa-4aaa-a090-a5dfe1a2c0fd",
+      "amountMinor": 186
+    }
+  ],
+  "incident": "INCIDENT 2026-10-27 controller outage",
+  "holdUntil": "2026-10-28T12:14:14.870729+00:00",
+  "reinstated": [
+    {
+      "cause": "health_timeout",
+      "diedAt": "2026-10-27T21:23:07.194085+00:00",
+      "agentId": "01M3F50SH7PNX2E3GST13J52AS",
+      "reversalJournalId": "79bbafa4-50cc-4308-855b-9bcc5b24fc6d"
+    },
+    {
+      "cause": "health_timeout",
+      "diedAt": "2026-10-27T21:23:07.194085+00:00",
+      "agentId": "01M4C4NXT786Q4E9725N5A15KV",
+      "reversalJournalId": "ed9eced3-6f82-4509-aac8-7e8c16c1a9f7"
+    }
+  ]
+}

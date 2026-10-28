@@ -1,0 +1,70 @@
+preflight 2c6f6c37ad900b92b1d461996040facfcbfb88fbf27989797fe9e1be5594d628 at 2026-10-28T11:48:47Z, read-only
+
+######## current
+controller preflight — release /opt/automaton-fleet/releases/c448d98a1c32c63af89288758240fc5787f9f9d6 (dist)
+  service.env /etc/automaton-fleet/service.env sha256 21b8b3631b630be33910c664944ed15466f7093811b74b2c217e1dec2a7722b6
+  runtime.env /etc/automaton-fleet/runtime.env sha256 0d9c64e80b4728bf4ea8b0b1c928105ee2437bdfc135289cb52ffd06db43d789
+PASS service user exists — automaton-fleet-service uid 999
+PASS credential sources (LoadCredential) — service.env, tls.crt, tls.key
+PASS environment loads (release loadServiceEnv)
+PASS service user
+PASS no admin credential in the service env
+PASS database URLs (service and restricted agent role)
+PASS TLS (certificate, key, hostname, expiry) — remote on
+PASS listen addresses — 127.0.0.1:8787
+PASS runtime release pins — c448d98 build 48c0015ed443
+PASS inference profile and cognition provider — profile local_only, provider none
+PASS research fetcher
+PASS registry health (service role) — schema 122
+PASS service role is restricted — fleet_service_login
+PASS agent role is restricted
+PASS database privileges
+PASS runtime pins match the registry's approved runtime — approved c448d98
+PREFLIGHT PASSED (16 checks)
+rc=0
+
+######## failed-27oct
+controller preflight — release /opt/automaton-fleet/releases/c448d98a1c32c63af89288758240fc5787f9f9d6 (dist)
+  service.env /etc/automaton-fleet/service.env.failed-stage1-20261027T2114Z sha256 192a14b4817ffe683c92d40e56bb85e50884461ef90f732c378ccdb4e25e54f9
+  runtime.env /etc/automaton-fleet/runtime.env sha256 0d9c64e80b4728bf4ea8b0b1c928105ee2437bdfc135289cb52ffd06db43d789
+PASS service user exists — automaton-fleet-service uid 999
+PASS credential sources (LoadCredential) — service.env, tls.crt, tls.key
+PASS environment loads (release loadServiceEnv)
+PASS service user
+PASS no admin credential in the service env
+PASS database URLs (service and restricted agent role)
+PASS TLS (certificate, key, hostname, expiry) — remote on
+PASS listen addresses — 127.0.0.1:8787
+PASS runtime release pins — c448d98 build 48c0015ed443
+FAIL inference profile and cognition provider — FLEET_COGNITION_PROVIDER=anthropic is a cloud provider: the inference profile is local_only (set FLEET_INFERENCE_PROFILE=cloud_allowed explicitly to permit it).
+PASS research fetcher
+PASS registry health (service role) — schema 122
+PASS service role is restricted — fleet_service_login
+PASS agent role is restricted
+PASS database privileges
+PASS runtime pins match the registry's approved runtime — approved c448d98
+PREFLIGHT FAILED (1 of 16): the controller would refuse or misbehave with this configuration — do not restart
+rc=1
+
+######## retry-candidate (current + provider anthropic + key file + profile cloud_allowed; temp, root 0600)
+controller preflight — release /opt/automaton-fleet/releases/c448d98a1c32c63af89288758240fc5787f9f9d6 (dist)
+  service.env /root/preflight.aoDmmF/service.env.candidate sha256 0cde1770ee1813db97c61505bbced7671b5791bdd28079ba7f134587cbebbf79
+  runtime.env /etc/automaton-fleet/runtime.env sha256 0d9c64e80b4728bf4ea8b0b1c928105ee2437bdfc135289cb52ffd06db43d789
+PASS service user exists — automaton-fleet-service uid 999
+PASS credential sources (LoadCredential) — service.env, tls.crt, tls.key
+PASS environment loads (release loadServiceEnv)
+PASS service user
+PASS no admin credential in the service env
+PASS database URLs (service and restricted agent role)
+PASS TLS (certificate, key, hostname, expiry) — remote on
+PASS listen addresses — 127.0.0.1:8787
+PASS runtime release pins — c448d98 build 48c0015ed443
+PASS inference profile and cognition provider — profile cloud_allowed, provider AnthropicProvider
+PASS research fetcher
+PASS registry health (service role) — schema 122
+PASS service role is restricted — fleet_service_login
+PASS agent role is restricted
+PASS database privileges
+PASS runtime pins match the registry's approved runtime — approved c448d98
+PREFLIGHT PASSED (16 checks)
+rc=0

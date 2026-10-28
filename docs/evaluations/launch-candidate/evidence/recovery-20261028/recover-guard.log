@@ -1,0 +1,5 @@
+2026-10-28T11:14:09Z supervisor pid 2241125 sid 2241125 tty none
+2026-10-28T11:14:09Z running /home/ubuntu/rlc139/recover.sh (console: /home/ubuntu/rlc139/recover.console; log: /home/ubuntu/rlc139/recover.log)
+2026-10-28T11:14:29Z recover.sh exited 1 (== RECOVERY STOPPED 2026-10-28T11:14:29Z — no database was restored; containment unchanged; stop and ask the owner)
+2026-10-28T11:14:29Z reinstated events 2; agents reinstated but not active 0; timings 120 600 480 300; 01M3F50SH7PNX2E3GST13J52AS active hold=none | 01M4C4NXT786Q4E9725N5A15KV active hold=none
+2026-10-28T11:14:29Z nothing exposed (no reinstatement, or no agent between reinstated and active) — no fallback

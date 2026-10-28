@@ -1,0 +1,91 @@
+== rehearsal of recover.sh (454ec43e2a1d9e7c), scenario ok, copy of baseline-pre-recovery-c448d98-20261028T111411Z
+copy before: 01M3F50SH7PNX2E3GST13J52AS dead, 01M4C4NXT786Q4E9725N5A15KV dead; head 1179; schema 122
+== founder recovery on c448d98 start 2026-10-28T11:45:24Z
+== 0. gates + pre-recovery backup
+== 1. reinstate (one atomic owner transaction; hold 60 min) 2026-10-28T11:45:27Z
+== 2. start the founder units (state untouched since the incident) 2026-10-28T11:45:30Z
+== 3. verification: heartbeat → challenge → active (up to 15 min; the hold ends at active)
+== 5. verified 2026-10-28T11:45:41Z
+!! the ledger moved after the reinstatement
+== RECOVERY STOPPED 2026-10-28T11:45:42Z — no database was restored; containment unchanged; stop and ask the owner
+-- stand-in founders:
+01M4C4NXT786Q4E9725N5A15KV challenge {"ok":true} status active
+01M3F50SH7PNX2E3GST13J52AS challenge {"ok":true} status active
+-- units at the end: A1 active 0 49060 | A2 active 0 70026 (state pid; inactive = stopped by the script)
+== RESULT rc=1; copy after: 01M3F50SH7PNX2E3GST13J52AS active hold=none, 01M4C4NXT786Q4E9725N5A15KV active hold=none; head 1182; timings 120 600 480 300
+production untouched: 1182 active,active 600/480 2756 units 2241482/2241491
+copy fleet_recover_rehearsal dropped
+
+== rehearsal of recover-corrected.sh (23eb1086b3f49d65), scenario ok, copy of baseline-pre-recovery-c448d98-20261028T111411Z
+copy before: 01M3F50SH7PNX2E3GST13J52AS dead, 01M4C4NXT786Q4E9725N5A15KV dead; head 1179; schema 122
+== founder recovery on c448d98 start 2026-10-28T11:45:49Z
+== 0. gates + pre-recovery backup
+== 1. reinstate (one atomic owner transaction; hold 60 min) 2026-10-28T11:45:51Z
+== 2. start the founder units (state untouched since the incident) 2026-10-28T11:45:54Z
+== 3. verification: heartbeat → challenge → active (up to 15 min; the hold ends at active)
+== 5. verified 2026-10-28T11:46:05Z
+== RECOVERY COMPLETE 2026-10-28T11:46:06Z: Agent-1 and Agent-2 ACTIVE (same identities, new processes), PAUSED, inference off; containment
+-- stand-in founders:
+01M4C4NXT786Q4E9725N5A15KV challenge {"ok":true} status active
+01M3F50SH7PNX2E3GST13J52AS challenge {"ok":true} status active
+-- units at the end: A1 active 0 43041 | A2 active 0 59350 (state pid; inactive = stopped by the script)
+== RESULT rc=0; copy after: 01M3F50SH7PNX2E3GST13J52AS active hold=none, 01M4C4NXT786Q4E9725N5A15KV active hold=none; head 1182; timings 120 600 480 300
+production untouched: 1182 active,active 600/480 2756 units 2241482/2241491
+copy fleet_recover_rehearsal dropped
+
+== rehearsal of recover-corrected.sh (23eb1086b3f49d65), scenario a2fails, copy of baseline-pre-recovery-c448d98-20261028T111411Z
+copy before: 01M3F50SH7PNX2E3GST13J52AS dead, 01M4C4NXT786Q4E9725N5A15KV dead; head 1179; schema 122
+== founder recovery on c448d98 start 2026-10-28T11:46:13Z
+== 0. gates + pre-recovery backup
+== 1. reinstate (one atomic owner transaction; hold 60 min) 2026-10-28T11:46:15Z
+== 2. start the founder units (state untouched since the incident) 2026-10-28T11:46:17Z
+== 3. verification: heartbeat → challenge → active (up to 15 min; the hold ends at active)
+  2026-10-28T11:46:18Z 01M4C4NXT786Q4E9725N5A15KV: unit failed (failed/3 pid 0)
+== 4a. FALLBACK TIMINGS (01M4C4NXT786Q4E9725N5A15KV unit failed) 2026-10-28T11:46:18Z
+== 4. FALLBACK (before the holds end at 12:46:16) 2026-10-28T11:46:30Z
+  01M4C4NXT786Q4E9725N5A15KV: unit failed (failed/3 pid 0)
+== RECOVERY CONTAINED, NOT COMPLETE 2026-10-28T11:46:31Z: failing agent(s) 01M4C4NXT786Q4E9725N5A15KV are ALIVE (unresponsive, paused, no inference, spending
+-- stand-in founders:
+01M3F50SH7PNX2E3GST13J52AS challenge {"ok":true} status active
+-- units at the end: A1 active 0 69838 | A2 inactive 0 0 (state pid; inactive = stopped by the script)
+== RESULT rc=3; copy after: 01M3F50SH7PNX2E3GST13J52AS active hold=none, 01M4C4NXT786Q4E9725N5A15KV unresponsive hold=12:46; head 1182; timings 120 86400 86400 300
+production untouched: 1182 active,active 600/480 2756 units 2241482/2241491
+copy fleet_recover_rehearsal dropped
+
+== rehearsal of recover-corrected.sh (23eb1086b3f49d65), scenario bothfail, copy of baseline-pre-recovery-c448d98-20261028T111411Z
+copy before: 01M3F50SH7PNX2E3GST13J52AS dead, 01M4C4NXT786Q4E9725N5A15KV dead; head 1179; schema 122
+== founder recovery on c448d98 start 2026-10-28T11:46:38Z
+== 0. gates + pre-recovery backup
+== 1. reinstate (one atomic owner transaction; hold 60 min) 2026-10-28T11:46:41Z
+== 2. start the founder units (state untouched since the incident) 2026-10-28T11:46:43Z
+== 3. verification: heartbeat → challenge → active (up to 15 min; the hold ends at active)
+  2026-10-28T11:46:43Z 01M3F50SH7PNX2E3GST13J52AS: unit failed (failed/3 pid 0)
+== 4a. FALLBACK TIMINGS (01M3F50SH7PNX2E3GST13J52AS unit failed) 2026-10-28T11:46:43Z
+  2026-10-28T11:46:45Z 01M4C4NXT786Q4E9725N5A15KV: unit failed (failed/3 pid 0)
+== 4. FALLBACK (before the holds end at 12:46:42) 2026-10-28T11:46:46Z
+  01M4C4NXT786Q4E9725N5A15KV: unit failed (failed/3 pid 0)
+== RECOVERY CONTAINED, NOT COMPLETE 2026-10-28T11:46:47Z: failing agent(s) 01M3F50SH7PNX2E3GST13J52AS 01M4C4NXT786Q4E9725N5A15KV are ALIVE (unresponsive, paused, no inference, spending
+-- stand-in founders:
+-- units at the end: A1 inactive 0 0 | A2 inactive 0 0 (state pid; inactive = stopped by the script)
+== RESULT rc=3; copy after: 01M3F50SH7PNX2E3GST13J52AS unresponsive hold=12:46, 01M4C4NXT786Q4E9725N5A15KV unresponsive hold=12:46; head 1182; timings 120 86400 86400 300
+production untouched: 1182 active,active 600/480 2756 units 2241482/2241491
+copy fleet_recover_rehearsal dropped
+
+== rehearsal of recover-corrected.sh (23eb1086b3f49d65), scenario a2hangs, copy of baseline-pre-recovery-c448d98-20261028T111411Z
+copy before: 01M3F50SH7PNX2E3GST13J52AS dead, 01M4C4NXT786Q4E9725N5A15KV dead; head 1179; schema 122
+== founder recovery on c448d98 start 2026-10-28T11:46:54Z
+== 0. gates + pre-recovery backup
+== 1. reinstate (one atomic owner transaction; hold 60 min) 2026-10-28T11:46:56Z
+== 2. start the founder units (state untouched since the incident) 2026-10-28T11:46:58Z
+== 3. verification: heartbeat → challenge → active (up to 0 min; the hold ends at active)
+== 4. FALLBACK (before the holds end at 12:46:57) 2026-10-28T11:47:40Z
+  01M4C4NXT786Q4E9725N5A15KV: not active after 0 min
+== 4a. FALLBACK TIMINGS (not active: 01M4C4NXT786Q4E9725N5A15KV) 2026-10-28T11:47:40Z
+== RECOVERY CONTAINED, NOT COMPLETE 2026-10-28T11:47:42Z: failing agent(s) 01M4C4NXT786Q4E9725N5A15KV are ALIVE (unresponsive, paused, no inference, spending
+-- stand-in founders:
+01M3F50SH7PNX2E3GST13J52AS challenge {"ok":true} status active
+-- units at the end: A1 active 0 57947 | A2 inactive 0 0 (state pid; inactive = stopped by the script)
+== RESULT rc=3; copy after: 01M3F50SH7PNX2E3GST13J52AS active hold=none, 01M4C4NXT786Q4E9725N5A15KV unresponsive hold=12:46; head 1182; timings 120 86400 86400 300
+production untouched: 1182 active,active 600/480 2756 units 2241482/2241491
+copy fleet_recover_rehearsal dropped
+

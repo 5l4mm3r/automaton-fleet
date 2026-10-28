@@ -4476,3 +4476,259 @@ then, only on `INSTALL COMPLETE` with EXIT=0, `setsid nohup bash ~/rlc139/recove
     start); `founder.json` and `fleet-credentials.json` are identical.
 - Follow-up: fix the `H0` placement in recover-c448d98.sh if the script is ever reused (the record keeps it as run). The
   founder upgrade/revision rehearsals are now runnable (living founders) and still recorded as not run. R3/R4 remain open.
+
+## Incident close-out and activation-retry package (28 Oct, prepared locally; nothing applied to production)
+
+Under the owner's close-out instruction: no production edit, key rotation, paid call, agent resume or database restore. Every
+production contact below was read-only, or ran on a disposable copy that was then dropped.
+
+### 1. Recovery result, as it stands in the record
+
+**Recovery SUCCEEDED; the executed script `recover.sh` (454ec43e) EXITED 1.** Both statements stay true.
+
+- Success rests on the explicit checks after the run (section "Group B executed"):
+  - both agents `active`, paused, on 7c194b8 / b60e262;
+  - own heartbeats; challenges passed at 11:14:17/18Z and every minute after;
+  - holds ended at active; credentials unchanged;
+  - identity files identical to the incident snapshot;
+  - reversals 1180–1182 posted, originals and death events kept, ledger verifies (head 1182), timings at production values;
+  - containment unchanged.
+- The exit 1 was the script's own false ledger check. The supervisor correctly applied no fallback.
+- The executed script stays as it ran: `cebfbf5:docs/evaluations/launch-candidate/recover-c448d98.sh`, and `~/rlc139/recover.sh`
+  on the VPS.
+- Its logs are copied into `evidence/recovery-20261028/`, all matching their VPS hashes (`SHA256SUMS.vps`), with no secret
+  patterns: `recover.console`, `recover.log`, `recover-guard.log`, `reinstate.json`, `install.console`, `install.exit`.
+
+### 2. Recovery script corrected and rehearsed (production reinstatement not re-run)
+
+`recover-c448d98.sh` is now **`23eb1086b3f49d65cd28c87424ba10a308d1e2e85bef42b81901f82b138f9260`**, with two corrections:
+
+- **(a) Ledger check.** The baseline `H1` is taken after the reinstatement and its checks, so the expected reversals
+  1180–1182 no longer trip it.
+- **(b) Fallback path (found by the new rehearsal).** On 28 Oct the watch loop stopped at the first unit failure. Any agent
+  still between heartbeat and challenge was then counted as failing and its healthy unit stopped. Now:
+  - one failure applies the fallback timings at once (idempotent `apply_fallback`);
+  - the watch continues until every agent is active or failed, or the checkpoint passes;
+  - only agents that failed or never became active are stopped.
+
+  On 28 Oct both agents succeeded, so this path was never reached.
+
+**Harness:** `rehearse-recover.sh` (`f787807d…`).
+- It runs a script version against a disposable copy of `baseline-pre-recovery-c448d98-20261028T111411Z` (production one
+  second before the reinstatement), using the release's own `founder-reinstate`.
+- Systemd is replaced by stubs. A started stand-in founder heartbeats and answers its challenge through the c448d98
+  `PgFleetStore`. A failing one leaves its unit `failed/3`. A hanging one sits `active` with no heartbeat.
+- The harness refuses to run if any production call survives its substitutions.
+- Production was compared before and after every scenario: unchanged.
+
+| Script | Scenario | Result |
+|---|---|---|
+| executed 454ec43e | both start | **rc 1, "the ledger moved after the reinstatement"**: reproduces 28 Oct; both agents active |
+| corrected 23eb1086 | both start | **rc 0, RECOVERY COMPLETE**; head 1182; timings 120 600 480 300 |
+| corrected | Agent-2 unit fails at once | fallback timings at 11:46:18Z, the moment it failed; **Agent-1 kept verifying and is active, its unit running**; only Agent-2 stopped; rc 3; `120 86400 86400 300` |
+| corrected | both fail | timings at the first failure; both alive (unresponsive, holds); both units stopped; rc 3 |
+| corrected | Agent-2 runs but never heartbeats (checkpoint shortened to 40 s) | fallback at the checkpoint; only Agent-2 stopped; Agent-1 active; rc 3 |
+
+Log: `evidence/recovery-20261028/rehearse-recover.log`.
+
+### 3. Startup preflight (R3): `scripts/fleet-controller-preflight.mjs` (`2c6f6c37ad900b92b1d461996040facfcbfb88fbf27989797fe9e1be5594d628`)
+
+**What it does:** it runs the **installed release's own startup validators** against a candidate configuration, without
+starting the controller: no listener, no reaper, no writes. These are the same calls `startFleetServiceFromEnv` makes before
+it constructs the service:
+
+- the service user;
+- no admin credential;
+- the service and agent database URLs;
+- TLS (certificate, key, hostname, expiry);
+- the listen addresses;
+- the runtime pins;
+- **the inference profile and cognition provider, including the key file's owner and mode**;
+- the research fetcher;
+- registry health;
+- the service and agent roles are restricted;
+- the privilege audit;
+- the pins match the registry's approved runtime.
+
+**How it matches what the controller loads:**
+- It reads the unit's own `Environment=` lines.
+- It reads `LoadCredential=` sources from `systemctl cat`, because `systemctl show` prints them as `[unprintable]`. It checks
+  them as systemd requires: regular file, one link, root, 0600.
+- It builds the environment with the release's `loadServiceEnv` and maps `/run/credentials/<unit>/NAME` to each source.
+- Only check names, PASS/FAIL and the release's own error messages are printed.
+
+**Tests:** `src/__tests__/fleet/controller-preflight.test.ts`, **7/7**:
+- the 27 Oct configuration fails with the controller's own error;
+- the same configuration with `cloud_allowed` passes;
+- the contained configuration passes;
+- a loose key file fails;
+- a loose `service.env` and an invalid profile fail;
+- no secret appears in the output;
+- **drift guard:** every validator `startFleetServiceFromEnv` calls before `new FleetService` must appear in the preflight,
+  and the number of `throw` sites in that span is pinned at 11.
+
+**Production, read-only** (`evidence/preflight-20261028/preflight-production.log`; run as root with the installed c448d98 `dist`):
+
+| Configuration | Result |
+|---|---|
+| current `service.env` (provider none) | **PREFLIGHT PASSED, 16/16** (TLS remote on, schema 122, roles restricted, privileges clean, pins = approved c448d98) |
+| `service.env.failed-stage1-20261027T2114Z` (the file that crash-looped the controller) | **FAILED, 1 of 16:** "FLEET_COGNITION_PROVIDER=anthropic is a cloud provider: the inference profile is local_only (set FLEET_INFERENCE_PROFILE=cloud_allowed explicitly to permit it)." — **it would have stopped the 27 Oct restart** |
+| retry candidate (current + provider anthropic + key file + profile; temporary root 0600 file) | **PREFLIGHT PASSED, 16/16**, `profile cloud_allowed, provider AnthropicProvider` |
+
+**Limits:**
+- Failures after the service is constructed are not checked: binding the ports, the FX refresher, a crash at runtime.
+- The bounded restart with automatic rollback (section 6, step 4) covers those.
+- The preflight needs no new release: it loads the installed `dist`.
+
+### 4. Inference profile: C2 `config-inference-profile.sh` (`6a5e0dea3ea30794775b2a19253ffe75e249aed2bd4a3c99b2df6d920474e2e2`)
+
+- **What it does:** adds exactly `FLEET_INFERENCE_PROFILE=cloud_allowed` to `service.env`. The provider stays `none`, and
+  there is no restart and no inference.
+- **Facts it relies on:**
+  - the registry's own profile is already `cloud_allowed` (v112, 24 Oct, "kept as configured");
+  - the 27 Oct Stage 1 file differed from today's only in provider `anthropic` and the key-file line; every other line is
+    identical.
+- **Gates:** the preflight's hash, release c448d98, the registry profile, provider none, the policy disabled, and the current
+  file passing the preflight (it is the rollback).
+- **Sequence:** backup `service.env.pre-inference-profile-<ts>` → install atomically (root 0600) → **preflight of the LIVE
+  file**, restoring automatically if it fails → controller PID unchanged.
+- **Rollback:** `sudo cp -p <backup> service.env`. No restart is needed while the controller has not restarted.
+- **`--check` (read-only, 11:52Z):** **C2 CHECK PASSED.** The current file and the would-be file both pass the preflight
+  16/16, the new one as `profile cloud_allowed, provider none`.
+
+### 5. Operator key rotation (R4): the procedure (C1)
+
+All three operator keys are expired (read-only registry query):
+
+| Principal | Use | Key | Expired |
+|---|---|---|---|
+| `claude-operator` `op_01M3CKG338G2KDJ19FYEKT2T40` | **this Claude Code's `fleet-operator` MCP server** (signed Operator API) | `dbaf93c5…` | 25 Oct 15:38Z (the incident's `KEY_EXPIRED`) |
+| `bridge-claude` `op_01M3AX56W25JNMQCTBM8HYH474` | the older CLI bridge (same machine) | `ec4f0698…` | 24 Oct 23:49Z |
+| `bridge-chatgpt` `op_01M3B18TXVP33S6NQC909DXD57` | the ChatGPT adapter on the VPS | `fe22d91c…` | 25 Oct 01:00Z |
+
+**Context:**
+- The **recovery path never depended on these keys.** The owner CLI, run as `ubuntu` with the admin credential, needs no
+  operator key, and it is what recovered the agents.
+- The keys matter for observation through the MCP, and for the Operator API's controlled actions.
+
+**C1 — rotate `claude-operator`** with the release's own rotation tooling (`src/fleet/bridge/keys.ts`, identical in the MCP's
+checkout). Every step refuses to run out of order. Set `CFG=~/.config/automaton-fleet/operator/claude-operator.json`.
+
+| # | Where | Command | Proof (secret-safe) |
+|---|---|---|---|
+| 0 | dev VM | `cp -p $CFG $CFG.pre-rotation-<ts>`; `pnpm fleet:bridge --config $CFG key status` | expired, `dbaf93c5…`, no pending key (read 28 Oct) |
+| 1 | dev VM | `pnpm fleet:bridge --config $CFG key rotate-prepare --expires-days 30` | a new private key is generated **on the dev VM** (0600, exclusive create; it never leaves the machine). It prints the key id, the **public** key and the VPS command |
+| 2 | VPS (owner CLI as ubuntu) | `cli operator-add-key op_01M3CKG338G2KDJ19FYEKT2T40 --public-key <public key> --expires-days 30` | `operator_key_added` event; a registry row with the new key id and an expiry about 30 days out |
+| 3 | dev VM | `… key rotate-verify` | a signed `whoami` with the **pending** key must answer with that key id and principal; records the server's expiry |
+| 4 | dev VM | `… key rotate-switch` | the pending key becomes current; prints the revoke command |
+| 5 | VPS | `cli operator-revoke-key dbaf93c527972eed4dfc449ce5a8cac5 rotated to <new id>` | the old key is revoked |
+| 6 | dev VM | `… key rotate-finish` | the old key must be **rejected** (AUTH_FAILED / KEY_EXPIRED) and the new one must work; only then is the old private key file deleted |
+| 7 | Claude Code | reconnect the `fleet-operator` MCP (`/mcp`); `fleet_whoami`, `fleet_lifecycle_health` (read-only) | `claude-operator` with the new key id; `key status --remote` shows about 30 days |
+
+- **What is never shown:** private keys, signatures and nonces (the tooling never prints them). The only things that leave
+  the dev VM are the public key and the key id. Key files are checked to be 0600.
+- **Rollback:**
+  - *Before step 4:* `cli operator-revoke-key <new id> aborted`, then restore `$CFG.pre-rotation-<ts>` and remove the
+    pending key file. This returns to today's state.
+  - *After step 4:* the same, because the old key cannot be revived (it is expired).
+  - Neither case affects the owner CLI, which stays the recovery path.
+- **Monitoring (the incident's R4):** `stage1-retry-inference-on.sh` refuses to run unless `claude-operator` has an unrevoked
+  key valid for 7 days or more.
+- **C1b (optional, your decision): revoke the two other expired keys** (`ec4f0698…`, `fe22d91c…`). They are unusable already;
+  revoking them makes that explicit in the registry. The principals stay. Rotating `bridge-chatgpt` instead uses
+  `scripts/fleet-chatgpt-setup.sh`, which is a separate decision.
+
+### 6. The refused founder upgrade/revision rehearsals: no added coverage needed now
+
+**What they test:**
+- **Upgrade rehearsal:** moving a living founder between runtime commits (upgrade, `rollback-runtime`, fail-closed refusals,
+  routed cognition on the target).
+- **Revision rehearsal:** the customer revision → delivery path in a real founder unit.
+
+They last passed on the 7c194b8 controller (26 Oct: 27/27 and 19/19).
+
+**What changed since then:**
+- `git diff 7c194b8 c448d98` touches **no file** in `src/fleet/cognition`, `src/fleet/founder`, `src/fleet/genesis`,
+  `src/fleet/service`, `src/agent`, `src/fleet/eval`, `scripts/fleet-founders.sh` or `deploy/systemd`.
+- The only changes are the database schema (v121 treasury reads, v122 lifecycle/recovery), the hub's owner commands and the
+  privilege lists.
+
+**Coverage for the v122 paths:**
+- the real-process test (2/2, both runtimes);
+- the production recovery itself;
+- 40+ minutes of live heartbeats and challenges on c448d98.
+
+**Conclusion:**
+- The Stage 1 retry changes no runtime and delivers nothing to a buyer, so neither rehearsal adds necessary coverage for it.
+- **They become necessary before the next founder runtime upgrade, or any use of `rollback-runtime` on schema 122.** Their
+  guard is satisfied now that both founders are alive.
+- They are recorded as NOT RUN for c448d98, not run merely to complete a checklist.
+
+### 7. Approval package: two separate approvals
+
+**Part C: configuration and credentials (no restart, no inference, no resume, no money).** Order: C1, then C2. C1b is optional.
+
+| Item | Exactly | Changes | Does not change |
+|---|---|---|---|
+| **C1** operator key | the 8-step `claude-operator` rotation above (30-day key) | one new public key in `fleet_operator_keys`; the old one revoked; the dev VM key file | the owner CLI; controller; agents; containment |
+| **C1b** (optional) | `operator-revoke-key ec4f0698… expired`, `operator-revoke-key fe22d91c… expired` | two expired keys marked revoked | principals; the ChatGPT adapter (unusable either way until rotated) |
+| **C2** profile | `bash ~/rlc140/config-inference-profile.sh` (`6a5e0dea…`, `--check` passed) | one line in `service.env`: `FLEET_INFERENCE_PROFILE=cloud_allowed`; backup kept | provider stays `none`; no restart; the running controller; containment |
+
+After Part C, `stage1-retry-inference-on.sh --check` must report **CHECK PASSED** with nothing pending. Today it reports
+exactly the two items C1 and C2 as pending, exit 4.
+
+**Part D: Stage 1 retry (later; its own approval; requires Part C and a passing `--check` immediately before).**
+
+- **Scope:** the 27 Oct Stage 1 package ("Stage 1: FINAL approval package"), Agent-1 only, with these deltas:
+  - **Release** c448d98 / schema 122. Both founders are alive again (recovered), with the same identities.
+  - **Steps 1–2 as approved:** Agent-1 limited to 120 calls/h; Fleet Control 30p/day (unfunded, so its reviews wait).
+  - **Step 3: the hold already exists.** `canary-agent1-ceiling` is 10,023,033,480 µ¢ against a balance of 11,523,033,480.
+    The gate recomputes free credit by SQL and requires exactly 1,500,000,000 µ¢ ($15) free. Nothing is re-created.
+  - **Step 4: `bash ~/rlc140/stage1-retry-inference-on.sh`** (`2c2d78cc…`):
+    - gates: release and schema; both founders active and paused; C1 and C2 done; the key file identical to the 23 Oct
+      recovery copy; the policy exactly as recorded; breaker tripped; exactly $15 free; sales closed; production timings;
+      the v122 reaper;
+    - **preflight of the rollback file and of the new file**;
+    - policy enabled (read back: prices 400 / 2,000 / 20 / 500, max 4,000, defaults 754p / 20);
+    - `service.env` backup, then install;
+    - **preflight of the LIVE file**, which restores and disables the policy if it fails;
+    - **bounded restart:** ready within 30 s, otherwise automatic rollback (restore, reset-failed, restart, policy disabled),
+      with the outage time reported;
+    - founders re-verified active and paused within 5 minutes, founder PIDs unchanged, no cognition turn.
+  - **Steps 5–8 as approved:** the guard and its timers, the files, the owner task, the resume.
+  - **Deadline needs your word again.** On 27 Oct you approved option A for that run only: ENDS_AT = STARTED_AT + 24 h, and
+    no automatic blocker stop. Choose option A again, or the 7-day deadline. With 7 days, the 24 h checkpoint and blocker
+    stop again depend on this session (option B is still not built).
+- **Containment changes Part D would make:**
+  - the cognition policy enabled and provider `anthropic`;
+  - Fleet Control budget 30p/day;
+  - Agent-1 resumed (step 8).
+- **What stays in place:**
+  - **spend breaker tripped** (it gates payment orders; Stage 1 makes none);
+  - **the canary credit hold** (it is the $15 ceiling);
+  - sales and outward authorities closed;
+  - Agent-2 paused and unchanged;
+  - no funding.
+- **Restart risk:**
+  - On v122 the founders ride out controller outages: downtime does not count, and they recover by heartbeat and
+    challenge. This was proven by the real-process test and by the 28 Oct install, a 46 s outage with both founders dead.
+    With living founders, a restart is no longer lethal on the 27 Oct pattern.
+  - The preflight and the bounded rollback still apply.
+
+**Not in either part:** funding, publishing, Stage 2/3, Agent-2 changes, runtime upgrades, ending the breaker, database
+restore, authentication changes.
+
+### Files (local commit; not pushed)
+
+| File | sha256 |
+|---|---|
+| `scripts/fleet-controller-preflight.mjs` | `2c6f6c37ad900b92b1d461996040facfcbfb88fbf27989797fe9e1be5594d628` |
+| `src/__tests__/fleet/controller-preflight.test.ts` | 7/7 |
+| `docs/…/recover-c448d98.sh` (corrected) | `23eb1086b3f49d65cd28c87424ba10a308d1e2e85bef42b81901f82b138f9260` |
+| `docs/…/rehearse-recover.sh` | `f787807dec2b86113ab4fce7138aa01857f290161468af18d20165c7b520ad62` |
+| `docs/…/config-inference-profile.sh` (C2) | `6a5e0dea3ea30794775b2a19253ffe75e249aed2bd4a3c99b2df6d920474e2e2` |
+| `docs/…/stage1-retry-inference-on.sh` (D, step 4) | `2c2d78cc246c9eaaac31fb3e6db1baade8a300f4268e555df8142e6eefd287e0` |
+| `docs/…/evidence/recovery-20261028/`, `evidence/preflight-20261028/` | the executed recovery's logs; the read-only preflight runs |
+
+Staged on the VPS in `~/rlc140/` with the same hashes. Nothing there has run except the read-only `--check` modes, the
+preflights and the disposable-copy rehearsals.
