@@ -1,108 +1,159 @@
-# External operations: one workflow recommendation and a finite completion proposal
+# Decision: marketplace route or direct-service route
 
-Written 2026-10-30, replacing the earlier map on this branch (which wrongly said the remaining blockers were not code, and recommended a channel on payout convenience). Local only: nothing here is deployed, posted, sent or spent.
+Written 2026-10-30. Decision document only. Nothing here is approved, built, sent or spent. It withdraws the earlier recommendation of the accessibility business.
 
-**Status of the evidence:** market facts below are from public web sources read in an engineering session, mostly vendors. No customer has been asked anything. Demand is a hypothesis until the test in section 5 passes. All costs marked *estimate* are unmeasured.
+**How far to trust this:** no customer has been asked anything on any route. All economics are scenarios built on assumptions, computed by code. **Read directly:** ICO pages. **Search excerpts only, because the pages refuse automated reading:** Etsy, Upwork, Fiverr. A person must read those before anyone relies on them.
 
 ## 1. Recommendation
 
-**Sell a fixed-price accessibility pre-audit (about £149) to UK limited companies with online stores that sell into the EU, found and contacted directly by the agent, each first email carrying real findings from that company's own site.**
+- **Marketplace (matches the stated objective):** small fixed-price spreadsheet and catalogue data clean-up jobs on **Upwork**, through its official AI-agent connection, with the owner as the verified account holder confirming each proposal and message. Conditional on section 4.
+- **Alternative:** the accessibility pre-audit by direct outreach. A different business from the pilot asked for, and not recommended now.
+- **Not a demand winner.** Upwork ranks first on platform fit and because demand can be seen in posted jobs before anything is built. Nobody has yet counted those jobs.
 
-| | A. Accessibility pre-audit | B. MTD record-keeping kit | C. Catalogue data clean-up |
-|---|---|---|---|
-| Customer problem | Stores selling into the EU must meet the Accessibility Act; agency audits are priced for larger budgets | Sole traders over £30,000 join MTD in April 2027 and must keep digital records | Stores have broken product data, feed and import errors |
-| Demand evidence | Enforcement is real and recent, but no evidence yet that this buyer pays £149 | Large cohort (HMRC est. 970,000 at the second stage), low readiness | Real gigs and bids exist, thin price data |
-| Competition | Agencies at €2,000-€5,000+ for an audit; free scanners below | Free recognised bridging exists; heavy vendor marketing | Apps at $9-10 a month; bids of $90-150 |
-| Achievable value | Good, but partial: see limits below | Low: a template against free tools | High and fully checkable |
-| Margin, one sale (*estimate*) | £134.78-£141.98 after fee and AI | About £17.20 | About £116 before AI |
-| Customer access | **Direct:** cold email to companies is allowed under PECR; each site is public and the proof is tailored | **Weak:** sole traders are individual subscribers, so no cold email; SEO or marketplace only, and slow | Direct is possible; marketplaces need a verified human |
-| Main risk | False assurance, and a sole trader's personal liability | Low sales; accountancy-service rules if tailored | Price race to the bottom |
+**The real cost:** Upwork's connection requires a person to confirm every proposal and message, and offers are accepted on its site. That conflicts with the 15 Oct "no per-post approval" decision and is not unattended operation. No marketplace I checked gives a verified route to full autonomy.
 
-**Why A:** it is the only one combining a high enough price, a customer the agent may lawfully reach itself, and a first contact that proves capability. **Fallback: C,** which reuses the same outreach and fulfilment; B is rejected. The landlord tracker stays an execution test.
+## 2. The two routes
 
-**Limits that must be stated to buyers:**
-- It is not a conformance audit or certificate. Automated tools miss many issues (Deque's own study: 57% of issues found, by volume), and the agent has no real screen-reader testing. The FTC's $1m accessiBe order shows the danger of overclaiming.
-- **Microenterprises are exempt for services:** under 10 staff and up to €2m turnover. Targets must be above that, or the honest answer is "you may not need this".
-- First wave is UK companies only. Other EU countries' email rules are stricter and unchecked.
+| | **A. Upwork, data clean-up** | **B. Direct outreach, accessibility** |
+|---|---|---|
+| Acquisition | Agent searches posted jobs, drafts proposals. Connects (paid credits) spent on confirm | Agent finds UK companies, scans public pages, cold emails |
+| Order intake | Contract starts when the owner accepts on upwork.com | Enquiry form, then quote. An emailed "yes" creates no durable obligation today |
+| Delivery | Through Upwork's workroom; agent access unverified | Fleet's `order.deliver` |
+| Messaging | Drafted, owner confirms; inbound read access unverified | Email and order thread |
+| Payment | Upwork escrow; payout route to PayPal or bank unverified | PayPal treasury rail on a Fleet-served page |
+| Refunds | Through Upwork; agent access unverified | `order.refund`, existing authority |
+| Owner work | Account, identity, tax, each confirm, accepting offers. About 65-265 minutes per job in the scenarios | Terms, liability, insurance, domain and DNS, reviewer, release, first wave |
+| Who holds the risk | Platform dispute rules; lower-stakes work | Owner personally, for a wrong report |
 
-## 2. Seller and payout: what is known
+**Smallest build, A** (provisional until the connection's tools are read):
+1. Connector in the channel gateway, with the token vaulted.
+2. Drafts routed through the existing owner-request path, no new dashboard.
+3. Contract and message reads opening v124 orders with provider evidence, if readable.
+4. Upwork balance and withdrawal as a platform record, cash booked on arrival.
+5. The section 6 fixes.
 
-- **Seller:** recorded as an individual sole trader with a virtual-office address (owner decision, 17 Oct). I could not re-read the live record today.
-- **Bank:** the earlier "no bank account" was wrong. On 17 Oct the owner declined a *separate* sole-trader account and uses a personal debit card. This workflow needs no bank fact: buyers pay through the PayPal treasury rail, already active and proven receiving real money.
-- **Sole trader means unlimited personal liability** for a wrong report: an insurance decision for the owner.
+**Smallest build, B:**
+1. Pinned site-scan operation.
+2. A reply from a known lead opens one obligation.
+3. Report template stating the limits.
+4. A real human review step.
+5. Install Treasury Watch.
+6. The section 6 fixes.
 
-## 3. Smallest implementation for this workflow
+**What existing tests do not prove.** The £1 and £5 tests proved checkout, file delivery and a refund for a file product. They do not prove tailored audit quality, email support, outreach, this price, or any route above. Neither route has been run.
 
-| Stage | What exists | Evidence | Gap to build |
-|---|---|---|---|
-| Find, contact | `lead.add`, `mail.send {outreach}`, lawful basis, suppression, opt-out | Local tests | **Site scan op** (pinned axe-core in the browser worker, public pages, read-only, rate-limited) |
-| Ingestion | Enquiry form wakes the agent; replies reach its mailbox | Local tests | **A reply from a known lead opens one durable obligation.** Today it depends on the agent noticing |
-| Obligation | Orders carry obligations (v100) | Local tests | Covered by the line above |
-| Quote and payment | `enquiry.quote`, PayPal checkout | **Real money** at £1 and £5, not at this price | Scoped release; sales are closed today |
-| Fulfilment | Browser, PDF tools, review record | Local tests | **Report template** with the limits above; 10-page scope |
-| Delivery | `order.deliver` | **Real money** | None |
-| Messaging | `order.thread`, `order.message`, close rule | Real proof order; rule local | None |
-| Refund | `order.refund` through custody, coverage checks | **Real money** (£5) | None. Refund authority stays as is |
-| Reconciliation | PayPal capture records; Treasury Watch v123 | Live on earlier versions; Watch on fake provider | **Install Treasury Watch** |
-| Routing | Fleet Command | Migrated database, section 6 | **Route the 29 unrouted events** |
+## 3. Accessibility, separated honestly
 
-Build size: four changes, plus the release. This route does not need the v124 external-order tools, because orders are native. v124 stays for any channel an agent chooses later.
-
-**Owner's ruling needed:** the buyer's brief and pay page would be served by the Fleet under the agent's brand. Customer, acquisition and fulfilment are all outside; only the payment step runs on our infrastructure. If that breaks the rule that the Fleet site is not a storefront, the alternative is PayPal invoicing through custody, which is new, unproven code.
-
-**Human-only steps:** read and accept the liability wording and buyer terms; insurance decision; choose and buy a sending domain (DNS is the owner's) and confirm the mail provider allows this outreach, since shared Proton sending is unchecked; check whether an ICO registration fee applies; take over any CAPTCHA; approve each release, the budget and the first wave.
-
-## 4. v124 checked against the intended workflow
-
-| Question | Finding |
+| Kind of evidence | What exists |
 |---|---|
-| Does a real channel event create the order automatically? | **Etsy only,** by polling a connected shop. On every other channel the agent must discover and enter it |
-| Recording versus doing | **Fixed in this pass.** The tools only record. The agent's word is a `delivery_reported` or `refund_reported` report: the order stays owed and the sale record is unchanged |
-| Evidence for completion | **Fixed:** gateway read, a finished browser action of the agent's on that platform since the order opened, or owner confirmation. A browser action shows a page was witnessed; nothing parses it to prove delivery, so the action ID is kept for review |
-| Cancelling | **Fixed:** an order with a sale on record cannot be closed on the agent's word |
-| Idempotency | Tested at database level: repeated reads create one order and one event. Concurrent inserts are refused by the unique key and replayed on the next poll, by reading, not by test |
-| Restart | Cursor is saved after the records and re-reads a 2-day overlap. Replay tested at function level, not with a real worker restart |
-| Buyer messages | **Not built for any outside platform.** Only the first brief is captured, labelled as untrusted data |
-| Platform money versus cash | **Fixed:** sale figures are labelled `platform_record_not_cash` |
+| **Demonstrated buyer demand** | **None found.** No evidence that any UK company buys a limited pre-audit at any price. No independent willingness-to-pay data |
+| Regulatory pressure | Real but early: reported Carrefour ruling (Caen, June 2026), Dutch and Swedish regulator activity, German warning letters. Mostly vendor reporting. No UK-specific enforcement found. These target larger stores in the reports found; nothing shows small UK stores under pressure |
+| Vendor pricing | Agency estimates of €2,000-€5,000. Those are sellers' figures for a fuller service, and do not show what a limited report can charge |
+| Need | Vendor audits show widespread failures. Failure is not the same as willingness to pay |
 
-**Open defects, not fixed because Etsy is not chosen:** Etsy receipts read 100 with no paging, and the cursor still advances, so a busy window could lose orders. The Etsy client never sends delivery or refund state, and our earlier reading says screen-scraping is not allowed there, so an Etsy order could only complete by owner confirmation.
+**Competence limits:** no real screen-reader or keyboard-with-assistive-technology testing; automated tools miss many issues (Deque's own figure is 57% of issues by volume); the agent cannot judge whether a company is exempt; no accessibility expert in the loop. Without human review, a report can only be a partial list. The FTC's $1m order against accessiBe shows the danger of overclaiming.
 
-## 5. Finite proposal
+**Full economics per sale at £149** (all inputs assumed):
 
-| Step | Scope | Done when | Authority needed |
+| | Good case | Middle | Poor |
 |---|---|---|---|
-| 1 | Four builds in section 3, tests, review | Targeted tests pass, independent review done | Build only |
-| 2 | Measure cost on 5 public sites with no contact | Real AI cost per prospect and report known | Separate budget |
-| 3 | Release, install Watch, upgrade one agent | Group A style checks pass | Owner, release |
-| 4 | Agent-1 contacts 100 UK companies | **Pass:** at least 5 interested replies and 1 paid order in 14 days. **Stop:** 3 complaints, any regulator or platform warning, or spend limit | Owner, budget and outreach |
-| 5 | Fulfil, deliver, reconcile unaided | Payment visible in the Watch, report delivered, no owner briefing | Inside step 4 |
-| 6 | Decide: continue, try C, or stop | Written result | Owner |
+| Conversion, cost per prospect | 2%, $0.20 | 1%, $0.50 | 0.2%, $0.50 |
+| PayPal fee (2.9% + 30p, unverified) | £4.62 | £4.62 | £4.62 |
+| Acquisition AI | £8.00 | £40.00 | £200.00 |
+| Fulfilment AI | £2.40 | £9.60 | £9.60 |
+| Support AI | £0.40 | £1.60 | £1.60 |
+| Human review | £0 (unsafe) | £40.00 | £40.00 |
+| Refunds (5%, 10%, 20%) | £7.45 | £14.90 | £29.80 |
+| **Net per sale** | **£126.13** | **£38.28** | **−£136.62** |
 
-Budget (*estimate, to be replaced by step 2*): 100 prospects at $0.20-$0.50 is $20-$50, and one order is $3-$12. That is a new budget and cannot come from the remaining test allowance. Per sale at 1% conversion: £16-£40 of AI, so margin stays positive if estimates hold. FX assumed at $1 = £0.80, unverified.
+Excluded: insurance (unpriced, could exceed early margin), owner time, sending domain. Break-even at middle costs is about 0.5% conversion at $0.50 a prospect. The conversion rates are invented; nothing supports them. FX assumed $1 = £0.80.
 
-## 6. Contradictions resolved
+**Upwork at £120 a job, same method** (10% fee and Connects at 15 × $0.15 are from memory, unverified; win rates invented):
 
-**Event routing (read from a fully migrated local database).** Of 452 emitted types, the 85 the static test flagged split in two: 56 are routed and the test is stale; **29 really do fall to AUDIT_ONLY**, the default, and so never reach Fleet Command's priority feed. They include `paypal_refund_unresolved`, `operation_uncertain`, `card_dispute_opened`, `channel_payout_rejected`, `message_check_stalled`. Some have a separate notification (`OPERATION_UNCERTAIN`, `CARD_DISPUTES_OPEN`); I did not check all 29. All v124 events route correctly. The static test remains failing on purpose until this is fixed.
+| | Good | Middle | Poor |
+|---|---|---|---|
+| Win rate, proposals per job | 10%, 10 | 5%, 20 | 2%, 50 |
+| **Net per job** | **£82.00** | **£48.00** | **−£27.60** |
+| Owner minutes per job | 65 | 115 | 265 |
 
-**Custody privileges.** The test expected 27 functions; the database has 35. The extra 8 all came with v98 (PayPal order recovery) and are already in production. Each requires the custody role, none posts to the ledger, and each writes only its declared tables. They return a vault pointer rather than a PayPal secret. One note: two pass the buyer's order access token to custody, as the PayPal return token: a buyer-page token, narrow, and noted for review. Only after this review was the test's list updated.
+Neither table shows a viable business. They show which assumptions matter: win or conversion rate.
 
-**AI credit** (computed by code; last read earlier today, not re-read):
+## 4. Legal and platform claims, rechecked
 
-| Figure | Amount |
-|---|---|
-| Authorised total, never reset | $3.00 |
-| **Consumed** | $1.511769 |
-| **Remaining authorised** | **$1.488231** |
-| Free now | $0.552369 |
-| One Opus call, temporary reservation (returned, less cost) | about $0.74 |
+| Claim | Status | Source |
+|---|---|---|
+| Cold email to UK companies needs no consent, but identity and a valid opt-out are required | **Verified, with a warning.** The B2B page says "this guidance is under review" because of the 2025 Act | ICO, read directly |
+| Sole traders are protected like individuals; if unsure, treat as individual | Verified | ICO, read directly |
+| Named employee addresses are personal data, so UK GDPR still applies | Search excerpt of ICO | ICO |
+| Enforcement raised to UK GDPR level (£17.5m cited) | Direction verified; the figure is from an excerpt | ICO |
+| Other countries' email rules | **Not researched** | |
+| **Outreach is not authorised by any of this**, and legal advice has not been taken | | |
+| Etsy: "Bot-generated listings without any human involvement aren't allowed"; can remove the shop | **Prohibited** for autonomous listing. Excerpt, dated 22 Oct 2026. **This is new and hits our Etsy path** | Etsy, unread in full |
+| Etsy: AI use must be disclosed; instructions buyers rely on must be your own work; digital items made or designed by the seller | Excerpt. Whether a spreadsheet template counts is **ambiguous** | Etsy, unread in full |
+| Etsy: 6.5% + 4% + 20p + 15p listing + 0.48%; deposits to a bank account | Excerpt; UK sell page may be old | Etsy, unread in full |
+| Etsy API: refund or buyer messages | **Unverified.** Nothing found either way | |
+| Fiverr: no bots or automation software on the site; multiple accounts barred | **Prohibited** for an agent-run route. Excerpt | Fiverr, unread in full |
+| Upwork: official freelancer AI connection; writes need confirmation; bots otherwise restricted | Excerpt, August 2026 announcement | Upwork, unread in full |
+| Upwork: may an AI do the work under a person's account; disclosure; one-person rule; delivery access; withdrawal to PayPal | **Unverified. These decide route A** | API and MCP Terms not found |
 
-The earlier "$2.25" was not expected spend: it was $1.50 of intended spend plus the reservation, and spending all of it would have used $3.011769, over the ceiling. Inside the ceiling, the correct move is to raise free credit to exactly $1.488231 (shrinking holds by $0.935862). Calls then stop once free is below $0.74, so at least $0.748231 is usable before a refusal and the $3.00 cannot be exceeded. No paid research is needed for this recommendation, and none is proposed.
+**Etsy is second on the marketplace side:** official API and automatic digital delivery, but it needs a human behind each listing, has no verified route for buyer messages or refunds, and pays to a bank. About £9.73 net on a £12 item after fees and 5% refunds, with demand unmeasured.
+
+## 5. Why accessibility does not clearly outrank data clean-up
+
+I withdraw that ranking. It rested mainly on price.
+
+| Test | Accessibility | Data clean-up | Better |
+|---|---|---|---|
+| Observed demand | Pressure, no buyers seen | Posted gigs and bids, few and not counted | Clean-up, weakly |
+| Output can be fully checked | No | Yes: files validate against rules | Clean-up |
+| Agent competence | Partial, needs a human | Good on current tools; untested on real jobs | Clean-up |
+| Harm if wrong | Liability, false assurance | Bad file, fixable | Clean-up |
+| Fits marketplace objective | No | Yes | Clean-up |
+| Price per job | £149 possible, unproven | $90-150 bids seen | Accessibility, unproven |
+| Competition | Free scanners, agencies | Apps at $9-10 a month, low bids | Neither |
+| Own access to customers | Direct, legally sensitive | Platform-mediated | Depends |
+
+**Uncertainty:** apps and low bids could make clean-up unprofitable, and I have seen very few prices. A count of real job posts could overturn this.
+
+## 6. Security and reliability findings (separate from the business choice)
+
+### 6.1 The 29 unrouted events, by impact
+
+Function-level check: only `repo_access_active` alerts in its own function; `operation_uncertain` alerts elsewhere for email only; card disputes have a separate sweep.
+
+| Priority | Events | Why |
+|---|---|---|
+| **1. Fix first (3)** | `paypal_refund_unresolved`, `operation_uncertain`, `message_check_stalled` | A customer's refund or message, or an outside action, has an unknown outcome and may reach only the audit log |
+| **2. Should reach the owner (10)** | `card_dispute_opened`, `card_dispute_resolved`, `channel_payout_rejected`, `treasury_shortfall_covered`, `money_location_transfer`, `money_location_transfer_arrived`, `card_hold_released_verified`, `browser_credential_pending`, `repo_access_requested`, `owner_request_superseded` | Money position changes, or something is waiting on a person |
+| **3. Audit-only is acceptable (16)** | `inference_profile_set`, `order_correction_withdrawn`, `message_check_decided`, `public_site_set`, `browser_credential_confirmed`, `channel_added`, `money_location_added`, `money_location_status`, `money_location_card`, `repo_access_consented`, `repo_access_active`, `code_job_done`, `repo_access_revoked`, `card_slot_set`, `operation_replayed`, `operation_resolved` | Owner's own action, or a routine record. To be named explicitly so the default stops hiding new events |
+
+### 6.2 Evidence for delivery and refund completion
+
+Committed v124 is better but **not sufficient**:
+- A browser action is not tied to the order. One action could complete many orders. It should have to show the order's reference and count once.
+- Browser evidence is unusable where a platform bars automation, so evidence must be set per channel.
+- Refund-after-delivery has no open obligation: delivery closes it, and a later `refund_needed` does not reopen it. **This is a defect** in the commit.
+- `refund_reported` raises an event but no owner notification.
+- Owner confirmation exists only as a database function, with no owner route.
+- No client sends delivery or refund state, so the provider route is untested with any real client.
+
+### 6.3 Restart and concurrency in external orders
+
+- **Duplicate orders:** an agent entering `8841` and the gateway reading `etsy-receipt-8841` create two orders for one sale.
+- **Silent loss:** the poll ignores `ok: false` from a sale record, then advances the cursor, so a rejected or mid-poll inactive record is not retried.
+- **Blocked poll:** a provider state that throws, such as a refund above gross, stops the poll before the cursor moves, so every later receipt waits indefinitely.
+- **Paging:** Etsy reads 100 receipts with no paging and advances the cursor anyway.
+- **Untested:** a real worker restart, and two writers on one reference. By reading, the unique key leaves one order and the loser gets a raw error.
+
+## 7. Credit, unchanged
+
+$3.00 authorised; $1.511769 consumed; **$1.488231 remaining**, from a reading earlier today. No paid call is proposed here.
 
 ## Sources
 
-- Enforcement and scope: [Statutus](https://statutus.ch/en/guides/european-accessibility-act-enforcement-so-far/), [Atyantik](https://atyantik.com/blog/european-accessibility-act-enforcement/), [Level Access](https://www.levelaccess.com/compliance-overview/european-accessibility-act-eaa/), [Bird & Bird](https://cm.twobirds.com/en/insights/2026/france/accessibilit-numrique--ce-qui-change-pour-les-sites-e-commerce-depuis-juin-2025). Vendor sources; check primary records before relying on them
-- Prices: [Kolonell](https://kolonell.com/en/blog/european-accessibility-act-website-compliance-cost-berlin-2026) (vendor)
-- Limits: [Deque](https://www.deque.com/blog/automated-testing-study-identifies-57-percent-of-digital-accessibility-issues), [FTC order summary](https://www.mondaq.com/unitedstates/advertising-marketing-branding/1568116/ftc-finds-website-overlay-tool-failed-to-deliver-accessibility-promises)
-- MTD: [Which?](https://www.which.co.uk/news/article/making-tax-digital-4-questions-answered-aUYig4e2qboX), [IPSE](https://ipse.co.uk/articles/sole-traders-tax-change-april-2026), [Anna](https://anna.money/blog/guides/mtd-bridging-software/) (vendor), [GOV.UK AML registration](https://www.gov.uk/money-laundering-regulations-accountancy-service-provider-registration)
-- Catalogue: [Freelancer](https://www.freelancer.de/projects/data-entry/shopify-store-pricing-listing-overhaul), [FeedCue](https://apps.shopify.com/feedcue)
-- Email: [ICO, business-to-business marketing](https://ico.org.uk/for-organisations/direct-marketing-and-privacy-and-electronic-communications/business-to-business-marketing/). The Data (Use and Access) Act 2025 may have changed details; unchecked
+- ICO: [email marketing rules](https://ico.org.uk/for-organisations/direct-marketing-and-privacy-and-electronic-communications/guidance-on-direct-marketing-using-electronic-mail/how-do-we-comply-with-the-pecr-electronic-mail-marketing-rules/), [B2B marketing](https://ico.org.uk/for-organisations/direct-marketing-and-privacy-and-electronic-communications/business-to-business-marketing/), [2025 Act summary](https://ico.org.uk/about-the-ico/what-we-do/legislation-we-cover/data-use-and-access-act-2025/the-data-use-and-access-act-2025-duaa-summary-of-the-changes/privacy-and-electronic-communications/), [schedules](https://ico.org.uk/about-the-ico/what-we-do/legislation-we-cover/data-use-and-access-act-2025/the-data-use-and-access-act-2025-duaa-summary-of-the-changes/schedules/)
+- Etsy: [AI updates](https://www.etsy.com/seller-handbook/article/1522733284810), [Creativity Standards](https://www.etsy.com/legal/creativity), [Seller Policy](https://www.etsy.com/legal/sellers/), [API Terms](https://www.etsy.com/legal/api/), [UK selling](https://www.etsy.com/uk/sell), [Payments](https://www.etsy.com/uk/payments)
+- Fiverr: [Terms](https://www.fiverr.com/legal-portal/legal-terms/terms-of-service), [Community Standards](https://help.fiverr.com/hc/en-us/articles/32242973123985-Our-Community-Standards)
+- Upwork: [MCP](https://www.upwork.com/ai/mcp), [MCP support](https://support.upwork.com/hc/en-us/articles/55446516654611-How-to-use-Upwork-with-AI-agents-through-MCP), [bots and automation](https://support.upwork.com/hc/en-us/articles/43342677368467-Use-bots-and-other-automation-properly), [announcement](https://investors.upwork.com/news-releases/news-release-details/upwork-talent-now-everywhere-ai-works)
+- Accessibility (mostly vendors): [Statutus](https://statutus.ch/en/guides/european-accessibility-act-enforcement-so-far/), [Atyantik](https://atyantik.com/blog/european-accessibility-act-enforcement/), [Kolonell](https://kolonell.com/en/blog/european-accessibility-act-website-compliance-cost-berlin-2026), [Deque](https://www.deque.com/blog/automated-testing-study-identifies-57-percent-of-digital-accessibility-issues), [FTC summary](https://www.mondaq.com/unitedstates/advertising-marketing-branding/1568116/ftc-finds-website-overlay-tool-failed-to-deliver-accessibility-promises)
+- Clean-up prices (thin): [Freelancer](https://www.freelancer.de/projects/data-entry/shopify-store-pricing-listing-overhaul), [FeedCue](https://apps.shopify.com/feedcue), [Fiverr gig](https://fiverr.com/viethpham/clean-and-optimize-your-shopify-or-bigcommerce-product-data)
