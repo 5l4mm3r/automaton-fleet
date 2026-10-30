@@ -94,7 +94,7 @@ Apify can explain its contractual and billing role; its answer does not settle t
 
 Recorded 30 Oct 2026 (VM clock). Not fixed. Both must work before any agent or inference is switched on, so that the engineer can watch and stop a run.
 
-- **Operator read refused:** `FLEET_OP_STALE`, request timestamp outside +/-30 s. This VM's clock was 47577 seconds behind a web server's date at the time of recording. Repair the clock (host change, owner approval). The `+/-30 s` replay check must not be widened or bypassed.
+- **Operator read refused:** `FLEET_OP_STALE`, request timestamp outside +/-30 s. This VM's clock was 47,577 seconds (about 13 h 13 min) behind one web server's date, yet the VM reports NTP synchronised, so **which clock is wrong is not established**. Compare the VM, the production host and a trusted time source, then repair the wrong one (host change, owner approval). The `+/-30 s` replay check must not be widened or bypassed.
 - **Direct production reads refused** by this session's permission classifier ("Production Reads"). Restore an approved read route for the owner to choose; do not work around it.
 - **Until then:** the last state read here is 13:43:21 UTC on 30 Oct 2026; Admin HQ is the only current evidence. Holds stay unchanged while the agents are paused.
 
