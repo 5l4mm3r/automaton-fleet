@@ -158,18 +158,22 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
     expect(audit.problems).toEqual([]);
     expect(audit.custodyRoles).toBe("provisioned");
     const cx = audit.roles.find((r) => r.role === "fleet_custody_login")!;
-    expect(cx.functions.sort()).toEqual(["cx_attest_signer(text,uuid,text,text,uuid)", "cx_claim_instruction(text,text)", "cx_credential_use(uuid,text,text,text,text)",
-      // v48: the PayPal treasury's receiving and reconciliation records (custody alone holds the PayPal credential).
-      "cx_paypal_balance_record(text,uuid,text,bigint,bigint)", "cx_paypal_buyer_record(text,uuid,jsonb)", "cx_paypal_buyer_work(text,integer)", "cx_paypal_capture_record(text,uuid,text,text,bigint,bigint,text,text)",
-      "cx_paypal_checkout_by_order(text,text)", "cx_paypal_checkout_update(text,uuid,text,text,text,text)",
+    expect(cx.functions.sort()).toEqual([
+      // v98 (provider-order recovery) added 8 of these; reviewed 2026-10-30: none posts to the ledger, each writes only its declared tables
+      // (fleet_paypal_provider_orders, fleet_paypal_checkouts, fleet_paypal_sync_status, or nothing).
+      "cx_attest_signer(text,uuid,text,text,uuid)", "cx_claim_instruction(text,text)", "cx_credential_use(uuid,text,text,text,text)",
+      "cx_paypal_balance_record(text,uuid,text,bigint,bigint)", "cx_paypal_buyer_record(text,uuid,jsonb)", "cx_paypal_buyer_work(text,integer)",
+      "cx_paypal_capture_record(text,uuid,text,text,bigint,bigint,text,text)", "cx_paypal_checkout_by_order(text,text)", "cx_paypal_checkout_update(text,uuid,text,text,text,text)",
       "cx_paypal_clawback_evidence(text,text,text,text,text,bigint,text)", "cx_paypal_dispute_record(text,text,text,text,text,bigint,text)", "cx_paypal_inbox(text,integer)",
-      "cx_paypal_inbox_result(text,text,text,text)", "cx_paypal_rails(text)", "cx_paypal_refund_record(text,text,text,text,bigint,text)",
-      "cx_paypal_refund_result(text,uuid,text,text,bigint,text,text)", "cx_paypal_refund_unresolved(text,uuid,text)", "cx_paypal_refund_work(text,integer)",
-      // v76: payment detection without the webhook — custody reads open checkouts' order status.
-      "cx_paypal_status_checked(text,uuid,text)", "cx_paypal_status_work(text,integer)",
-      "cx_paypal_txn_counterparty(text,uuid,text,text,text)", "cx_paypal_txn_record(text,uuid,jsonb)", "cx_paypal_work(text,integer)",
-      // v49: the custody key and the PayPal credentials sealed to it from the dashboard.
-      "cx_ping()", "cx_publish_key(text,text,text)", "cx_report_result(uuid,text,text,text,bigint,text)", "cx_sealed_credentials(text)"]);
+      "cx_paypal_inbox_result(text,text,text,text)", "cx_paypal_order_claim(text,uuid)", "cx_paypal_order_created(text,uuid,text,text,text,text)",
+      "cx_paypal_order_note(text,uuid,text,integer,text,text,text,jsonb)", "cx_paypal_order_retire(text,uuid,jsonb)", "cx_paypal_order_watch_work(text,integer)",
+      "cx_paypal_pay_work(text,integer)", "cx_paypal_rails(text)", "cx_paypal_recon_report(text,uuid,text,text,bigint,text,jsonb)",
+      "cx_paypal_refund_record(text,text,text,text,bigint,text)", "cx_paypal_refund_result(text,uuid,text,text,bigint,text,text)", "cx_paypal_refund_unresolved(text,uuid,text)",
+      "cx_paypal_refund_work(text,integer)", "cx_paypal_status_checked(text,uuid,text)", "cx_paypal_status_work(text,integer)",
+      "cx_paypal_sync_record(text,uuid,text,boolean,integer,text,text,jsonb)", "cx_paypal_txn_counterparty(text,uuid,text,text,text)", "cx_paypal_txn_record(text,uuid,jsonb)",
+      "cx_paypal_work(text,integer)", "cx_ping()", "cx_publish_key(text,text,text)",
+      "cx_report_result(uuid,text,text,text,bigint,text)", "cx_sealed_credentials(text)",
+    ]);
     expect(cx.tables).toEqual([]);
     expect((await ledger.verify()).ok).toBe(true);
   });

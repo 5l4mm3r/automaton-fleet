@@ -2,6 +2,7 @@
  * v124: an order on an outside platform, from either source, is tracked once from receipt to delivery or refund. It wakes the agent;
  * it never counts as cash; it moves no money; buyer text stays labelled untrusted; a payout in another currency alerts and is not booked.
  */
+import pg from "pg";
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import crypto from "crypto";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
@@ -22,12 +23,12 @@ describe.skipIf(!PG_BIN)("external orders (v124)", () => {
   const open = (o: Record<string, unknown> = {}) => ok(R.econ(F, "external_order.open", { channelId: channel, externalRef: ref(), grossMinor: 1200, currency: "GBP", ...o }));
 
   beforeAll(async () => {
-    R = await startEconomyRegistry(PG_BIN!, { founders: 1, allocationCents: 10_000, simulatedSettlement: false });
+    R = await startEconomyRegistry(PG_BIN!, { founders: 2, allocationCents: 10_000, simulatedSettlement: false });
     [F] = R.founders;
     await R.store.grantServiceRole();
     ventureKey = "shop";
     await ok(R.econ(F, "venture.create", { key: ventureKey, model: "service", offer: "tailored spreadsheets", state: "selected" }));
-    const c = await ok(R.econ(F, "channel.add", { ventureKey, name: "A marketplace", kind: "marketplace", status: "planned" }));
+    const c = await ok(R.econ(F, "channel.add", { ventureKey, name: "A marketplace", kind: "marketplace", status: "planned", url: "https://www.market.example/shop/x" }));
     channel = c.channel.channelId;
     connection = (await R.q(`INSERT INTO fleet.fleet_channel_connections (channel_id, agent_id, provider, vault_ref, expected_account, shop_id, status, created_by)
       VALUES ($1, $2, 'etsy', 'vault:etsy/test', '1', '2', 'active', $3) RETURNING connection_id`, [channel, F.id, OWNER]))[0].connection_id as string;
@@ -61,28 +62,89 @@ describe.skipIf(!PG_BIN)("external orders (v124)", () => {
     expect((await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_external_orders WHERE external_ref = $1`, [first]))[0].n).toBe(1);
   });
 
-  it("delivery needs evidence and closes the obligation; a delivered order cannot be delivered twice", async () => {
+  // A finished browser action of the agent's on an account for this channel's platform: evidence the Fleet holds.
+  const witnessed = async (who: any = F, platform = "market.example", status = "done") => {
+    const account = crypto.randomUUID(), session = crypto.randomUUID(), action = crypto.randomUUID();
+    await R.q(`INSERT INTO fleet.fleet_agent_accounts (account_id, agent_id, account_kind, platform, status) VALUES ($1, $2, 'marketplace', $3, 'active')`, [account, who.id, platform]);
+    await R.q(`INSERT INTO fleet.fleet_browser_sessions (session_id, agent_id, account_id) VALUES ($1, $2, $3)`, [session, who.id, account]);
+    await R.q(`INSERT INTO fleet.fleet_browser_actions (action_id, session_id, agent_id, kind, status, result) VALUES ($1, $2, $3, 'observe', $4, '{"text":"Order 8841: delivered"}'::jsonb)`, [action, session, who.id, status]);
+    return action;
+  };
+  const refused = (p: Promise<any>) => p.catch((e: Error) => ({ ok: false, code: e.message }));
+
+  it("the agent's word is a report: the order stays owed, and only evidence the Fleet holds completes it", async () => {
     const { order } = await open();
     await ok(R.econ(F, "external_order.update", { orderId: order.orderId, status: "in_progress" }));
-    expect(await R.econ(F, "external_order.deliver", { orderId: order.orderId, evidence: "ok" }).catch((e: Error) => ({ ok: false, code: e.message }))).toMatchObject({ ok: false });
-    const d = await ok(R.econ(F, "external_order.deliver", { orderId: order.orderId, evidence: "platform shows delivered, conversation 8841" }));
-    expect(d.order).toMatchObject({ status: "delivered", deliveryEvidence: expect.stringContaining("8841") });
+    expect((await refused(R.econ(F, "external_order.deliver", { orderId: order.orderId, evidence: "ok" }))).ok).toBe(false);
+    const rep = await ok(R.econ(F, "external_order.deliver", { orderId: order.orderId, evidence: "I believe the platform shows it delivered" }));
+    expect(rep.order).toMatchObject({ status: "delivery_reported", deliveryEvidenceKind: "agent_report" });
+    expect(rep.order.deliveredAt).toBeUndefined();
+    expect(rep.note).toContain("not as proof");
+    expect((await ob(order.obligationId)).status).toBe("open");
+    const done = await ok(R.econ(F, "external_order.deliver", { orderId: order.orderId, evidence: "the order page shows delivered", browserActionId: await witnessed() }));
+    expect(done.order).toMatchObject({ status: "delivered", deliveryEvidenceKind: "browser_action" });
     expect((await ob(order.obligationId)).status).toBe("done");
-    expect((await R.econ(F, "external_order.deliver", { orderId: order.orderId, evidence: "platform shows delivered again" }).catch((e: Error) => ({ ok: false, code: e.message }))).ok).toBe(false);
+    expect((await refused(R.econ(F, "external_order.deliver", { orderId: order.orderId, evidence: "platform shows delivered again" }))).ok).toBe(false);
   });
 
-  it("a refund the platform made is recorded, bounded by the sale; partial then full; a memo, never money", async () => {
+  it("evidence is refused when it is unfinished, older than the order, another platform's or another agent's", async () => {
+    const G = R.founders[1];
+    const older = await witnessed();
+    await new Promise((r) => setTimeout(r, 20));
+    const { order } = await open();
+    const bad = [older, await witnessed(F, "other.example"), await witnessed(F, "market.example", "failed"), await witnessed(G), crypto.randomUUID()];
+    for (const browserActionId of bad) {
+      const r = await refused(R.econ(F, "external_order.deliver", { orderId: order.orderId, evidence: "the order page shows delivered", browserActionId }));
+      expect(r.ok, browserActionId).toBe(false);
+      expect(JSON.stringify(r)).toMatch(/FLEET_EVIDENCE_REFUSED/);
+    }
+    expect((await ob(order.obligationId)).status).toBe("open");
+  });
+
+  it("a reported refund changes no sale record; a witnessed one does, bounded by the sale; never money", async () => {
     const c0 = await cash(), j0 = await journals();
     const { order } = await open({ grossMinor: 1000 });
-    await ok(R.econ(F, "external_order.deliver", { orderId: order.orderId, evidence: "platform shows delivered, ref 991" }));
-    let r = await ok(R.econ(F, "external_order.refund", { orderId: order.orderId, amountMinor: 400, evidence: "platform shows a 4.00 partial refund" }));
-    expect(r.order).toMatchObject({ status: "delivered", refundedMinor: 400 });
-    expect((await R.econ(F, "external_order.refund", { orderId: order.orderId, amountMinor: 700, evidence: "platform shows more than the sale" }).catch((e: Error) => ({ ok: false, code: e.message }))).ok).toBe(false);
-    r = await ok(R.econ(F, "external_order.refund", { orderId: order.orderId, amountMinor: 600, evidence: "platform shows the remaining 6.00" }));
-    expect(r.order).toMatchObject({ status: "refunded", refundedMinor: 1000 });
+    const rep = await ok(R.econ(F, "external_order.refund", { orderId: order.orderId, amountMinor: 1000, evidence: "I refunded this on the platform" }));
+    expect(rep.order).toMatchObject({ status: "refund_reported", refundReportedMinor: 1000, refundEvidenceKind: "agent_report" });
+    expect(await sale(order.saleId)).toMatchObject({ status: "reported", refunded_minor: "0" });
+    expect((await ob(order.obligationId)).status).toBe("open");
+    let r = await ok(R.econ(F, "external_order.refund", { orderId: order.orderId, amountMinor: 400, evidence: "the page shows 4.00 refunded", browserActionId: await witnessed() }));
+    expect(r.order).toMatchObject({ status: "in_progress", refundedMinor: 400, refundEvidenceKind: "browser_action" });
+    expect((await refused(R.econ(F, "external_order.refund", { orderId: order.orderId, amountMinor: 700, evidence: "platform shows more than the sale" }))).ok).toBe(false);
+    r = await ok(R.econ(F, "external_order.refund", { orderId: order.orderId, amountMinor: 600, evidence: "the page shows the remaining 6.00", browserActionId: await witnessed() }));
+    expect(r.order).toMatchObject({ status: "refunded", refundedMinor: 1000, platformRecord: { kind: "platform_record_not_cash", grossMinor: 1000 } });
     expect(await sale(order.saleId)).toMatchObject({ status: "refunded", refunded_minor: "1000" });
+    expect((await ob(order.obligationId)).status).toBe("done");
     expect(await cash()).toBe(c0);
     expect(await journals()).toBe(j0);
+  });
+
+  it("what the gateway reads completes an order, once, however often it is read again (restart replay)", async () => {
+    const j0 = await journals(), r = ref();
+    const read = (state: object) => R.one<any>(`fleet.chx_sale_record('channel-gateway', $1::uuid, $2::jsonb)`, [connection, JSON.stringify({ ref: r, currency: "GBP", grossMinor: 900, platformState: state })]);
+    const row = async () => (await ok(R.econ(F, "external_order.list", {}))).orders.find((o: any) => o.externalRef === r);
+    await read({});
+    expect((await row()).status).toBe("received");
+    for (let i = 0; i < 3; i++) await read({ delivered: true });
+    const d = await row();
+    expect(d).toMatchObject({ status: "delivered", deliveryEvidenceKind: "provider_api" });
+    expect((await ob(d.obligationId)).status).toBe("done");
+    expect(await R.q(`SELECT 1 FROM fleet.fleet_events WHERE event_type = 'external_order_delivered' AND detail ->> 'orderId' = $1`, [d.orderId])).toHaveLength(1);
+    for (let i = 0; i < 2; i++) await read({ delivered: true, refundedMinor: 900 });
+    expect(await row()).toMatchObject({ status: "refunded", refundedMinor: 900, refundEvidenceKind: "provider_api" });
+    await read({ delivered: true, refundedMinor: 300 });
+    expect((await row()).refundedMinor).toBe(900);
+    expect((await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_external_orders WHERE external_ref = $1`, [r]))[0].n).toBe(1);
+    expect(await journals()).toBe(j0);
+  });
+
+  it("the owner can confirm what only a person can see; the agent cannot call that", async () => {
+    const { order } = await open({ grossMinor: 500 });
+    await ok(R.econ(F, "external_order.refund", { orderId: order.orderId, amountMinor: 500, needsOwner: true, evidence: "no refund route is available to me" }));
+    const c = await R.one<any>(`fleet.fleet_admin_external_order_confirm($1, 'refunded', 500, 'platform page shows it refunded', $2)`, [order.orderId, OWNER]);
+    expect(c.order).toMatchObject({ status: "refunded", refundEvidenceKind: "owner_confirmed" });
+    const agent = new pg.Pool({ connectionString: R.pgc.agentUrl, max: 1 });
+    try { await expect(agent.query(`SELECT fleet.fleet_admin_external_order_confirm(gen_random_uuid(), 'delivered', NULL, 'it was delivered, honestly', 'agent')`)).rejects.toThrow(/permission denied/); } finally { await agent.end(); }
   });
 
   it("a refund the agent cannot make alerts the owner once, with the action", async () => {
@@ -95,11 +157,17 @@ describe.skipIf(!PG_BIN)("external orders (v124)", () => {
     expect((n[0] as any).detail.action).toContain("refund it on the platform");
   });
 
-  it("a cancellation needs a reason, closes the obligation and the unpaid memo", async () => {
+  it("a cancellation needs a reason; an order with a sale on record cannot be closed on the agent's word", async () => {
+    const free = (await ok(R.econ(F, "external_order.open", { channelId: channel, externalRef: ref() }))).order;
+    expect((await refused(R.econ(F, "external_order.update", { orderId: free.orderId, status: "cancelled" }))).ok).toBe(false);
+    await ok(R.econ(F, "external_order.update", { orderId: free.orderId, status: "cancelled", reason: "the buyer cancelled before anything was sold" }));
+    expect((await ob(free.obligationId)).status).toBe("done");
     const { order } = await open();
-    expect((await R.econ(F, "external_order.update", { orderId: order.orderId, status: "cancelled" }).catch((e: Error) => ({ ok: false, code: e.message }))).ok).toBe(false);
-    await ok(R.econ(F, "external_order.update", { orderId: order.orderId, status: "cancelled", reason: "the buyer cancelled before I started" }));
-    expect((await ob(order.obligationId)).status).toBe("done");
+    const r = await refused(R.econ(F, "external_order.update", { orderId: order.orderId, status: "cancelled", reason: "the buyer changed their mind" }));
+    expect(r.ok).toBe(false);
+    expect(JSON.stringify(r)).toMatch(/FLEET_EVIDENCE_REQUIRED/);
+    expect((await ob(order.obligationId)).status).toBe("open");
+    await ok(R.econ(F, "external_order.update", { orderId: order.orderId, status: "cancelled", reason: "the platform shows it cancelled", browserActionId: await witnessed() }));
     expect((await sale(order.saleId)).status).toBe("cancelled");
   });
 

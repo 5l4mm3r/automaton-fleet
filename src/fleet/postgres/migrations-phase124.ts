@@ -4,8 +4,11 @@
  *  - `external_order.open` (the agent, from what it read on the platform) or the channel gateway (from the platform's API) creates
  *    the order, links its sale memo (still a memo: money counts only when its payout reaches real cash, v79) and opens an obligation
  *    that wakes the agent.
- *  - `.update`, `.deliver` (needs evidence of delivery on the platform), `.refund` (records what the platform did; `.refund` with
- *    `needsOwner` asks the owner, because no refund API exists here). None of these moves money.
+ *  - `.update`, `.deliver`, `.refund` RECORD what happened on the platform; they never perform it, and none moves money. An agent's word
+ *    alone is only a report (`delivery_reported`, `refund_reported`): the obligation stays open and the sale memo is unchanged. An action is
+ *    complete only with evidence the Fleet itself holds: what the gateway read from the provider, a finished browser action of the agent's on
+ *    that platform's account, or the owner's confirmation. `.refund` with `needsOwner` asks the owner.
+ *  - Sale figures are the platform's records, never received cash (labelled so): cash counts only when a payout reaches a real location.
  *  - A payout the gateway reads in another currency is reported to the owner, never booked at face value.
  *
  * Buyer text is untrusted data; it is labelled as such wherever the agent reads it. Buyer identity is an opaque platform reference.
@@ -18,11 +21,12 @@ import { restate as restateRaw } from "./migrations-phase42.js";
 const restate = (src: string, name: string, edits: Array<[string, string]>) => restateRaw(src, name, edits.map(([a, b]) => [a, b.replace(/\$/g, "$$$$")] as [string, string]));
 const q = (xs: readonly string[]) => xs.map((x) => `'${x}'`).join(",");
 
-export const EXTERNAL_ORDER_STATUSES = ["received", "in_progress", "delivered", "refund_needed", "refunded", "cancelled"] as const;
+export const EXTERNAL_ORDER_STATUSES = ["received", "in_progress", "delivery_reported", "delivered", "refund_needed", "refund_reported", "refunded", "cancelled"] as const;
+export const EXTERNAL_ORDER_EVIDENCE = ["provider_api", "browser_action", "owner_confirmed", "agent_report"] as const;
 export const AGENT_OPS_V124 = ["external_order.open", "external_order.update", "external_order.deliver", "external_order.refund", "external_order.list"] as const;
 export const EVENT_ROUTES_V124 = Object.freeze({
   P1_HIGH: ["external_order_refund_needed"],
-  P2_IMPORTANT: ["external_order_received"],
+  P2_IMPORTANT: ["external_order_received", "external_order_delivery_reported", "external_order_refund_reported"],
   P3_SUMMARY: ["external_order_delivered", "external_order_refunded", "external_order_cancelled"],
 });
 
@@ -40,9 +44,12 @@ CREATE TABLE fleet_external_orders (
   brief          text        CHECK (length(brief) <= 4000),
   status         text        NOT NULL DEFAULT 'received' CHECK (status IN (${q(EXTERNAL_ORDER_STATUSES)})),
   delivery_evidence text     CHECK (length(delivery_evidence) <= 500),
+  delivery_evidence_kind text CHECK (delivery_evidence_kind IN (${q(EXTERNAL_ORDER_EVIDENCE)})),
   delivered_at   timestamptz,
   refunded_minor bigint      NOT NULL DEFAULT 0 CHECK (refunded_minor >= 0),
   refund_evidence text       CHECK (length(refund_evidence) <= 500),
+  refund_evidence_kind text  CHECK (refund_evidence_kind IN (${q(EXTERNAL_ORDER_EVIDENCE)})),
+  refund_reported_minor bigint NOT NULL DEFAULT 0 CHECK (refund_reported_minor >= 0),
   reason         text        CHECK (length(reason) <= 500),
   created_at     timestamptz NOT NULL DEFAULT now(),
   updated_at     timestamptz NOT NULL DEFAULT now(),
@@ -54,7 +61,10 @@ CREATE FUNCTION fleet_external_order_json(o fleet_external_orders) RETURNS jsonb
 SET search_path = @@SCHEMA@@, pg_temp AS $$
   SELECT jsonb_strip_nulls(jsonb_build_object('orderId', o.order_id, 'channelId', o.channel_id, 'externalRef', o.external_ref, 'saleId', o.sale_id, 'obligationId', o.obligation_id,
     'source', o.source, 'buyerRef', o.buyer_ref, 'buyerBrief', CASE WHEN o.brief IS NOT NULL THEN jsonb_build_object('kind', 'untrusted_buyer_text', 'value', o.brief) END,
-    'status', o.status, 'deliveryEvidence', o.delivery_evidence, 'deliveredAt', o.delivered_at, 'refundedMinor', NULLIF(o.refunded_minor, 0), 'refundEvidence', o.refund_evidence,
+    'status', o.status, 'deliveryEvidence', o.delivery_evidence, 'deliveryEvidenceKind', o.delivery_evidence_kind, 'deliveredAt', o.delivered_at, 'refundedMinor', NULLIF(o.refunded_minor, 0),
+    'refundReportedMinor', NULLIF(o.refund_reported_minor, 0), 'refundEvidence', o.refund_evidence, 'refundEvidenceKind', o.refund_evidence_kind,
+    'platformRecord', (SELECT jsonb_build_object('kind', 'platform_record_not_cash', 'grossMinor', s.gross_minor, 'feeMinor', s.fee_minor, 'currency', s.currency, 'refundedMinor', s.refunded_minor, 'status', s.status)
+                         FROM fleet_channel_sales s WHERE s.sale_id = o.sale_id),
     'reason', o.reason, 'dueAt', (SELECT due_at FROM fleet_business_obligations b WHERE b.obligation_id = o.obligation_id), 'createdAt', o.created_at))
 $$;
 
@@ -118,6 +128,55 @@ SET search_path = @@SCHEMA@@, pg_temp AS $$
   UPDATE fleet_business_obligations SET status = 'done', done_count = done_count + 1, last_done_at = now(), updated_at = now() WHERE obligation_id = p_ob AND status = 'open'
 $$;
 
+-- Evidence the Fleet itself holds: a finished browser action of this agent's, since the order opened, on an account for this channel's platform.
+-- A named action that does not qualify is refused, never downgraded; no name means the agent's word only.
+CREATE FUNCTION fleet_external_order_evidence_kind(p_agent text, o fleet_external_orders, a jsonb) RETURNS text LANGUAGE plpgsql STABLE
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE v_host text; v_platform text;
+BEGIN
+  IF NULLIF(a ->> 'browserActionId', '') IS NULL THEN RETURN 'agent_report'; END IF;
+  SELECT lower(substring(c.url FROM '^https://([^/:?#]+)')) INTO v_host FROM fleet_venture_channels c WHERE c.channel_id = o.channel_id;
+  SELECT lower(ac.platform) INTO v_platform
+    FROM fleet_browser_actions ba JOIN fleet_browser_sessions se ON se.session_id = ba.session_id JOIN fleet_agent_accounts ac ON ac.account_id = se.account_id
+   WHERE ba.action_id = fleet_identity_uuid(a, 'browserActionId') AND ba.agent_id = p_agent AND ac.agent_id = p_agent AND ba.status = 'done' AND ba.result IS NOT NULL
+     AND ba.kind IN ('act','observe') AND ba.created_at >= o.created_at;
+  IF v_platform IS NULL OR v_host IS NULL OR NOT (v_host = v_platform OR v_host LIKE '%.' || v_platform OR v_platform LIKE '%.' || v_host) THEN
+    RAISE EXCEPTION 'FLEET_EVIDENCE_REFUSED: that browser action is not a finished action of yours on this channel''s platform since the order opened';
+  END IF;
+  RETURN 'browser_action';
+END $$;
+
+CREATE FUNCTION fleet_external_order_apply_delivered(o fleet_external_orders, p_kind text, p_ev text, p_actor text) RETURNS fleet_external_orders LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE r fleet_external_orders;
+BEGIN
+  IF o.status = 'delivered' THEN RETURN o; END IF;
+  UPDATE fleet_external_orders SET status = CASE WHEN status IN ('refund_needed','refund_reported') THEN status ELSE 'delivered' END, delivery_evidence = left(p_ev, 500), delivery_evidence_kind = p_kind,
+         delivered_at = now(), updated_at = now() WHERE order_id = o.order_id RETURNING * INTO r;
+  PERFORM fleet_external_order_close_obligation(r.obligation_id);
+  PERFORM fleet_event('external_order_delivered', r.agent_id, p_actor, jsonb_build_object('orderId', r.order_id, 'externalRef', r.external_ref, 'evidence', p_kind));
+  RETURN r;
+END $$;
+
+-- Sets the refund total the evidence shows (never lowers it), bounded by the sale; the sale memo follows. Moves no money.
+CREATE FUNCTION fleet_external_order_apply_refund(o fleet_external_orders, p_total bigint, p_kind text, p_ev text, p_actor text) RETURNS fleet_external_orders LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE r fleet_external_orders; s fleet_channel_sales;
+BEGIN
+  IF p_total <= o.refunded_minor THEN RETURN o; END IF;
+  IF o.sale_id IS NOT NULL THEN
+    SELECT * INTO s FROM fleet_channel_sales WHERE sale_id = o.sale_id FOR UPDATE;
+    IF p_total > s.gross_minor THEN PERFORM fleet_econ_bad('more than this sale''s gross has been refunded'); END IF;
+    UPDATE fleet_channel_sales SET refunded_minor = p_total, status = CASE WHEN p_total = gross_minor AND status = 'reported' THEN 'refunded' ELSE status END, updated_at = now() WHERE sale_id = s.sale_id;
+  END IF;
+  UPDATE fleet_external_orders SET refunded_minor = p_total, refund_reported_minor = 0, refund_evidence = left(p_ev, 500), refund_evidence_kind = p_kind,
+    status = CASE WHEN s.gross_minor IS NULL OR p_total >= s.gross_minor THEN 'refunded' WHEN delivered_at IS NOT NULL THEN 'delivered' ELSE 'in_progress' END, updated_at = now()
+   WHERE order_id = o.order_id RETURNING * INTO r;
+  IF r.status = 'refunded' THEN PERFORM fleet_external_order_close_obligation(r.obligation_id); END IF;
+  PERFORM fleet_event('external_order_refunded', r.agent_id, p_actor, jsonb_build_object('orderId', r.order_id, 'totalMinor', p_total, 'evidence', p_kind));
+  RETURN r;
+END $$;
+
 CREATE FUNCTION fleet_econ_external_order_update(p_agent text, a jsonb) RETURNS jsonb LANGUAGE plpgsql
 SET search_path = @@SCHEMA@@, pg_temp AS $$
 DECLARE o fleet_external_orders := fleet_external_order_own(p_agent, a); v_status text := fleet_econ_text(a, 'status', 20); v_reason text := fleet_econ_text(a, 'reason', 500);
@@ -125,7 +184,13 @@ BEGIN
   IF o.status IN ('refunded','cancelled') THEN RAISE EXCEPTION 'FLEET_ORDER_CLOSED: it is %', o.status; END IF;
   IF v_status IS NOT NULL AND v_status NOT IN ('in_progress','cancelled') THEN PERFORM fleet_econ_bad('status is in_progress|cancelled'); END IF;
   IF v_status = 'cancelled' AND (v_reason IS NULL OR length(trim(v_reason)) < 10) THEN PERFORM fleet_econ_bad('a cancellation needs a reason of at least 10 characters'); END IF;
-  UPDATE fleet_external_orders SET status = COALESCE(v_status, status), reason = COALESCE(v_reason, reason), brief = COALESCE(left(fleet_econ_text(a, 'brief', 4000), 4000), brief), updated_at = now()
+  -- A sale on record cannot be closed on the agent's word: a buyer who paid stays an obligation until the platform shows otherwise.
+  IF v_status = 'cancelled' AND o.sale_id IS NOT NULL AND fleet_external_order_evidence_kind(p_agent, o, a) = 'agent_report' THEN
+    RAISE EXCEPTION 'FLEET_EVIDENCE_REQUIRED: this order has a sale on record: name the browserActionId that shows the platform cancelled it, or record a refund';
+  END IF;
+  IF v_status = 'cancelled' AND NULLIF(a ->> 'browserActionId', '') IS NOT NULL THEN v_reason := left('[browser action ' || (a ->> 'browserActionId') || '] ' || v_reason, 500); END IF;
+  UPDATE fleet_external_orders SET status = CASE WHEN v_status = 'in_progress' AND status <> 'received' THEN status ELSE COALESCE(v_status, status) END, reason = COALESCE(v_reason, reason),
+         brief = COALESCE(left(fleet_econ_text(a, 'brief', 4000), 4000), brief), updated_at = now()
    WHERE order_id = o.order_id RETURNING * INTO o;
   IF NULLIF(a ->> 'dueAt', '') IS NOT NULL THEN UPDATE fleet_business_obligations SET due_at = (a ->> 'dueAt')::timestamptz, updated_at = now() WHERE obligation_id = o.obligation_id AND status = 'open'; END IF;
   IF v_status = 'cancelled' THEN
@@ -136,44 +201,81 @@ BEGIN
   RETURN jsonb_build_object('ok', true, 'order', fleet_external_order_json(o));
 END $$;
 
+-- Records a delivery; never performs one. The agent's word alone is a report: the order stays owed and the agent is woken to check it.
 CREATE FUNCTION fleet_econ_external_order_deliver(p_agent text, a jsonb) RETURNS jsonb LANGUAGE plpgsql
 SET search_path = @@SCHEMA@@, pg_temp AS $$
-DECLARE o fleet_external_orders := fleet_external_order_own(p_agent, a); v_ev text := fleet_econ_text(a, 'evidence', 500, true);
+DECLARE o fleet_external_orders := fleet_external_order_own(p_agent, a); v_ev text := fleet_econ_text(a, 'evidence', 500, true); v_kind text;
 BEGIN
-  IF o.status NOT IN ('received','in_progress') THEN RAISE EXCEPTION 'FLEET_ORDER_CLOSED: it is %', o.status; END IF;
-  IF length(trim(v_ev)) < 10 THEN PERFORM fleet_econ_bad('evidence says how you know the platform shows it delivered (at least 10 characters)'); END IF;
-  UPDATE fleet_external_orders SET status = 'delivered', delivery_evidence = v_ev, delivered_at = now(), updated_at = now() WHERE order_id = o.order_id RETURNING * INTO o;
-  PERFORM fleet_external_order_close_obligation(o.obligation_id);
-  PERFORM fleet_event('external_order_delivered', p_agent, 'agent', jsonb_build_object('orderId', o.order_id, 'externalRef', o.external_ref));
+  IF o.status NOT IN ('received','in_progress','delivery_reported') THEN RAISE EXCEPTION 'FLEET_ORDER_CLOSED: it is %', o.status; END IF;
+  IF length(trim(v_ev)) < 10 THEN PERFORM fleet_econ_bad('evidence says what the platform shows (at least 10 characters)'); END IF;
+  v_kind := fleet_external_order_evidence_kind(p_agent, o, a);
+  IF v_kind = 'agent_report' THEN
+    UPDATE fleet_external_orders SET status = 'delivery_reported', delivery_evidence = v_ev, delivery_evidence_kind = v_kind, updated_at = now() WHERE order_id = o.order_id RETURNING * INTO o;
+    UPDATE fleet_business_obligations SET due_at = now() + interval '1 day', updated_at = now() WHERE obligation_id = o.obligation_id AND status = 'open';
+    PERFORM fleet_event('external_order_delivery_reported', p_agent, 'agent', jsonb_build_object('orderId', o.order_id, 'externalRef', o.external_ref));
+    RETURN jsonb_build_object('ok', true, 'order', fleet_external_order_json(o), 'note', 'recorded as your report, not as proof: the order stays open until the platform''s record shows it (name a browserActionId, or the gateway reads it)');
+  END IF;
+  o := fleet_external_order_apply_delivered(o, v_kind, '[browser action ' || (a ->> 'browserActionId') || '] ' || v_ev, 'agent');
   RETURN jsonb_build_object('ok', true, 'order', fleet_external_order_json(o));
 END $$;
 
--- Records a refund the platform made, or asks the owner to make one. Never moves money and never touches a payout already booked.
+-- Records a refund, or asks the owner to make one; never performs one and never moves money. A report leaves the sale memo unchanged.
 CREATE FUNCTION fleet_econ_external_order_refund(p_agent text, a jsonb) RETURNS jsonb LANGUAGE plpgsql
 SET search_path = @@SCHEMA@@, pg_temp AS $$
-DECLARE o fleet_external_orders := fleet_external_order_own(p_agent, a); s fleet_channel_sales; v_amount bigint := fleet_econ_int(a, 'amountMinor', 1, 100000000000, true); v_ev text := fleet_econ_text(a, 'evidence', 500, true);
-        v_needs boolean := COALESCE((a ->> 'needsOwner')::boolean, false); v_total bigint;
+DECLARE o fleet_external_orders := fleet_external_order_own(p_agent, a); v_amount bigint := fleet_econ_int(a, 'amountMinor', 1, 100000000000, true); v_ev text := fleet_econ_text(a, 'evidence', 500, true);
+        v_needs boolean := COALESCE((a ->> 'needsOwner')::boolean, false); v_kind text; v_gross bigint; v_total bigint;
 BEGIN
   IF o.status IN ('refunded','cancelled') THEN RAISE EXCEPTION 'FLEET_ORDER_CLOSED: it is %', o.status; END IF;
   IF length(trim(v_ev)) < 10 THEN PERFORM fleet_econ_bad('evidence is the platform record, or why the owner must act (at least 10 characters)'); END IF;
+  v_total := o.refunded_minor + v_amount;
+  SELECT gross_minor INTO v_gross FROM fleet_channel_sales WHERE sale_id = o.sale_id;
+  IF v_total > v_gross THEN PERFORM fleet_econ_bad('more than this sale''s gross has been refunded'); END IF;
   IF v_needs THEN
-    UPDATE fleet_external_orders SET status = 'refund_needed', refund_evidence = v_ev, updated_at = now() WHERE order_id = o.order_id RETURNING * INTO o;
+    UPDATE fleet_external_orders SET status = 'refund_needed', refund_evidence = v_ev, refund_evidence_kind = 'agent_report', updated_at = now() WHERE order_id = o.order_id RETURNING * INTO o;
     PERFORM fleet_event('external_order_refund_needed', p_agent, 'agent', jsonb_build_object('orderId', o.order_id, 'externalRef', o.external_ref, 'amountMinor', v_amount));
     PERFORM fleet_notify('AMBER', 'EXTERNAL_REFUND_NEEDED', p_agent, 'A customer refund needs you on the platform: ' || o.external_ref, jsonb_build_object('orderId', o.order_id, 'amountMinor', v_amount, 'why', v_ev,
-      'action', 'refund it on the platform, then the agent records it'), 'external-refund:' || o.order_id);
-    RETURN jsonb_build_object('ok', true, 'order', fleet_external_order_json(o), 'note', 'the owner has been asked; record the refund when the platform shows it');
+      'action', 'refund it on the platform, then confirm it'), 'external-refund:' || o.order_id);
+    RETURN jsonb_build_object('ok', true, 'order', fleet_external_order_json(o), 'note', 'the owner has been asked; nothing is refunded until the platform shows it');
   END IF;
-  v_total := o.refunded_minor + v_amount;
-  IF o.sale_id IS NOT NULL THEN
-    SELECT * INTO s FROM fleet_channel_sales WHERE sale_id = o.sale_id FOR UPDATE;
-    IF v_total > s.gross_minor THEN PERFORM fleet_econ_bad('more than this sale''s gross has been refunded'); END IF;
-    UPDATE fleet_channel_sales SET refunded_minor = v_total, status = CASE WHEN v_total = gross_minor AND status = 'reported' THEN 'refunded' ELSE status END, updated_at = now() WHERE sale_id = s.sale_id;
+  v_kind := fleet_external_order_evidence_kind(p_agent, o, a);
+  IF v_kind = 'agent_report' THEN
+    UPDATE fleet_external_orders SET status = 'refund_reported', refund_reported_minor = v_amount, refund_evidence = v_ev, refund_evidence_kind = v_kind, updated_at = now() WHERE order_id = o.order_id RETURNING * INTO o;
+    PERFORM fleet_event('external_order_refund_reported', p_agent, 'agent', jsonb_build_object('orderId', o.order_id, 'amountMinor', v_amount));
+    RETURN jsonb_build_object('ok', true, 'order', fleet_external_order_json(o), 'note', 'recorded as your report, not as proof: the sale record is unchanged until the platform''s record shows it');
   END IF;
-  UPDATE fleet_external_orders SET refunded_minor = v_total, refund_evidence = v_ev,
-    status = CASE WHEN s.gross_minor IS NULL OR v_total >= s.gross_minor THEN 'refunded' ELSE CASE WHEN status = 'refund_needed' THEN 'delivered' ELSE status END END, updated_at = now()
-   WHERE order_id = o.order_id RETURNING * INTO o;
-  IF o.status = 'refunded' THEN PERFORM fleet_external_order_close_obligation(o.obligation_id); END IF;
-  PERFORM fleet_event('external_order_refunded', p_agent, 'agent', jsonb_build_object('orderId', o.order_id, 'amountMinor', v_amount, 'totalMinor', v_total));
+  o := fleet_external_order_apply_refund(o, v_total, v_kind, '[browser action ' || (a ->> 'browserActionId') || '] ' || v_ev, 'agent');
+  RETURN jsonb_build_object('ok', true, 'order', fleet_external_order_json(o));
+END $$;
+
+-- What the gateway read from the provider: the strongest evidence, applied whenever it reads. It only moves an order forward.
+CREATE FUNCTION fleet_external_order_platform_state(o fleet_external_orders, p_state jsonb, p_provider text) RETURNS void LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE v_ev text := left('read from the ' || p_provider || ' API', 500); v_refund bigint := COALESCE(NULLIF(p_state ->> 'refundedMinor', '')::bigint, 0);
+BEGIN
+  IF o.status = 'cancelled' THEN RETURN; END IF;
+  IF (p_state ->> 'cancelled')::boolean IS TRUE AND o.status <> 'refunded' THEN
+    UPDATE fleet_external_orders SET status = 'cancelled', reason = v_ev, updated_at = now() WHERE order_id = o.order_id;
+    UPDATE fleet_channel_sales SET status = 'cancelled', updated_at = now() WHERE sale_id = o.sale_id AND status = 'reported';
+    PERFORM fleet_external_order_close_obligation(o.obligation_id);
+    PERFORM fleet_event('external_order_cancelled', o.agent_id, 'channel-gateway', jsonb_build_object('orderId', o.order_id, 'evidence', 'provider_api'));
+    RETURN;
+  END IF;
+  IF (p_state ->> 'delivered')::boolean IS TRUE AND o.delivered_at IS NULL THEN o := fleet_external_order_apply_delivered(o, 'provider_api', v_ev, 'channel-gateway'); END IF;
+  IF v_refund > 0 THEN o := fleet_external_order_apply_refund(o, v_refund, 'provider_api', v_ev, 'channel-gateway'); END IF;
+END $$;
+
+-- The owner's own check of the platform, when no API or browser route shows it. Moves no money.
+CREATE FUNCTION fleet_admin_external_order_confirm(p_order uuid, p_what text, p_total_minor bigint, p_evidence text, p_actor text) RETURNS jsonb LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE o fleet_external_orders;
+BEGIN
+  SELECT * INTO o FROM fleet_external_orders WHERE order_id = p_order FOR UPDATE;
+  IF NOT FOUND THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_NOT_FOUND'); END IF;
+  IF length(trim(COALESCE(p_evidence, ''))) < 10 THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_BAD_REQUEST', 'reason', 'say what the platform shows'); END IF;
+  IF p_what = 'delivered' THEN o := fleet_external_order_apply_delivered(o, 'owner_confirmed', p_evidence, p_actor);
+  ELSIF p_what = 'refunded' AND p_total_minor > 0 THEN o := fleet_external_order_apply_refund(o, p_total_minor, 'owner_confirmed', p_evidence, p_actor);
+  ELSE RETURN jsonb_build_object('ok', false, 'code', 'FLEET_BAD_REQUEST', 'reason', 'delivered, or refunded with the total');
+  END IF;
   RETURN jsonb_build_object('ok', true, 'order', fleet_external_order_json(o));
 END $$;
 
@@ -188,9 +290,10 @@ ${restate(V80_SQL, "chx_sale_record", [
   [`  RETURN jsonb_build_object('ok', true, 'recorded', v_id IS NOT NULL);`,
    `  -- v124: what the platform sold becomes an order the agent is woken for (once, whichever of the agent and the gateway saw it first).
   SELECT sale_id INTO v_id2 FROM fleet_channel_sales WHERE channel_id = c.channel_id AND external_ref = p_sale ->> 'ref';
-  PERFORM fleet_external_order_open_internal(x.agent_id, c.venture_id, c.channel_id, p_sale ->> 'ref', v_id2, 'provider', p_sale ->> 'buyerRef', p_sale ->> 'brief', NULL);
+  v_order := fleet_external_order_open_internal(x.agent_id, c.venture_id, c.channel_id, p_sale ->> 'ref', v_id2, 'provider', p_sale ->> 'buyerRef', p_sale ->> 'brief', NULL);
+  IF jsonb_typeof(p_sale -> 'platformState') = 'object' THEN PERFORM fleet_external_order_platform_state(v_order, p_sale -> 'platformState', x.provider); END IF;
   RETURN jsonb_build_object('ok', true, 'recorded', v_id IS NOT NULL);`],
-  [`DECLARE x fleet_channel_connections; c fleet_venture_channels; v_id uuid;`, `DECLARE x fleet_channel_connections; c fleet_venture_channels; v_id uuid; v_id2 uuid;`],
+  [`DECLARE x fleet_channel_connections; c fleet_venture_channels; v_id uuid;`, `DECLARE x fleet_channel_connections; c fleet_venture_channels; v_id uuid; v_id2 uuid; v_order fleet_external_orders;`],
 ])}
 
 ${restate(V80_SQL, "chx_payout_record", [
