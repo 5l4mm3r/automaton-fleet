@@ -20,6 +20,7 @@ import pg from "pg";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
 import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder } from "./fixtures/economy-registry.js";
 import { liveRail, type ArmedCustody } from "./fixtures/custody-signer.js";
+import { publishedOffer } from "./fixtures/published-offer.js";
 import { MemoryVault } from "../../fleet/payments/credential-broker.js";
 import { PgStorefrontGateway } from "../../fleet/storefront/gateway.js";
 import { StorefrontWorker } from "../../fleet/storefront/worker.js";
@@ -102,6 +103,7 @@ describe.skipIf(!PG_BIN)("v52 storefront gateway (G3) and receipt evidence (G4) 
   const job = async (jobId: string) => (await R.q(`SELECT status, error, result FROM fleet.fleet_provider_jobs WHERE job_id = $1`, [jobId]))[0];
   const cx = (fn: string, args: unknown[]) => custody.query(`SELECT fleet.${fn}(${args.map((_, i) => `$${i + 1}`).join(", ")}) AS r`, args).then((r) => r.rows[0].r);
 
+  let offerId = "";
   beforeAll(async () => {
     R = await startEconomyRegistry(PG_BIN!, { founders: 2, allocationCents: 10_000, simulatedSettlement: false });
     [F, G] = R.founders;
@@ -111,6 +113,7 @@ describe.skipIf(!PG_BIN)("v52 storefront gateway (G3) and receipt evidence (G4) 
     for (const [who, key] of [[F, "printables"], [G, "planners"]] as const) {
       expect((await R.econ(who, "venture.create", { key, model: "digital_product", offer: key, state: "selected" })).ok).toBe(true);
     }
+    offerId = await publishedOffer(R, F, "printables");   // v111: a product put on sale names the published offer it sells
     const cred = await R.one(`fleet.fleet_admin_credential_register('gumroad', 'owner store token', $1, ARRAY['edit_products','view_sales','view_payouts'], false, 'gumroad owner', $2)`,
       [TOKEN_REF, OWNER]);
     gumroadRail = (await R.one(`fleet.fleet_admin_rail_add('gumroad', 'Owner Gumroad', 'shared', NULL, ARRAY['storefront','receive_payments'], 'gumroad: owner store', $1, 'live_receive', NULL, NULL, $2)`,
@@ -176,7 +179,7 @@ describe.skipIf(!PG_BIN)("v52 storefront gateway (G3) and receipt evidence (G4) 
     expect(await R.one(`(SELECT count(*)::int FROM fleet.fleet_provider_uploads WHERE blob IS NOT NULL)`)).toBe(0); // bytes erased once attached
     // Publishing while Gumroad answers with a warning: still a draft; storefront_publication is marked failed.
     fake.warnOnPublish("Your email address is not confirmed");
-    const pub = await R.econ(F, "storefront.product.publish", { productRef: p.productRef, ...k() });
+    const pub = await R.econ(F, "storefront.product.publish", { productRef: p.productRef, offerId, ...k() });
     await worker.tick();
     expect((await job(pub.jobId)).status).toBe("succeeded");
     expect((await R.econ(F, "storefront.products")).products[0]).toMatchObject({ state: "draft", warning: "Your email address is not confirmed" });
@@ -185,7 +188,7 @@ describe.skipIf(!PG_BIN)("v52 storefront gateway (G3) and receipt evidence (G4) 
     // The owner fixes the account; publication is verified again and the product publishes.
     fake.warnOnPublish(null);
     await R.one(`fleet.fleet_admin_rail_verify($1, 'storefront_publication', 'verified', 'owner_attested', '{"note":"email now confirmed"}'::jsonb, NULL, $2)`, [gumroadRail, OWNER]);
-    await R.econ(F, "storefront.product.publish", { productRef: p.productRef, ...k() });
+    await R.econ(F, "storefront.product.publish", { productRef: p.productRef, offerId, ...k() });
     await worker.tick();
     expect((await R.econ(F, "storefront.products")).products[0]).toMatchObject({ state: "published" });
     expect(fake.products.get(p.productId)!.published).toBe(true);
@@ -338,7 +341,7 @@ describe.skipIf(!PG_BIN)("v52 storefront gateway (G3) and receipt evidence (G4) 
       expect(f, JSON.stringify(f)).toMatchObject({ ok: true });
       await worker.tick();
       expect((await job(f.jobId)).status).toBe("succeeded");
-      const pub = await run("publish", { productRef: c.product.productRef });
+      const pub = await run("publish", { productRef: c.product.productRef, offerId });
       expect(pub).toMatchObject({ ok: true });
       // Unknown three-part names and anything longer still stop at the controller or the database.
       expect(await client.economy("storefront.product.refund", {})).toMatchObject({ ok: false, code: "FLEET_BAD_REQUEST" });

@@ -15,6 +15,7 @@ import { findPgBin } from "./fixtures/ephemeral-pg.js";
 import { startEconomyRegistry, OWNER, type EconomyRegistry, type Founder } from "./fixtures/economy-registry.js";
 import { FLEET_PG_SCHEMA_VERSION } from "../../fleet/postgres/migrations.js";
 import { EVENT_ROUTES_V80, ETSY_AI_DISCLOSURE } from "../../fleet/postgres/migrations-phase80.js";
+import { publishedOffer, recheckOffer } from "./fixtures/published-offer.js";
 import { PgChannelGateway } from "../../fleet/channels/gateway.js";
 import { ChannelWorker } from "../../fleet/channels/worker.js";
 import { TokenStore, type ChannelHttp, type StoredToken } from "../../fleet/channels/clients.js";
@@ -82,12 +83,14 @@ describe.skipIf(!PG_BIN)("v80 scoped releases, discovery and the official-API ch
   let etsyChannel = "";
   let pinChannel = "";
 
+  let offerId = "";
   beforeAll(async () => {
     R = await startEconomyRegistry(PG_BIN!, { founders: 2, allocationCents: 10_000, simulatedSettlement: false, outwardHeld: true });
     [F, G] = R.founders;
     await R.store.grantServiceRole();
     expect((await R.econ(F, "venture.create", { key: "ledgers", model: "digital_product", offer: "cash-flow tools", state: "selected" })).ok).toBe(true);
     expect((await R.econ(F, "identity.create", { kind: "venture_identity", ventureKey: "ledgers", displayName: "Ledgerline", bio: "Cash-flow spreadsheets for freelancers and small studios." })).ok).toBe(true);
+    offerId = await publishedOffer(R, F, "ledgers");   // v111: a listing names the published offer it sells
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-v80-"));
     fs.chmodSync(dir, 0o700);
     store = new TokenStore(dir);
@@ -168,8 +171,11 @@ describe.skipIf(!PG_BIN)("v80 scoped releases, discovery and the official-API ch
     expect(await owner(`SELECT fleet.fleet_admin_outward_release($1, $2::jsonb, 'proof: one Etsy listing', $3) AS r`,
       [F.id, JSON.stringify({ actions: ["channel_api"], channels: [etsyChannel], apiOps: ["etsy.listing.create", "etsy.listing.image", "etsy.listing.file", "etsy.listing.activate"], expiresHours: 24 }), OWNER])).toMatchObject({ ok: true });
     expect((await R.econ(F, "channel.api", { channelId: etsyChannel, op: "etsy.listing.deactivate", args: { listingId: "1" }, idempotencyKey: idem() })).reason).toMatch(/does not cover etsy.listing.deactivate/);
+    // The channel changed since the offer's capability check: refused until the agent checks again (v111).
+    expect(await R.econ(F, "channel.api", { channelId: etsyChannel, op: "etsy.listing.create", idempotencyKey: idem(), args: { offerId, title: "x" } })).toMatchObject({ ok: false, code: "FLEET_CAPABILITY_CHECK_REQUIRED" });
+    await recheckOffer(R, F, offerId);
     const create = await ok(R.econ(F, "channel.api", { channelId: etsyChannel, op: "etsy.listing.create", idempotencyKey: idem(),
-      args: { title: "Cash-flow workbook for freelancers", description: "A tested spreadsheet that forecasts twelve months of income and costs.", priceMinor: 1200, taxonomyId: 2078, tags: ["cash flow", "budget"] } }));
+      args: { offerId, title: "Cash-flow workbook for freelancers", description: "A tested spreadsheet that forecasts twelve months of income and costs.", priceMinor: 1200, taxonomyId: 2078, tags: ["cash flow", "budget"] } }));
     expect(create.job.status).toBe("queued");
     expect((await worker.tick()).checked).toBe(1);
     const job = (await ok(R.econ(F, "channel.api_jobs", {}))).jobs.find((j: any) => j.jobId === create.job.jobId);
@@ -180,7 +186,8 @@ describe.skipIf(!PG_BIN)("v80 scoped releases, discovery and the official-API ch
       expect((await R.econ(F, "channel.api", { channelId: etsyChannel, op, args: { listingId: "5000" }, fileName: file, contentType: op.endsWith("image") ? "image/png"
         : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", contentB64: PNG.toString("base64"), idempotencyKey: idem() })).ok).toBe(true);
     }
-    await ok(R.econ(F, "channel.api", { channelId: etsyChannel, op: "etsy.listing.activate", args: { listingId: "5000" }, idempotencyKey: idem() }));
+    await recheckOffer(R, F, offerId);   // the connection went from pending to active above: a real change
+    await ok(R.econ(F, "channel.api", { channelId: etsyChannel, op: "etsy.listing.activate", args: { offerId, listingId: "5000" }, idempotencyKey: idem() }));
     await worker.tick();
     expect(fake.state.listings.get("5000")!.state).toBe("active");
     expect((await R.q(`SELECT kind, status, url, external_ref FROM fleet.fleet_presence_items WHERE channel_id = $1`, [etsyChannel]))[0])
@@ -190,7 +197,7 @@ describe.skipIf(!PG_BIN)("v80 scoped releases, discovery and the official-API ch
   });
 
   it("v95: a listing whose answer was lost is uncertain — never created twice; the same request replays it; a further one waits for the agent's reconciliation", async () => {
-    const args = { title: "Invoice tracker for freelancers", description: "A tested spreadsheet that tracks every invoice and the day it falls due.", priceMinor: 900, taxonomyId: 2078 };
+    const args = { offerId, title: "Invoice tracker for freelancers", description: "A tested spreadsheet that tracks every invoice and the day it falls due.", priceMinor: 900, taxonomyId: 2078 };
     const creates = () => fake.calls.filter((x) => x.method === "POST" && /\/shops\/[^/]+\/listings$/.test(x.url)).length;
     // This channel already has a listing (the test above): a further one names the latest listing operation on it.
     const subject = `channel:${etsyChannel}:etsy.listing.create`;
@@ -263,7 +270,8 @@ describe.skipIf(!PG_BIN)("v80 scoped releases, discovery and the official-API ch
     now += 2 * 3_600_000;
     await worker.tick();
     expect(fake.state.boards).toBe(1);
-    const link = (await ok(R.econ(F, "channel.api", { channelId: pinChannel, op: "pinterest.pin.create", fileName: "pin.png", contentType: "image/png", contentB64: PNG.toString("base64"),
+    await recheckOffer(R, F, offerId);
+    const link = (await ok(R.econ(F, "channel.api", { channelId: pinChannel, op: "pinterest.pin.create", offerId, fileName: "pin.png", contentType: "image/png", contentB64: PNG.toString("base64"),
       args: { boardId: "880000000001", title: "Cash-flow workbook", description: "Twelve months of cash flow in one sheet.", link: "https://www.etsy.com/listing/5000", altText: "A spreadsheet preview" },
       idempotencyKey: idem() })));
     await worker.tick();

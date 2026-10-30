@@ -137,6 +137,9 @@ export const ECONOMY_OPS: Readonly<Record<string, Readonly<Record<string, string
   business: { channels: "channel.list", add_channel: "channel.add", update_channel: "channel.update", channel_link: "channel.link",
     presence: "presence.list", record_presence: "presence.record", update_presence: "presence.update",
     leads: "lead.list", add_lead: "lead.add", update_lead: "lead.update",
+    // v124: an order on an outside platform, tracked from receipt to delivery or refund.
+    external_orders: "external_order.list", open_external_order: "external_order.open", update_external_order: "external_order.update",
+    deliver_external_order: "external_order.deliver", refund_external_order: "external_order.refund",
     obligations: "obligation.list", add_obligation: "obligation.add", obligation_done: "obligation.done", cancel_obligation: "obligation.cancel",
     suppress: "outreach.suppress", check_address: "outreach.check",
     sales: "sale.list", report_sale: "sale.report", update_sale: "sale.update", payouts: "payout.list", claim_payout: "payout.claim",

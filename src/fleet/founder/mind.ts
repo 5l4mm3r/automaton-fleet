@@ -1149,7 +1149,7 @@ export class FounderMind {
         // editable procedure in the founder's workspace, for the next similar task. Never fails the turn.
         // Run 6: the same file sent again (unchanged: true) is not a new method that worked; it is not recorded.
         const sameFileAgain = (call.arguments?.args as { unchanged?: unknown } | undefined)?.unchanged === true || call.arguments?.unchanged === true;
-        if (W && out.ok && call.name === "wallet" && call.arguments?.op === "deliver" && !sameFileAgain) {
+        if (W && out.ok && !sameFileAgain && ((call.name === "wallet" && call.arguments?.op === "deliver") || (call.name === "business" && call.arguments?.op === "deliver_external_order"))) {
           try {
             const earlier = (carried?.calls ?? []).flatMap((x) => { try { return [{ call: { id: "carried", name: x.name, arguments: JSON.parse(x.args) as Record<string, unknown> }, ok: x.ok }]; } catch { return []; } });
             const orderId = (call.arguments?.args as { orderId?: unknown } | undefined)?.orderId ?? call.arguments?.orderId;

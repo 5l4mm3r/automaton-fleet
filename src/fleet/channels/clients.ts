@@ -105,6 +105,14 @@ export async function freshToken(http: ChannelHttp, store: TokenStore, ref: stri
 
 const minorToDecimal = (minor: number) => (minor / 100).toFixed(2);
 
+/** The items bought and the buyer's note, as one bounded piece of untrusted text. Absent when the platform gave neither. */
+function receiptBrief(x: Record<string, any>): { brief?: string } {
+  const items = (Array.isArray(x.transactions) ? x.transactions : []).map((t: Record<string, any>) => `${t?.quantity ?? 1} × ${String(t?.title ?? "item").slice(0, 200)}`);
+  const note = typeof x.message_from_buyer === "string" ? x.message_from_buyer.slice(0, 2000) : "";
+  const text = [items.length ? `Items: ${items.join("; ")}` : "", note ? `Buyer note: ${note}` : ""].filter(Boolean).join("\n");
+  return text ? { brief: text.slice(0, 4000) } : {};
+}
+
 export class EtsyClient {
   constructor(private readonly http: ChannelHttp, private readonly t: StoredToken) {}
   private headers(extra: Record<string, string> = {}) {
@@ -150,13 +158,15 @@ export class EtsyClient {
     const r = await this.call("POST", `/v3/application/shops/${shopId}/listings/${listingId}/files`, fd) as { listing_file_id?: unknown };
     return String(r.listing_file_id ?? "");
   }
-  async receipts(shopId: string, minCreated: number): Promise<Array<{ ref: string; occurredAt: string; currency: string; grossMinor: number }>> {
+  async receipts(shopId: string, minCreated: number): Promise<Array<{ ref: string; occurredAt: string; currency: string; grossMinor: number; buyerRef?: string; brief?: string }>> {
     const r = await this.call("GET", `/v3/application/shops/${shopId}/receipts?min_created=${minCreated}&limit=100`) as { results?: unknown };
     return (Array.isArray(r.results) ? r.results : []).flatMap((x: Record<string, any>) => {
       const g = x.grandtotal ?? {};
       const minor = Math.round((Number(g.amount) / Number(g.divisor || 100)) * 100);
       return x.receipt_id && Number.isFinite(minor) && minor > 0 ? [{ ref: `etsy-receipt-${x.receipt_id}`, occurredAt: new Date(Number(x.create_timestamp ?? x.created_timestamp) * 1000).toISOString(),
-        currency: String(g.currency_code ?? "GBP"), grossMinor: minor }] : [];
+        currency: String(g.currency_code ?? "GBP"), grossMinor: minor,
+        // v124: what was bought and the buyer's own note (untrusted text); the buyer as an opaque reference, never a name or address.
+        ...(x.buyer_user_id ? { buyerRef: `etsy-buyer-${String(x.buyer_user_id).slice(0, 40)}` } : {}), ...receiptBrief(x) }] : [];
     });
   }
   async payouts(shopId: string, minCreated: number, maxCreated: number): Promise<Array<{ ref: string; paidOn: string; currency: string; amountMinor: number }>> {

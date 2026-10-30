@@ -570,6 +570,7 @@ describe.skipIf(!PG_BIN)("research through FleetController (HTTP + PostgreSQL + 
     try {
       await c.query("BEGIN");
       // Switch both on (so the policy gate is the one being proven), then remove the rows.
+      await c.query(`UPDATE fleet.fleet_inference_profile SET profile = 'cloud_allowed'`);   // v112: enabling a cloud provider needs this profile
       await c.query(`UPDATE fleet.fleet_cognition_policy SET cognition_enabled = true, provider = 'anthropic', model = 'm'`);
       await c.query(`UPDATE fleet.fleet_research_policy SET research_enabled = true`);
       const cogOn = (await c.query(`SELECT fleet.svc_cognition_authorize($1, 1) AS r`, [a.agentId])).rows[0].r;
