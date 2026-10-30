@@ -194,7 +194,9 @@ describe("B2 route policy and the signature-termination invariant", () => {
       api: { ...base, "GET /v1/operator/spend": route("api_request_spend") },
       propose: { ...base, "GET /v1/operator/propose": route("op_propose") },
       post: { ...base, "POST /v1/operator/status2": route("op_fleet_status") },
+      // The treasury read is its own scope: it may not hide behind another function, and ChatGPT may never hold it.
       treasury: { ...base, "GET /v1/operator/treasury": route("op_whoami", { scope: "ops.read.treasury" as never }) },
+      treasuryChatgpt: { ...base, "GET /v1/operator/treasury": route("op_treasury_watch", { scope: "ops.read.treasury" as never, kinds: ["bridge_chatgpt"] }) },
       chatgptEvents: { ...base, "GET /v1/operator/events": route("op_list_events", { scope: "ops.read.events", kinds: ["bridge_chatgpt"] }) },
     };
     for (const [name, policy] of Object.entries(cases)) expect(verifyRoutePolicy(policy).length, name).toBeGreaterThan(0);

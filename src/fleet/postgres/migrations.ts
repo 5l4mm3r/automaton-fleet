@@ -128,10 +128,11 @@ import { V118_SQL } from "./migrations-phase118.js";
 import { V119_SQL } from "./migrations-phase119.js";
 import { V120_SQL } from "./migrations-phase120.js";
 import { V121_SQL } from "./migrations-phase121.js";
+import { V123_SQL } from "./migrations-phase123.js";
 import { V122_SQL } from "./migrations-phase122.js";
 import { V40_SQL } from "./migrations-phase40.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 122;
+export const FLEET_PG_SCHEMA_VERSION = 123;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1349,6 +1350,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 120, name: "owner_tasks", sql: V120_SQL },
   { version: 121, name: "treasury_position", sql: V121_SQL },
   { version: 122, name: "founder_recovery", sql: V122_SQL },
+  { version: 123, name: "treasury_watch", sql: V123_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1420,6 +1422,7 @@ export const SERVICE_API_FUNCTIONS: readonly string[] = Object.freeze([
   "svc_event_retention()",
   // v83: the hourly operations watch (health findings, overdue paid orders, low AI credit → notifications).
   "svc_operations_watch()",
+  "svc_treasury_watch_tick()",
   // v48: PayPal webhooks are stored unverified (custody verifies them); the reaper issues due payment instructions and expires
   // the owner's custody activation.
   "svc_paypal_webhook_receive(text, text, text, jsonb, text)",
@@ -1843,6 +1846,7 @@ export const OPERATOR_API_FUNCTIONS: readonly string[] = Object.freeze([
   "op_get_agent(uuid, text)",
   "op_list_events(uuid, bigint, integer, text)",
   "op_lifecycle_health(uuid)",
+  "op_treasury_watch(uuid)",
   "op_runtime_status(uuid)",
   "op_list_reservations(uuid, text, integer)",
   "op_list_orphans(uuid, bigint, integer)",
@@ -1886,6 +1890,7 @@ export const OPERATOR_READ_FUNCTIONS: readonly string[] = Object.freeze([
   "op_get_agent",
   "op_list_events",
   "op_lifecycle_health",
+  "op_treasury_watch",
   "op_runtime_status",
   "op_list_reservations",
   "op_list_orphans",

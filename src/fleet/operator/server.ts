@@ -66,6 +66,7 @@ import {
   dbId,
   eventItem,
   lifecycleBody,
+  treasuryBody,
   orphanItem,
   proposalItem,
   reservationItem,
@@ -568,6 +569,8 @@ export class OperatorService {
         const r = await g.listEvents(requestId, params.after ?? null, limit, params.type ?? null);
         return this.page(r.items, limit, (e) => eventItem(e), (it) => (it.id as string | null) ?? null);
       }
+      case "op_treasury_watch":
+        return treasuryBody(await g.treasuryWatch(requestId));
       case "op_lifecycle_health":
         return lifecycleBody(await g.lifecycleHealth(requestId));
       case "op_runtime_status": {

@@ -18,16 +18,20 @@ import { CUSTODY_KEY_FILE, loadOrCreateCustodyKey, SealedCredentialVault } from 
 import { PayPalTreasuryWorker, type PayPalGatewayPort, type PayPalProbe } from "./paypal-treasury.js";
 import type { HttpPort } from "./signers.js";
 
-export interface ProbeArgs { mode: "live" | "sandbox"; vaultRef: string; webhookId: string; webhookUrl: string; events?: boolean }
+export interface ProbeArgs { mode: "live" | "sandbox"; vaultRef: string; webhookId: string; webhookUrl: string; events?: boolean; eventDays?: number }
 
 export function parseProbeArgs(argv: string[]): ProbeArgs {
   const events = argv.includes("--events");
-  const [mode, vaultRef, webhookId, webhookUrl] = argv.filter((a) => a !== "--events");
+  // v123 --events-days N: how far back to ask PayPal for webhook events (its retention is not documented; default 7).
+  const daysAt = argv.indexOf("--events-days");
+  const eventDays = daysAt >= 0 ? Number(argv[daysAt + 1]) : undefined;
+  if (eventDays !== undefined && (!Number.isInteger(eventDays) || eventDays < 1 || eventDays > 90)) throw new Error("--events-days takes 1 to 90");
+  const [mode, vaultRef, webhookId, webhookUrl] = argv.filter((a, i) => a !== "--events" && a !== "--events-days" && (daysAt < 0 || i !== daysAt + 1));
   if (mode !== "live" && mode !== "sandbox") throw new Error("usage: paypal-probe <live|sandbox> <vault:paypal/name> <webhookId> <https webhook url>");
   if (!/^vault:paypal\/[a-z0-9/._-]{1,100}$/.test(vaultRef ?? "")) throw new Error("the vault reference is vault:paypal/<name>");
   if (!/^[A-Z0-9]{5,40}$/.test(webhookId ?? "")) throw new Error("a PayPal webhook id");
   if (!/^https:\/\/[a-z0-9.-]+(:\d+)?\/[\x21-\x7e]*$/.test(webhookUrl ?? "")) throw new Error("an https webhook url");
-  return { mode, vaultRef, webhookId, webhookUrl, ...(events ? { events } : {}) };
+  return { mode, vaultRef, webhookId, webhookUrl, ...(events ? { events } : {}), ...(eventDays !== undefined ? { eventDays } : {}) };
 }
 
 /** Open the sealed credential with the existing custody key (never created here) and probe. */
@@ -42,7 +46,7 @@ export async function runProbe(args: ProbeArgs, deps: {
   const worker = new PayPalTreasuryWorker({} as PayPalGatewayPort, vault, deps.http);
   const p = await worker.probe({ railMode: args.mode, vaultRef: args.vaultRef }, args.webhookId, args.webhookUrl);
   // v76 --events: the webhook diagnosis (read-only; ids, types, times and delivery statuses only).
-  if (args.events && p.authenticated) p.diagnosis = await worker.diagnoseWebhooks({ railMode: args.mode, vaultRef: args.vaultRef }, args.webhookUrl);
+  if (args.events && p.authenticated) p.diagnosis = await worker.diagnoseWebhooks({ railMode: args.mode, vaultRef: args.vaultRef }, args.webhookUrl, args.eventDays);
   return { credentialOpened, ...p };
 }
 

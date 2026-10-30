@@ -326,6 +326,17 @@ function agentStateOf(v: unknown, w: string): Record<string, unknown> | null {
   };
 }
 
+/** v123: Treasury Watch. Closed shape: only figures, codes and times, with text the Fleet itself wrote; a new field fails closed. */
+export function validateTreasury(d: unknown): Record<string, unknown> {
+  const o = obj(d, ["currency", "restrictedMinor", "pendingIncomingMinor", "paypal", "reconciliation", "treasury", "owner", "apiCredit", "autoBook", "sync", "movements"], "treasury");
+  obj(o.sync, ["search", "balances", "backfill", "watch", "webhooks", "unmatchedCount", "unmatchedOutgoingCount", "openReconciliation"], "treasury.sync", ["state", "mode", "accountRef", "lastTransactionIngestedAt", "needsReview"]);
+  if (!Array.isArray(o.movements)) bad("treasury.movements", "expected a list");
+  const fields = ["movementId", "transactionId", "eventCode", "direction", "amountMinor", "feeMinor", "currency", "providerStatus", "classification", "accountingStatus",
+    "rule", "action", "journalId", "returnJournalId", "shortfallMinor", "initiatedAt", "firstSeenAt", "updatedAt"];
+  (o.movements as unknown[]).forEach((m, i) => { const x = obj(m, [], `treasury.movements[${i}]`, fields); intOf(`treasury.movements[${i}].amountMinor`)(x.amountMinor); });
+  return o;
+}
+
 export function validateLifecycle(d: unknown): Record<string, unknown> {
   const counts = ["held", "staleHeartbeats", "pendingChallenges", "overdueChallenges", "openReservations", "expiredOpenReservations",
     "openOrphans", "orphansHoldingSlots", "pendingTerminations", "provisioningNeedingCleanup", "pendingProposals"];

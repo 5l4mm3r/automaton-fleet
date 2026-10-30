@@ -13,9 +13,11 @@
  *  - ChatGPT principals can never reach events, lifecycle or any POST route.
  * The database mirrors this with CHECKs on fleet_operator_routes.
  *
- * ops.read.treasury is reserved (Phase E). There is no route for anything
- * owner-gated (payments, replication, cap, mode, runtime approval, treasury,
- * custody, credentials, principals, kill switches, proposal decisions).
+ * ops.read.treasury (v123, owner 2026-10-30) reads Treasury Watch's redacted
+ * facts: bridge_claude only, granted per principal, no action. There is no
+ * route for anything owner-gated (payments, replication, cap, mode, runtime
+ * approval, treasury changes, custody, credentials, principals, kill switches,
+ * proposal decisions).
  */
 
 import { OPERATOR_ACTION_FUNCTIONS, OPERATOR_READ_FUNCTIONS } from "../postgres/migrations.js";
@@ -26,6 +28,7 @@ export type OperatorScope =
   | "ops.read.agents"
   | "ops.read.events"
   | "ops.read.lifecycle"
+  | "ops.read.treasury"
   | "ops.act.agents"
   | "ops.propose.agents";
 
@@ -35,6 +38,7 @@ export const OPERATOR_SCOPES: readonly OperatorScope[] = Object.freeze([
   "ops.read.agents",
   "ops.read.events",
   "ops.read.lifecycle",
+  "ops.read.treasury",
   "ops.act.agents",
   "ops.propose.agents",
 ]);
@@ -42,8 +46,8 @@ export const OPERATOR_SCOPES: readonly OperatorScope[] = Object.freeze([
 export const MUTATING_SCOPES: readonly OperatorScope[] = Object.freeze(["ops.act.agents", "ops.propose.agents"]);
 /** Scopes a bridge_chatgpt principal may hold (the database enforces the same). */
 export const CHATGPT_SCOPES: readonly OperatorScope[] = Object.freeze(["ops.read.status", "ops.read.agents"]);
-/** Documented, not implemented until Phase E. */
-export const RESERVED_SCOPES: readonly string[] = Object.freeze(["ops.read.treasury"]);
+/** Documented, not implemented. */
+export const RESERVED_SCOPES: readonly string[] = Object.freeze([]);
 
 /** One field of a closed action body: every field is a string of this exact format. */
 export interface BodyField {
@@ -101,6 +105,7 @@ export const OPERATOR_ROUTE_POLICY: Readonly<Record<string, Readonly<OperatorRou
   }),
   // ── D3 Tier 2 reads (STABLE, READ ONLY)
   "GET /v1/operator/lifecycle": Object.freeze({ scope: "ops.read.lifecycle", kinds: CLAUDE, fn: "op_lifecycle_health", params: NONE }),
+  "GET /v1/operator/treasury": Object.freeze({ scope: "ops.read.treasury", kinds: CLAUDE, fn: "op_treasury_watch", params: NONE }),
   "GET /v1/operator/runtime": Object.freeze({ scope: "ops.read.status", kinds: CLAUDE, fn: "op_runtime_status", params: NONE }),
   "GET /v1/operator/reservations": Object.freeze({
     scope: "ops.read.lifecycle",

@@ -436,7 +436,10 @@ export function writeTargets(src: string): string[] {
 const SIDE_EFFECT_BUILTINS = /^(nextval|setval|set_config|pg_notify|pg_advisory_\w+|pg_try_advisory_\w+|lo_\w+|dblink\w*|pg_terminate_backend|pg_cancel_backend|pg_sleep\w*|pg_reload_conf|pg_rotate_logfile|pg_file_\w+|pg_read_\w*file|pg_ls_\w+|pg_stat_reset\w*|pg_switch_wal|pg_create_\w+|pg_drop_replication_slot|pg_logical_emit_message|txid_current|pg_current_xact_id)$/;
 
 /** Read helpers the op_* read functions may call (each is checked the same way). */
-const OPERATOR_READ_HELPERS = ["fleet_operator_request_ok", "fleet_operator_agent_json"];
+const OPERATOR_READ_HELPERS = ["fleet_operator_request_ok", "fleet_operator_agent_json",
+  // v123: op_treasury_watch reads the position, all STABLE and read-only (the audit below holds each of them to that).
+  "fleet_treasury_position", "fleet_provider_sync_visibility", "fleet_treasury_movements_recent", "fleet_capital_backing", "fleet_paypal_balance_latest", "fleet_ledger_balance",
+  "fleet_provider_credit_balance", "fleet_provider_credit_held", "fleet_ledger_account"];
 
 /**
  * Schema v8 signature-termination invariant, checked against the live
@@ -1285,6 +1288,11 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_paypal_provider_order_events: new Set(["fleet_paypal_order_event"]),
     fleet_paypal_reconciliation_items: new Set(["fleet_paypal_recon_add", "fleet_admin_paypal_reconciliation_resolve"]),
     fleet_paypal_sync_status: new Set(["cx_paypal_sync_record"]),
+    // v123: Treasury Watch (its tick and owner switch only).
+    fleet_treasury_movements: new Set(["fleet_treasury_movement_eval", "fleet_treasury_movements_sync"]),
+    fleet_treasury_movement_history: new Set(["fleet_treasury_movement_eval"]),
+    fleet_treasury_watch_state: new Set(["svc_treasury_watch_tick", "fleet_treasury_movements_sync"]),
+    fleet_treasury_watch_policy: new Set(["fleet_admin_treasury_watch_policy_set"]),
     fleet_paypal_webhook_inbox: new Set(["svc_paypal_webhook_receive", "cx_paypal_inbox", "cx_paypal_inbox_result"]),
     fleet_paypal_transactions: new Set(["fleet_channel_payout_book", "fleet_admin_channel_payout_transfer", "cx_paypal_txn_record", "fleet_admin_paypal_txn_attribute", "svc_settlement_paypal_match",
       // v66: a deposit backing the existing capital closes its transaction.
@@ -1294,7 +1302,9 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
       // v70: a treasury debit evidencing an AI-credit purchase closes its transaction.
       "fleet_admin_ai_credit_treasury_purchase",
       // v71: the counterparty from custody, and a debit attributed to an AI-credit purchase.
-      "cx_paypal_txn_counterparty", "fleet_ai_credit_promote"]),
+      "cx_paypal_txn_counterparty", "fleet_ai_credit_promote",
+      // v123: a top-up Treasury Watch booked by its explicit rule.
+      "fleet_treasury_movement_eval"]),
     fleet_paypal_balance_observations: new Set(["cx_paypal_balance_record"]),
     fleet_card_charges: new Set(["fleet_admin_card_charge_record", "fleet_admin_card_charge_confirm", "fleet_card_charge_post",
       "fleet_econ_card_authorize", "fleet_econ_card_void", "svc_card_holds_expire",

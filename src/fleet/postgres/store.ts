@@ -2155,6 +2155,11 @@ export class PgFleetStore {
     return this.tx(async (c) => (await c.query("SELECT svc_operations_watch() AS r")).rows[0].r);
   }
 
+  /** v123: Treasury Watch — classify and book new PayPal rows, then alert on sync, review and balance problems. */
+  async treasuryWatchTick(): Promise<Record<string, unknown>> {
+    return this.tx(async (c) => (await c.query("SELECT svc_treasury_watch_tick() AS r")).rows[0].r);
+  }
+
   /** v96/v117: reserve a paid Fleet Control call's bounded maximum (USD microcents) before it is made: the daily ceiling, and
    *  its maximum held in GBP (treasury) and provider credit, keyed by the call's request id. */
   async controlAiReserve(kind: "spend_review" | "knowledge_review" | "evidence_relevance" | "message_check", ref: string, maxUsdMicrocents: number,

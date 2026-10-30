@@ -12,7 +12,9 @@ import type { PoolClient } from "pg";
  */
 /** v35 singleton rows (economy-engine policies and the replication high-water state): reset to migration defaults. */
 const V35_SINGLETONS = ["fleet_replication_policy", "fleet_replication_state", "fleet_mission_policy", "fleet_risk_policy",
-  "fleet_notification_policy", "fleet_estate_policy"];
+  "fleet_notification_policy", "fleet_estate_policy",
+  // v123: Treasury Watch's policy and state (auto-booking off).
+  "fleet_treasury_watch_policy", "fleet_treasury_watch_state"];
 
 export async function wipeRegistry(c: PoolClient, schema: string): Promise<void> {
   const keep = new Set([

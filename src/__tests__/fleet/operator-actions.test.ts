@@ -501,7 +501,8 @@ describe.skipIf(!PG_BIN)("D3 controlled operator actions (schema v9, PostgreSQL 
     }
     expect(calls).toEqual(["fleet_request_health_challenge"]);
     // No tool in the catalogue approves, decides, enables, sets, executes or reads files/secrets.
-    for (const t of TOOLS) expect(t.name).not.toMatch(/approve|decide|enable|set_|exec|command|query|sql|file|secret|key|shell|ssh|http|route|endpoint|payment|treasury|cap|mode|runtime_approve|genesis|reseed/);
+    // fleet_treasury_watch is the one read-only tool named for the treasury (owner, 2026-10-30); bridge-mcp pins it as a read tool.
+    for (const t of TOOLS.filter((x) => x.name !== "fleet_treasury_watch")) expect(t.name).not.toMatch(/approve|decide|enable|set_|exec|command|query|sql|file|secret|key|shell|ssh|http|route|endpoint|payment|treasury|cap|mode|runtime_approve|genesis|reseed/);
   });
 
   // ── Body, route and signature smuggling ───────────────────────

@@ -379,7 +379,9 @@ describe.skipIf(!PG_BIN)("B2 schema v8 and the operator database surface (Postgr
     ).rejects.toThrow(/chatgpt_no_events|chatgpt_read_only/);
     await expect(enroll("bridge-claude-a", "bridge_claude", ["ops.read.status"])).rejects.toThrow(/duplicate key/);
     await expect(owner.query(`INSERT INTO fleet.fleet_operator_principals (principal_id, name, kind, scopes, created_by) VALUES ($1, 'dup-scopes', 'bridge_claude', ARRAY['ops.read.status','ops.read.status'], 'x')`, [`op_${ulid()}`])).rejects.toThrow(/duplicate scopes/);
-    await expect(owner.query(`INSERT INTO fleet.fleet_operator_principals (principal_id, name, kind, scopes, created_by) VALUES ($1, 'treasury-x', 'bridge_claude', ARRAY['ops.read.treasury'], 'x')`, [`op_${ulid()}`])).rejects.toThrow(/check constraint/);
+    await expect(owner.query(`INSERT INTO fleet.fleet_operator_principals (principal_id, name, kind, scopes, created_by) VALUES ($1, 'money-x', 'bridge_claude', ARRAY['ops.read.money'], 'x')`, [`op_${ulid()}`])).rejects.toThrow(/check constraint/);
+    // v123: the treasury read is grantable to Claude's bridge only, never to ChatGPT's.
+    await expect(owner.query(`INSERT INTO fleet.fleet_operator_principals (principal_id, name, kind, scopes, created_by) VALUES ($1, 'treasury-chatgpt', 'bridge_chatgpt', ARRAY['ops.read.treasury'], 'x')`, [`op_${ulid()}`])).rejects.toThrow(/check constraint|chatgpt_read_only/);
     // Key id must be the fingerprint of the key (checked while the principal has a free key slot).
     const k3 = keypair();
     await expect(owner.query(`INSERT INTO fleet.fleet_operator_keys (key_id, principal_id, public_key, expires_at, created_by) VALUES ($1, $2, $3, now() + interval '1 day', 'x')`, ["0".repeat(32), c.principalId, Buffer.from(k3.publicKey, "base64url")])).rejects.toThrow(/fleet_operator_keys_id_is_fingerprint/);

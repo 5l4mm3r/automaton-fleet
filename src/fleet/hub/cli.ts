@@ -217,6 +217,8 @@
  *                                                                           (v79) a payout paid to your bank: its bank statement line (one per payout)
  *   economy-channel-payout-transfer <paypalTxnId> <payoutId> [payoutId…]  (v79) the PayPal credit that moved those bank payouts into the treasury
  *                                                                           (its amount = exactly their total); books each payout once
+ *   economy-treasury-watch                                                   (v123) provider sync, movements and the position
+ *   economy-treasury-watch-policy <on <railId>|off> [--codes a,b] [--max minor] [--material minor]  (v123) auto-booking of top-ups on the owner's treasury account
  *   economy-capital-backing                                                  (v66) the existing capital: virtual, provider-paid, backed, unbacked; books vs PayPal
  *   economy-capital-back <railId> <txnId> <eventCode>                        (v66) a PayPal deposit backs the existing capital (no second credit; any excess is owner funding)
  *   economy-spend-breaker <trip|reset> [reason…]                             trip (or reset) the spend circuit breaker: every new payment order and envelope spend is
@@ -270,7 +272,7 @@ export const HUB_COMMANDS = new Set([
   "economy-custody-activate", "economy-custody-deactivate", "economy-wallet-limits", "economy-card-charge", "economy-card-confirm", "economy-card-repay",
   "economy-card-receipt", "economy-card-resolve", "hub-paypal-disputes", "economy-paypal-dispute-resolve", "economy-card-credit-return", "economy-order-refund", "economy-refund-authority-grant", "economy-refund-authority-end", "economy-owner-claim-wait", "economy-owner-claim-wait-end", "economy-sales-geography", "economy-order-correction-withdrawn", "hub-refund-authorities", "hub-paypal-reconciliation", "economy-paypal-reconciliation-resolve", "economy-paypal-order-retire", "economy-offer-hold", "economy-offer-release", "economy-fleet-control-ai-budget", "founder-task", "founder-task-close", "hub-owner-tasks", "founder-reinstate", "founder-hold-end", "economy-fleet-control-ai-reconcile", "hub-fleet-control-ai", "hub-cognition-settlement", "economy-cognition-resolve", "economy-cognition-exception-allocate", "economy-engineering-calls-import", "economy-engineering-credit-hold", "economy-engineering-credit-release", "economy-paypal-debit-classify", "hub-card", "hub-treasury-health", "hub-paypal", "hub-treasury-tx", "economy-paypal-attribute",
   // v66 – v72 (missing until 2026-10-12: these were unreachable from fleet:admin)
-  "economy-capital-backing", "economy-capital-back", "economy-spend-breaker", "economy-ai-credits", "economy-ai-credit-purchase", "economy-ai-credit-policy",
+  "economy-treasury-watch", "economy-treasury-watch-policy", "economy-capital-backing", "economy-capital-back", "economy-spend-breaker", "economy-ai-credits", "economy-ai-credit-purchase", "economy-ai-credit-policy",
   "economy-ai-credit-confirm", "economy-ai-credit-reconcile", "economy-ai-credit-lot-cost", "economy-ai-credit-reject", "economy-ai-credit-promotional-grant", "economy-ai-credit-draw-order", "economy-ai-credit-opening",
   "economy-ai-credit-historical-preview", "economy-ai-credit-historical-cost", "economy-ai-credit-test-period-preview", "economy-ai-credit-test-period-writeoff",
   "economy-launch-boundary", "economy-launch-boundary-record", "economy-public-site", "economy-seller-set", "economy-seller", "economy-sales", "economy-ai-credit-reimbursed", "economy-owner-withdrawal", "economy-owner-withdrawal-assess", "economy-offer-proof", "hub-offers", "hub-enquiries", "hub-business", "economy-channel-payout-decide", "economy-channel-payout-bank", "economy-channel-payout-transfer", "economy-outward", "economy-channel-connect", "economy-channel-disconnect", "hub-channel-api",
@@ -612,6 +614,15 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
       return h.launchBoundaryRecord(p.join(" "), actor);
     case "economy-ai-credit-opening":
       return h.aiCreditOpening(actor);
+    case "economy-treasury-watch":
+      return h.treasuryWatch();
+    case "economy-treasury-watch-policy": {
+      const on = p[0] === "on";
+      if (!on && p[0] !== "off") throw new Error("usage: economy-treasury-watch-policy <on <railId>|off> [--codes a,b] [--max minor] [--material minor]");
+      const opt = (k: string) => { const i = p.indexOf(k); return i >= 0 ? p[i + 1] : undefined; };
+      const num = (k: string) => { const v = opt(k); if (v === undefined) return null; if (!/^[1-9]\d{0,9}$/.test(v)) throw new Error(`${k} takes a positive whole number of minor units`); return Number(v); };
+      return h.treasuryWatchPolicy(on, on ? p[1] : null, opt("--codes")?.split(",") ?? null, num("--max"), num("--material"), actor);
+    }
     case "economy-capital-backing":
       return h.capitalBacking();
     case "economy-spend-breaker":

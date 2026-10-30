@@ -111,7 +111,7 @@ export interface PayPalGatewayPort {
   paypalOrderWatchWork?(worker: string, limit: number): Promise<PayPalWatchItem[]>;
   paypalReconReport?(worker: string, providerOrderId: string, kind: "audit_mismatch" | "mapping_mismatch", ref: string, amountMinor: number | null, currency: string | null,
     detail: Record<string, unknown> | null): Promise<CxResult>;
-  paypalSyncRecord?(worker: string, railId: string, kind: "transaction_search" | "order_audit" | "token_scopes", ok: boolean, http: number | null, name: string | null,
+  paypalSyncRecord?(worker: string, railId: string, kind: "transaction_search" | "order_audit" | "token_scopes" | "balances" | "backfill", ok: boolean, http: number | null, name: string | null,
     debugId: string | null, detail: Record<string, unknown> | null): Promise<CxResult>;
 }
 
@@ -123,7 +123,7 @@ export interface PayPalTreasuryOptions {
   returnUrl?: string;
   cancelUrl?: string;
   reconcileEveryMs?: number;
-  balanceEveryMs?: number;
+  balanceEveryMs?: number; backfillEveryMs?: number;
   /** v59: the money-out gate for a live refund (REAL_PAYMENTS_ENABLED, as for payouts). */
   spendGate?: SpendGate;
   now?: () => number;
@@ -131,6 +131,11 @@ export interface PayPalTreasuryOptions {
 }
 
 const PAYPAL_ID = /^[A-Z0-9]{5,40}$/;
+/** How far behind the newest recorded row each Transaction Search pass reaches back. */
+const SEARCH_OVERLAP_MS = 72 * 3_600_000;
+/** No finite overlap guarantees completeness: one 31-day slice (PayPal's maximum range) a day, three slices, re-reads the last 93 days. */
+const BACKFILL_SLICE_MS = 31 * 86_400_000;
+const BACKFILL_SLICES = 3;
 /** v98: the access token scope that Transaction Search needs (PayPal grants it when the app has the Transaction search feature). */
 export const PAYPAL_SEARCH_SCOPE = "https://uri.paypal.com/services/reporting/search/read";
 type PayPalResponse = { status: number; json: any; debugId: string | null };
@@ -190,6 +195,9 @@ export class PayPalTreasuryWorker {
   private readonly tokens = new Map<string, { token: string; until: number; scope: string }>();
   private lastReconcile = new Map<string, number>();
   private lastBalance = new Map<string, number>();
+  private lastBackfill = new Map<string, number>();
+  /** The account the balance report names, per rail: tells a top-up's own account from another payer. Never stored whole. */
+  private accountIds = new Map<string, string>();
   private readonly now: () => number;
   readonly stats = { verified: 0, rejected: 0, opened: 0, captured: 0, refunds: 0, transactions: 0, statusFound: 0, errors: 0, lastError: null as string | null };
 
@@ -262,6 +270,7 @@ export class PayPalTreasuryWorker {
       for (const r of rails) {
         if (this.now() - (this.lastReconcile.get(r.railId) ?? 0) >= (this.opts.reconcileEveryMs ?? 15 * 60_000)) await this.reconcile(r);
         if (this.now() - (this.lastBalance.get(r.railId) ?? 0) >= (this.opts.balanceEveryMs ?? 60 * 60_000)) await this.balance(r);
+        if (this.now() - (this.lastBackfill.get(r.railId) ?? 0) >= (this.opts.backfillEveryMs ?? 86_400_000)) await this.backfill(r);
       }
       this.stats.lastError = null;
     } catch (err) {
@@ -715,25 +724,52 @@ export class PayPalTreasuryWorker {
 
   private async reconcile(r: PayPalRail): Promise<void> {
     const end = new Date(this.now());
-    const since = r.lastSyncAt ? Date.parse(r.lastSyncAt) - 3 * 3_600_000 : this.now() - 3 * 86_400_000;
+    // Search publishes late (measured on this rail, 10-20 Oct: 1 h 55 to 3 h 34) and a row recorded this pass moves lastSyncAt, so
+    // the overlap must comfortably exceed the lag or a late receipt falls behind the window for good. Re-recording a row is idempotent.
+    const since = r.lastSyncAt ? Date.parse(r.lastSyncAt) - SEARCH_OVERLAP_MS : this.now() - SEARCH_OVERLAP_MS;
     const start = new Date(Math.max(since, this.now() - 30 * 86_400_000));
+    if (await this.searchWindow(r, start, end, "transaction_search")) this.lastReconcile.set(r.railId, this.now());
+  }
+
+  /** One slice of the bounded re-read. What it cannot cover (older than the horizon, or more than 20 pages) is reported, not assumed. */
+  private async backfill(r: PayPalRail): Promise<void> {
+    const slice = Math.floor(this.now() / 86_400_000) % BACKFILL_SLICES;
+    const end = new Date(this.now() - slice * BACKFILL_SLICE_MS), start = new Date(end.getTime() - BACKFILL_SLICE_MS);
+    this.lastBackfill.set(r.railId, this.now());
+    await this.searchWindow(r, start, end, "backfill");
+  }
+
+  /** Every page of one date range. True when all of it was read. */
+  private async searchWindow(r: PayPalRail, start: Date, end: Date, kind: "transaction_search" | "backfill"): Promise<boolean> {
     let page = 1;
+    const c = { returned: 0, ingested: 0, dropped: 0, refused: 0 };
+    let first: PayPalResponse | null = null, truncated = false;
     for (;;) {
       const qs = new URLSearchParams({ start_date: start.toISOString().replace(/\.\d{3}Z$/, "Z"), end_date: end.toISOString().replace(/\.\d{3}Z$/, "Z"),
         // v71: payer_info too — a debit's counterparty (who the treasury paid) for AI-credit purchase detection.
         fields: "transaction_info,payer_info", page_size: "500", page: String(page) });
       const res = await this.call(r, "GET", `/v1/reporting/transactions?${qs}`).catch(() => null);
-      if (page === 1) await this.syncRecord(r, res);
-      if (!res || res.status !== 200) return; // retried at the next interval (the outcome is recorded above)
+      if (page === 1) { first = res; if (kind === "transaction_search") await this.syncRecord(r, res); }
+      if (!res || res.status !== 200) {
+        // A later page failing is a partial read, not a success: page 1's 200 must not stand as the outcome.
+        if (page > 1 || kind === "backfill") {
+          const e = res ? paypalErrorOf(res.json) : { name: null, issue: null };
+          await this.gw.paypalSyncRecord?.(this.worker, r.railId, kind, false, res?.status ?? null, e.issue ?? e.name, res?.debugId ?? null, { ...c, pagesRead: page - 1 }).catch(() => undefined);
+        }
+        return false; // retried at the next interval (the outcome is recorded)
+      }
       for (const d of Array.isArray(res.json?.transaction_details) ? res.json.transaction_details : []) {
         const t = d?.transaction_info ?? {};
         const amount = toMinor(t.transaction_amount?.value);
-        if (typeof t.transaction_id !== "string" || !PAYPAL_ID.test(t.transaction_id) || !/^T\d{4}$/.test(String(t.transaction_event_code)) || amount === null) continue;
+        c.returned++;
+        if (typeof t.transaction_id !== "string" || !PAYPAL_ID.test(t.transaction_id) || !/^T\d{4}$/.test(String(t.transaction_event_code)) || amount === null) { c.dropped++; continue; }
         const fee = toMinor(t.fee_amount?.value) ?? 0;
         const txn = { transactionId: t.transaction_id, eventCode: t.transaction_event_code, initiatedAt: t.transaction_initiation_date, status: t.transaction_status,
           amountMinor: amount, feeMinor: fee, currency: t.transaction_amount?.currency_code, invoiceId: t.invoice_id ?? null, customField: t.custom_field ?? null,
-          referenceId: typeof t.paypal_reference_id === "string" ? t.paypal_reference_id : null };
-        const rec = await this.gw.paypalTxnRecord(this.worker, r.railId, txn);
+          referenceId: typeof t.paypal_reference_id === "string" ? t.paypal_reference_id : null, evidence: this.rowEvidence(r, d) };
+        // One row the registry cannot take is counted and retried by the overlap; it must not cost the rows after it.
+        const rec = await this.gw.paypalTxnRecord(this.worker, r.railId, txn).catch((): CxResult => ({ ok: false, code: "FLEET_TXN_RECORD_FAILED" }));
+        if (rec.ok) c.ingested++; else c.refused++;
         this.stats.transactions++;
         // v71: for money leaving the treasury, what PayPal says about the other side (names, e-mail, subject, note).
         // Which of these fields names the payee of an outgoing payment is verified on the first live debit.
@@ -754,10 +790,28 @@ export class PayPalTreasuryWorker {
         }
       }
       const pages = Number(res.json?.total_pages ?? 1);
-      if (!(page < pages) || page >= 20) break;
+      if (!(page < pages) || page >= 20) { truncated = page < pages; break; }
       page++;
     }
-    this.lastReconcile.set(r.railId, this.now());
+    // HTTP 200 alone is not evidence: what PayPal covered, what it returned and what the Fleet took from it.
+    const top = (first as PayPalResponse | null)?.json ?? {};
+    const when = (v: unknown) => (typeof v === "string" && /^[0-9T:.Z+-]{10,40}$/.test(v) ? v : null);
+    await this.gw.paypalSyncRecord?.(this.worker, r.railId, kind, c.dropped + c.refused === 0 && !truncated, 200, null, (first as PayPalResponse | null)?.debugId ?? null, {
+      ...c, windowStart: start.toISOString(), windowEnd: end.toISOString(), lastRefreshedAt: when(top.last_refreshed_datetime),
+      totalItems: Number.isInteger(top.total_items) ? top.total_items : null, totalPages: Number.isInteger(top.total_pages) ? top.total_pages : null, pagesRead: page, truncated,
+      ...(kind === "backfill" ? { horizonDays: (BACKFILL_SLICE_MS * BACKFILL_SLICES) / 86_400_000 } : {}) }).catch(() => undefined);
+    return true;
+  }
+
+  /** What a row says about where it came from: facts for the registry's rule, never a name or address. Optional PayPal fields stay optional. */
+  private rowEvidence(r: PayPalRail, d: any): Record<string, unknown> {
+    const t = d?.transaction_info ?? {}, p = d?.payer_info ?? {};
+    const code = (v: unknown) => (typeof v === "string" && /^[A-Za-z0-9_ -]{1,40}$/.test(v) ? v : null);
+    const own = this.accountIds.get(r.railId) ?? null;
+    const payerAccount = typeof p.account_id === "string" ? p.account_id : null;
+    return { payerPresent: Boolean(payerAccount || p.email_address || p.payer_name), payerIsSelf: payerAccount && own ? payerAccount === own : null,
+      referenceId: typeof t.paypal_reference_id === "string" && PAYPAL_ID.test(t.paypal_reference_id) ? t.paypal_reference_id : null, referenceType: code(t.paypal_reference_id_type),
+      instrumentType: code(t.instrument_type), instrumentSubType: code(t.instrument_sub_type) };
   }
 
   /**
@@ -808,6 +862,12 @@ export class PayPalTreasuryWorker {
 
   private async balance(r: PayPalRail): Promise<void> {
     const res = await this.call(r, "GET", "/v1/reporting/balances").catch(() => null);
+    const ok = res?.status === 200;
+    const stamp = (v: unknown) => (typeof v === "string" && /^[0-9T:.Z+-]{10,40}$/.test(v) ? v : null);
+    const acct = ok && typeof res!.json?.account_id === "string" && /^[A-Z0-9]{5,40}$/.test(res!.json.account_id) ? res!.json.account_id as string : "";
+    if (acct) this.accountIds.set(r.railId, acct);
+    await this.gw.paypalSyncRecord?.(this.worker, r.railId, "balances", ok, res?.status ?? null, null, res?.debugId ?? null,
+      ok ? { asOf: stamp(res!.json?.as_of_time), refreshedAt: stamp(res!.json?.last_refresh_time), accountTail: acct.slice(-4) || null } : null).catch(() => undefined);
     if (!res || res.status !== 200) return;
     for (const b of Array.isArray(res.json?.balances) ? res.json.balances : []) {
       const avail = toMinor(b?.available_balance?.value);

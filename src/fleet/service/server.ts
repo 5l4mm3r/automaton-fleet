@@ -462,6 +462,7 @@ export class FleetService {
   /** v35: the economy-engine pass runs at most once a minute (its health window is measured in hours). */
   private lastEngineAt = 0;
   private lastRetentionAt = 0;
+  private lastTreasuryWatchAt = 0;
   private lastLifecycleAt = 0;
   private lastSweepDay = "";
 
@@ -543,6 +544,13 @@ export class FleetService {
             }
           } catch (err) {
             this.audit("engine_error", null, { error: err instanceof Error ? err.message : String(err) });
+          }
+        }
+        // v123: Treasury Watch, every five minutes (a failure is audited and never stops the reaper).
+        if (typeof this.opts.admin.treasuryWatchTick === "function" && Date.now() - this.lastTreasuryWatchAt >= 300_000) {
+          this.lastTreasuryWatchAt = Date.now();
+          try { await this.opts.admin.treasuryWatchTick(); } catch (err) {
+            this.audit("treasury_watch_error", null, { error: err instanceof Error ? err.message : String(err) });
           }
         }
         // v45: hourly retention of routine event copies and diagnostics (writes no event; a failure never stops the reaper).

@@ -370,7 +370,7 @@ describe("client against hostile or broken servers", () => {
       expect(await code(p as Promise<unknown>), label).toBe("UNSUPPORTED_REQUEST");
     }
     // Defence in depth: even an internal call with a target outside the B2 route policy is refused.
-    for (const t of ["/v1/operator/treasury", "/v1/operator/agents/01j9zq3v7x4k2m8n6p5r0s1t2w/approve", "/v1/state", "/v1/operator/status?x=1"]) {
+    for (const t of ["/v1/operator/treasury/x", "/v1/operator/agents/01j9zq3v7x4k2m8n6p5r0s1t2w/approve", "/v1/state", "/v1/operator/status?x=1"]) {
       expect(await code((c as any).call(t, (d: unknown) => d)), t).toBe("UNSUPPORTED_REQUEST");
     }
     expect(methods).toEqual([]);

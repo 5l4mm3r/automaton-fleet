@@ -72,6 +72,7 @@ export interface OperatorGateway {
   // ── D3
   beginAction(a: { principal: string; key: string; route: string; clientTsMs: number; nonce: string; bodySha256: string }): Promise<BeginResult>;
   lifecycleHealth(requestId: string): Promise<Record<string, unknown>>;
+  treasuryWatch(requestId: string): Promise<Record<string, unknown>>;
   runtimeStatus(requestId: string): Promise<Record<string, unknown>>;
   listReservations(requestId: string, after: string | null, limit: number): Promise<Page>;
   listOrphans(requestId: string, after: string | null, limit: number): Promise<Page>;
@@ -179,6 +180,10 @@ export class PgOperatorGateway implements OperatorGateway {
 
   async lifecycleHealth(requestId: string): Promise<Record<string, unknown>> {
     return this.ro(`SELECT ${this.s}.op_lifecycle_health($1) AS r`, [requestId]);
+  }
+
+  async treasuryWatch(requestId: string): Promise<Record<string, unknown>> {
+    return this.ro(`SELECT ${this.s}.op_treasury_watch($1) AS r`, [requestId]);
   }
 
   async runtimeStatus(requestId: string): Promise<Record<string, unknown>> {

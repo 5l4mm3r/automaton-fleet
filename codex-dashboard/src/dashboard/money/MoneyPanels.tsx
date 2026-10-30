@@ -216,6 +216,60 @@ function CardStatements({ card, call, name }: { card: Row; call: (op: string, ar
 }
 
 /**
+ * v123 (owner, 2026-10-30): why a balance reads what it reads. A payment reaches the figures only when PayPal reports it, so
+ * every read of provider money says how far the reporting reaches, whether it is healthy and what is still unmatched.
+ */
+const SYNC_STATE: Record<string, { text: string; bad: boolean }> = {
+  no_rail: { text: "No active PayPal rail: nothing can be reported.", bad: true },
+  never_read: { text: "PayPal's Transaction Search has not been read yet: receipts cannot be seen.", bad: true },
+  failing: { text: "PayPal's Transaction Search is failing: new receipts cannot be seen.", bad: true },
+  stale: { text: "No good PayPal read recently: new receipts cannot be seen.", bad: true },
+  rows_lost: { text: "PayPal returned rows the Fleet did not take in: a receipt may be missing.", bad: true },
+  reconciliation_open: { text: "PayPal items are waiting for reconciliation.", bad: true },
+  unmatched_receipts: { text: "PayPal reported money the Fleet has not matched or attributed: it is not in any balance yet.", bad: true },
+  provider_data_stale: { text: "The Fleet is reading PayPal, but PayPal's data is more than 6 hours old: recent money cannot be seen.", bad: true },
+  backfill_stale: { text: "The periodic re-read of older PayPal data has stopped or failed.", bad: true },
+  needs_review: { text: "Some treasury movements need a look: see their action below.", bad: true },
+  current: { text: "PayPal reporting is current. Money paid after the time below cannot be seen yet.", bad: false },
+};
+export function ProviderSync({ s }: { s: Row | null | undefined }) {
+  if (!s) return <p className="text-sm text-amber-300">Provider sync state is unavailable: treat provider figures as unexplained.</p>;
+  const st = SYNC_STATE[String(s.state)] ?? { text: `Unknown state: ${String(s.state)}`, bad: true };
+  const q = (s.search ?? {}) as Row, u = (s.unmatchedReceipts ?? { count: 0, items: [] }) as Row, r = (s.reconciliation ?? { open: 0, items: [] }) as Row, w = (s.webhooks ?? {}) as Row, b = (s.balances ?? {}) as Row, f = (s.backfill ?? {}) as Row;
+  return <div className="space-y-2 text-sm" data-testid="provider-sync">
+    <p className={st.bad ? "text-amber-300" : "text-emerald-300"}>{st.text}</p>
+    <dl className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4 text-xs">
+      <div><dt className="text-slate-400">Fleet last read PayPal</dt><dd>{q.lastOkAt ? `${when(q.lastOkAt)} UTC (${String(q.ageMinutes)} min ago)` : "never"}{q.lastHttp && q.lastHttp !== 200 ? ` · last attempt HTTP ${String(q.lastHttp)}${q.lastErrorName ? ` ${String(q.lastErrorName)}` : ""}` : ""}</dd></div>
+      <div><dt className="text-slate-400">PayPal data reaches</dt><dd>{q.reportedUpTo ? `${when(q.reportedUpTo)} UTC` : "not reported"}</dd></div>
+      <div><dt className="text-slate-400">Last read</dt><dd>{q.returned === undefined ? "no figures yet" : `${String(q.returned)} returned · ${String(q.ingested)} taken in · ${String(q.dropped)} dropped · ${String(q.refused)} refused${q.truncated ? " · cut off" : ""}`}</dd></div>
+      <div><dt className="text-slate-400">Last transaction taken in</dt><dd>{s.lastTransactionIngestedAt ? `${when(s.lastTransactionIngestedAt)} UTC` : "none yet"}</dd></div>
+      <div><dt className="text-slate-400">PayPal balance data as of</dt><dd>{b.refreshedAt ? `${when(b.refreshedAt)} UTC` : "not reported"}{b.lastHttp && b.lastHttp !== 200 ? ` · last attempt HTTP ${String(b.lastHttp)}` : ""}</dd></div>
+      <div><dt className="text-slate-400">Periodic re-read</dt><dd>{f.lastOkAt ? `${when(f.lastOkAt)} UTC · last ${String(f.horizonDays)} days, one slice a day; older data is not re-read` : "not run yet"}{f.lastHttp && f.lastHttp !== 200 ? ` · failed HTTP ${String(f.lastHttp)}` : ""}</dd></div>
+      <div><dt className="text-slate-400">PayPal webhooks received</dt><dd>{Number(w.receivedEver ?? 0) === 0 ? `none ever${w.delivering === false ? " despite payments on this rail: configured is not working; reading PayPal instead" : ""}` : `${String(w.receivedEver)}, last ${when(w.lastReceivedAt)} UTC`}{Number(w.rejected24h ?? 0) ? ` · ${String(w.rejected24h)} rejected in 24 h` : ""}</dd></div>
+    </dl>
+    {Number(u.count) > 0 && <div><p className="text-xs text-amber-300">Unmatched receipts: {String(u.count)}</p><ul className="text-xs">{(u.items as Row[]).map((t) => <li key={String(t.transactionId)} className="font-mono">{String(t.transactionId)} · {String(t.eventCode)} · {money(t.amountMinor)} · fee {money(t.feeMinor)} · {String(t.currency)} · status {String(t.status)} · {when(t.initiatedAt)} UTC</li>)}</ul></div>}
+    {Number(r.open) > 0 && <div><p className="text-xs text-amber-300">Open reconciliation items: {String(r.open)}</p><ul className="text-xs">{(r.items as Row[]).map((i, n) => <li key={n} className="font-mono">{String(i.kind)}{i.paypalRef ? ` · ${String(i.paypalRef)}` : ""}{i.amountMinor != null ? ` · ${money(i.amountMinor)}` : ""} · {when(i.createdAt)} UTC</li>)}</ul></div>}
+  </div>;
+}
+/** v123: every treasury movement PayPal has reported, with what the Fleet made of it. */
+const ACCOUNTING_TEXT: Record<string, string> = {
+  none_required: "nothing to book", linked: "part of a sale", pending: "pending at PayPal: not booked", awaiting_evidence: "waiting for PayPal's balance: not booked yet", booked: "booked automatically",
+  recorded: "recorded", needs_review: "needs a look: not booked", held: "held at PayPal: not booked", denied: "denied by PayPal", reversed: "reversed", reversal_shortfall: "reversed: shortfall open", reversal_review: "reversal needs a look",
+};
+export function TreasuryMovements({ movements }: { movements: Row[] | undefined }) {
+  if (!movements?.length) return <p className="text-sm text-slate-400">No treasury movements reported by PayPal yet.</p>;
+  return <div className="overflow-x-auto" data-testid="treasury-movements"><table className="w-full text-left text-xs"><thead><tr className="text-slate-400"><th>When (UTC)</th><th>Money</th><th>PayPal type</th><th>PayPal status</th><th>Accounting</th><th>Action</th></tr></thead>
+    <tbody>{movements.map((m) => <tr key={String(m.movementId)} className="border-t border-slate-800 align-top"><td>{when(m.initiatedAt)}</td><td className="font-mono">{m.direction === "out" ? "−" : ""}{money(Math.abs(Number(m.amountMinor)))}{Number(m.feeMinor) ? ` · fee ${money(Math.abs(Number(m.feeMinor)))}` : ""}</td>
+      <td><span className="font-mono">{String(m.eventCode)}</span> {String(m.classification).replaceAll("_", " ")}<br /><span className="font-mono text-slate-500">{String(m.transactionId)}</span></td><td>{String(m.providerStatus)}</td>
+      <td>{ACCOUNTING_TEXT[String(m.accountingStatus)] ?? String(m.accountingStatus)}{m.rule ? <><br /><span className="text-slate-500">{String(m.rule)}</span></> : null}</td><td className={m.action ? "text-amber-300" : ""}>{m.action ? String(m.action) : "—"}</td></tr>)}</tbody></table></div>;
+}
+/** The same facts on Fleet Command's overview (one read of the treasury position). */
+export function ProviderSyncPanel({ client }: { client: GatewayClient }) {
+  const position = useRead<Row>(client, "treasury_position", {}, []);
+  return <Panel title="Treasury Watch">{position.data ? <div className="space-y-3"><ProviderSync s={position.data.providerSync as Row | undefined} /><TreasuryMovements movements={position.data.movements as Row[] | undefined} /></div> : <p className="text-sm text-slate-400">{position.error || "Reading…"}</p>}</Panel>;
+}
+
+/**
  * v121 (owner, 2026-10-26: "the treasury shows 10.79gbp when the paypal has 0.22p only"): provider cash first, then what
  * the books say about it. Nothing here is summed with anything else; API credit is USD and never added to a GBP figure.
  */
@@ -227,8 +281,11 @@ export function TreasuryPosition({ p, error, name }: { p: Row | null; error: str
     : rc.status === "unresolved" ? <span className="text-amber-300">unresolved — nothing below is spendable until it is</span> : <span className="text-amber-300">unavailable (no provider balance)</span>;
   const tile = (k: string, v: ReactNode, hint?: ReactNode) => <div key={k} className="rounded border border-slate-700 p-3"><p className="text-xs text-slate-400">{k}</p><p className="font-mono">{v}</p>{hint && <p className="mt-1 text-xs text-slate-400">{hint}</p>}</div>;
   return <div className="space-y-4 text-sm">
+    <ProviderSync s={p.providerSync as Row | undefined} />
+    <TreasuryMovements movements={p.movements as Row[] | undefined} />
     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-      {tile("PayPal cash (actual)", pp ? money(pp.totalMinor) : "—", pp ? `observed ${when(pp.observedAt)} UTC${pp.fresh ? "" : " · stale"}` : "no balance observed")}
+      {tile("PayPal cash (actual)", pp ? money(pp.totalMinor) : "—", pp ? `observed ${when(pp.observedAt)} UTC${pp.fresh ? "" : " · stale"}${Number(p.restrictedMinor) ? ` · restricted by PayPal: ${money(p.restrictedMinor)}` : ""}` : "no balance observed")}
+      {tile("Reported, not in any balance", money(p.pendingIncomingMinor ?? 0), "pending, waiting for evidence, or needing a look")}
       {tile("Available treasury (backed)", t.availableMinor == null ? "unknown" : money(t.availableMinor), "unallocated money that real cash covers")}
       {tile("Owed to you (owner payable)", money(ow.payableMinor), `set aside in the books to repay it: ${money(ow.setAsideMinor)}`)}
       {tile("API credit (USD, not cash)", usd(ai.free), `promotional ${usd(ai.promotional)} · purchased ${usd(ai.purchased)}${Number(ai.held) ? ` · held ${usd(ai.held)}` : ""}`)}

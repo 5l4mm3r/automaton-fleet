@@ -21,10 +21,12 @@ type Tab = (typeof TABS)[number];
 const val = (v: unknown) => (v === null || v === undefined ? "" : String(v));
 const pct = (bp: unknown) => (typeof bp === "number" ? String(bp / 100) : "");
 
-export function FleetCommandPage({ fleet, view, models, feed, live, control, openAgent, go, clear }: {
+export function FleetCommandPage({ fleet, view, models, feed, live, control, openAgent, go, clear, providerSync }: {
   fleet: Fleet; view: CommandView | null; models: AgentModel[]; feed: FeedState; live: boolean; control: Control; openAgent: (id: string) => void; go: (page: string) => void;
   /** Clear one priority from the Fleet Command display (LIVE; display housekeeping, no step-up). */
   clear?: (p: EventPriority) => Promise<void>;
+  /** LIVE: PayPal reporting freshness, failures, unmatched receipts and open reconciliation. */
+  providerSync?: ReactNode;
 }) {
   const [tab, setTab] = useState<Tab>("Overview");
   const s = view?.settings ?? null, rp = fleet.live?.replication;
@@ -38,6 +40,7 @@ export function FleetCommandPage({ fleet, view, models, feed, live, control, ope
 
     {tab === "Overview" && <>
       <Panel title="Controller status"><FleetControllerStatus fleet={fleet} view={view} models={models} /></Panel>
+      {providerSync}
       <div className="grid gap-5 xl:grid-cols-2">
         <Panel title="Latest decisions">{pending ?? <DecisionFeed view={view} models={models} onOpenAgent={openAgent} compact />}<button className={`${button} mt-3`} onClick={() => setTab("Decision Log")}>Open the decision log</button></Panel>
         <Panel title="Information received">{pending ?? <CommandFeed events={view!.commandEvents} models={models} onOpenAgent={openAgent} limit={8} onClear={clear} />}<button className={`${button} mt-3`} onClick={() => setTab("Information Feed")}>Open the feed</button></Panel>

@@ -22,6 +22,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import pg from "pg";
+import { FLEET_PG_SCHEMA_VERSION } from "../../fleet/postgres/migrations.js";
 import { findPgBin } from "./fixtures/ephemeral-pg.js";
 import { startEconomyRegistry, autoCapabilityChecks, OWNER, type EconomyRegistry, type Founder } from "./fixtures/economy-registry.js";
 import { liveRail } from "./fixtures/custody-signer.js";
@@ -137,7 +138,7 @@ async function stage1Closed(tag: string): Promise<Rig> {
   const idsAt = (since: string) => `A1=${F.id}; A2=${G.id}; C=${release}
 OFFER=${offerId}; SLUG=${slug}
 REVIEW=${rv2.reviewId}; DIGEST=${digest}
-RAIL=${rail.railId}; SINCE=${since}; SCHEMA=122
+RAIL=${rail.railId}; SINCE=${since}; SCHEMA=${FLEET_PG_SCHEMA_VERSION}
 AGENTS="${agents}"; POLICY="true anthropic claude-opus-5-5 4000 400 2000 20 500 754 20"
 `;
   const dbUrl = R.pgc.superUrl.replace(/\/postgres$/, `/${R.pgc.dbname}`);
@@ -498,6 +499,39 @@ describe.skipIf(!PG_BIN || !fs.existsSync(CLI))("Stage 2 package rehearsed on Po
       expect(r.code, r.out).toBe(0);
     });
 
+  });
+
+  describe("an Add money top-up on the treasury account itself", () => {
+    let x: Rig;
+    beforeAll(async () => { x = await stage1Closed("topup"); }, 300_000);
+    afterAll(async () => { await x?.close(); });
+    const backing = async () => (await x.db(`SELECT fleet.fleet_capital_backing() AS r`))[0].r as any;
+    const counts = async () => (await x.db(`SELECT (SELECT count(*) FROM fleet.fleet_card_charges) AS charges, (SELECT count(*) FROM fleet.fleet_card_requests) AS requests, (SELECT count(*) FROM fleet.fleet_location_transfers) AS transfers`))[0];
+
+    it("books once as owner funding under its own code, keeps the books reconciled and touches no card or transfer record", async () => {
+      const paypal0 = 22;
+      await x.cx("cx_paypal_balance_record", ["custody-executor", x.railId, "GBP", paypal0, paypal0]);
+      const u0 = await x.unalloc(), c0 = await counts(), b0 = await backing();
+      const d0 = Number(b0.differenceMinor);
+      const id = txnId();
+      await receipt(x, { transactionId: id, eventCode: "T0300", amountMinor: 250, feeMinor: 0 });
+      // PayPal's balance moves first: the difference shows money not yet recorded, nothing is booked by itself.
+      await x.cx("cx_paypal_balance_record", ["custody-executor", x.railId, "GBP", paypal0 + 250, paypal0 + 250]);
+      expect((await backing()).differenceMinor).toBe(d0 + 250);
+      expect(await x.unalloc()).toBe(u0);
+      let r = x.run(["fund", id]);
+      expect(r.code, r.out).toBe(0);
+      expect(r.out).toContain("250p net recorded once as owner funding");
+      expect(await x.unalloc()).toBe(u0 + 250);
+      expect((await backing()).differenceMinor).toBe(d0);
+      const [row] = await x.db(`SELECT event_code, attributed_as, attributed_ref FROM fleet.fleet_paypal_transactions WHERE transaction_id = $1`, [id]);
+      expect(row).toEqual({ event_code: "T0300", attributed_as: "owner_funding", attributed_ref: `paypal:${x.railId.slice(0, 8)}:${id}` });
+      expect(await counts()).toEqual(c0);
+      r = x.run(["fund", id]);
+      expect(r.code).toBe(1);
+      expect(r.out).toContain("already recorded or attributed");
+      expect(await x.unalloc()).toBe(u0 + 250);
+    }, 120_000);
   });
 
   describe("an unpaid proof order stays monitored", () => {

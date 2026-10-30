@@ -143,6 +143,14 @@ export const TOOLS: readonly ToolDef[] = Object.freeze([
     run: (c) => c.lifecycleHealth(),
   },
   {
+    name: "fleet_treasury_watch",
+    operation: "treasury_watch",
+    description:
+      "Read-only. Treasury Watch: PayPal sync freshness (last successful request, how far PayPal's data reaches, last transaction ingested, dropped or refused rows), recent treasury movements with type, status and accounting status, and the reconciled position. Facts only; no PayPal credential is involved in this read. A movement PayPal has not reported yet cannot appear here.",
+    inputSchema: noArgs,
+    run: (c) => c.treasuryWatch(),
+  },
+  {
     name: "fleet_runtime_verification",
     operation: "runtime_verification",
     description:

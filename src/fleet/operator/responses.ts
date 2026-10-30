@@ -160,7 +160,7 @@ const OP_REASON = {
 const OP_ROUTE = {
   enum: [
     "GET /v1/operator/whoami", "GET /v1/operator/status", "GET /v1/operator/agents", "GET /v1/operator/agents/{agent_id}", "GET /v1/operator/events",
-    "GET /v1/operator/lifecycle", "GET /v1/operator/runtime", "GET /v1/operator/reservations", "GET /v1/operator/orphans",
+    "GET /v1/operator/lifecycle", "GET /v1/operator/treasury", "GET /v1/operator/runtime", "GET /v1/operator/reservations", "GET /v1/operator/orphans",
     "GET /v1/operator/proposals", "GET /v1/operator/actions", "POST /v1/operator/actions/hold-agent",
     "POST /v1/operator/actions/release-agent-hold", "POST /v1/operator/actions/request-health-challenge",
     "POST /v1/operator/actions/revoke-agent-sessions", "POST /v1/operator/actions/reconcile-lifecycle", "POST /v1/operator/proposals", "unknown",
@@ -310,6 +310,37 @@ function agentState(v: unknown): Record<string, unknown> | null {
     held: bool(s.held) ?? false,
     holdBy: s.holdBy === null || s.holdBy === undefined ? null : enumOf(s.holdBy, HELD_BY),
   };
+}
+
+/** v123: the fields of a treasury movement an operator may read: never a name, an address or a full account id. */
+export const TREASURY_MOVEMENT_FIELDS = ["movementId", "transactionId", "eventCode", "direction", "amountMinor", "feeMinor", "currency", "providerStatus", "classification", "accountingStatus",
+  "rule", "action", "journalId", "returnJournalId", "shortfallMinor", "initiatedAt", "firstSeenAt", "updatedAt"] as const;
+const pickKeys = (o: unknown, keys: readonly string[]): Record<string, unknown> => {
+  const out: Record<string, unknown> = {};
+  for (const k of keys) { const v = (o as Record<string, unknown> | null | undefined)?.[k]; if (v !== undefined) out[k] = v; }
+  return out;
+};
+export const TREASURY_BODY_SHAPE = {
+  paypal: ["currency", "availableMinor", "totalMinor", "observedAt", "ageHours", "fresh"],
+  reconciliation: ["status", "differenceMinor", "booksCashMinor", "unbackedCapitalMinor", "backedCapitalMinor"],
+  treasury: ["unallocatedMinor", "fleetControlReservedMinor", "ownerSetAsideMinor", "otherPartitionsMinor", "availableMinor"],
+  owner: ["payableMinor", "setAsideMinor"],
+  apiCredit: ["currency", "balance", "held", "free", "promotional", "purchased", "promotionalExpiresAt"],
+  autoBook: ["enabled", "codes", "maxMinor", "materialOutMinor"],
+  sync: ["state", "mode", "accountRef", "lastTransactionIngestedAt", "needsReview"],
+} as const;
+export function treasuryBody(db: Record<string, unknown>): Record<string, unknown> {
+  const s = (db.providerSync ?? {}) as Record<string, unknown>;
+  const u = (s.unmatchedReceipts ?? {}) as Record<string, unknown>, r = (s.reconciliation ?? {}) as Record<string, unknown>;
+  return redactDetail({
+    currency: db.currency, restrictedMinor: db.restrictedMinor ?? null, pendingIncomingMinor: db.pendingIncomingMinor ?? null,
+    paypal: db.paypal ? pickKeys(db.paypal, TREASURY_BODY_SHAPE.paypal) : null, reconciliation: pickKeys(db.reconciliation, TREASURY_BODY_SHAPE.reconciliation),
+    treasury: pickKeys(db.treasury, TREASURY_BODY_SHAPE.treasury), owner: pickKeys(db.owner, TREASURY_BODY_SHAPE.owner), apiCredit: pickKeys(db.apiCredit, TREASURY_BODY_SHAPE.apiCredit),
+    autoBook: pickKeys(db.autoBook, TREASURY_BODY_SHAPE.autoBook),
+    sync: { ...pickKeys(s, TREASURY_BODY_SHAPE.sync), search: s.search ?? {}, balances: s.balances ?? {}, backfill: s.backfill ?? {}, watch: s.watch ?? {}, webhooks: s.webhooks ?? {},
+      unmatchedCount: u.count ?? 0, unmatchedOutgoingCount: u.outgoingCount ?? 0, openReconciliation: r.open ?? 0 },
+    movements: (Array.isArray(db.movements) ? db.movements : []).map((m) => pickKeys(m, TREASURY_MOVEMENT_FIELDS)),
+  });
 }
 
 export function lifecycleBody(db: Record<string, unknown>): Record<string, unknown> {

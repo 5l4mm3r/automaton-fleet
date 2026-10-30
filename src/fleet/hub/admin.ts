@@ -268,6 +268,11 @@ export class PgHubAdmin {
   }
   // v66: a real PayPal deposit backs the existing (virtual) capital instead of crediting it twice; and the reconciliation.
   capitalBacking() { return this.one(`SELECT fleet_capital_backing() AS r`); }
+  /** v123: the position with its provider sync and movements; and the owner's switch for auto-booking top-ups (off by default). */
+  treasuryWatch() { return this.one(`SELECT fleet_treasury_position() AS r`); }
+  treasuryWatchPolicy(enabled: boolean, railId: string | null, codes: string[] | null, maxMinor: number | null, materialMinor: number | null, actor: string) {
+    return this.one(`SELECT fleet_admin_treasury_watch_policy_set($1, $2, $3, $4, $5, $6) AS r`, [enabled, railId, codes, maxMinor, materialMinor, actor]);
+  }
   // v69: bring in the AI costs charged before v69 as owed to the owner (once; owner action after the cutover).
   // v70: AI credit by funding source; a treasury-funded purchase evidenced by the treasury PayPal debit.
   aiCredits() { return this.one(`SELECT fleet_ai_credit_status() AS r`); }
