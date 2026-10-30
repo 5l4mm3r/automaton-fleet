@@ -1635,7 +1635,7 @@ export const CUSTODY_WRITES: Readonly<Record<string, { writes: readonly string[]
   // v96: binds each refund it hands out to the refund authority that covers it (under that authority's lock).
   cx_paypal_refund_work: { writes: ["fleet_paypal_refund_requests"], calls: ["fleet_treasury_liquidity_wait", "fleet_treasury_lock", "fleet_refund_authority_cover", "fleet_refund_authority_wait"] },
   cx_paypal_refund_result: { writes: ["fleet_paypal_refund_requests"], calls: ["fleet_event", "cx_paypal_clawback_evidence"] },
-  cx_paypal_refund_unresolved: { writes: ["fleet_paypal_refund_requests"], calls: ["fleet_event"] },
+  cx_paypal_refund_unresolved: { writes: ["fleet_paypal_refund_requests"], calls: ["fleet_event", "fleet_notify"] },
   cx_paypal_dispute_record: { writes: ["fleet_paypal_disputes"], calls: ["fleet_event"] },
   // v76: reading an open checkout's PayPal status (backed off), failing a voided one.
   cx_paypal_status_work: { writes: [], calls: [] },
@@ -1745,6 +1745,8 @@ export const CHANNELS_API_FUNCTIONS: readonly string[] = Object.freeze([
   "chx_job_report(uuid, text, boolean, jsonb, text, text, text)",
   "chx_sale_record(text, uuid, jsonb)",
   "chx_payout_record(text, uuid, jsonb)",
+  "chx_record_failure(text, uuid, text, text, jsonb, text, text)",
+  "chx_record_failures_due(text, uuid, integer)",
   "chx_cursor(text, uuid, text)",
   "chx_cursor_set(text, uuid, text, text)",
   "chx_indexnow_due(text, integer)",

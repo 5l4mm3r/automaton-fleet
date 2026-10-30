@@ -48,21 +48,11 @@ const PG_BIN = findPgBin();
 const sha = (s: string) => crypto.createHash("sha256").update(s).digest("hex");
 
 describe("the routing table", () => {
-  it("names each event type once, and routes every event type the code emits explicitly", () => {
+  it("names each event type once", () => {
     const all = [...Object.values(EVENT_ROUTES_V124).flat(), ...Object.values(EVENT_ROUTES_V123).flat(), ...Object.values(EVENT_ROUTES).flat(), ...Object.values(EVENT_ROUTES_V46).flat(), ...Object.values(EVENT_ROUTES_V47).flat(),
       ...Object.values(EVENT_ROUTES_V48).flat(), ...Object.values(EVENT_ROUTES_V49).flat(), ...Object.values(EVENT_ROUTES_V50).flat(),
       ...Object.values(EVENT_ROUTES_V51).flat(), ...Object.values(EVENT_ROUTES_V52).flat(), ...Object.values(EVENT_ROUTES_V53).flat(), ...Object.values(EVENT_ROUTES_V54).flat(), ...Object.values(EVENT_ROUTES_V55).flat(), ...Object.values(EVENT_ROUTES_V56).flat(), ...Object.values(EVENT_ROUTES_V57).flat(), ...Object.values(EVENT_ROUTES_V58).flat(), ...Object.values(EVENT_ROUTES_V59).flat(), ...Object.values(EVENT_ROUTES_V60).flat(), ...Object.values(EVENT_ROUTES_V62).flat(), ...Object.values(EVENT_ROUTES_V63).flat(), ...Object.values(EVENT_ROUTES_V64).flat(), ...Object.values(EVENT_ROUTES_V65).flat(), ...Object.values(EVENT_ROUTES_V66).flat(), ...Object.values(EVENT_ROUTES_V68).flat(), ...Object.values(EVENT_ROUTES_V69).flat(), ...Object.values(EVENT_ROUTES_V70).flat(), ...Object.values(EVENT_ROUTES_V71).flat(), ...Object.values(EVENT_ROUTES_V72).flat(), ...Object.values(EVENT_ROUTES_V73).flat(), ...Object.values(EVENT_ROUTES_V74).flat()];
     expect(all.length).toBe(new Set(all).size);
-    const dir = path.join(process.cwd(), "src", "fleet");
-    const emitted = new Set<string>();
-    const walk = (d: string) => { for (const f of fs.readdirSync(d, { withFileTypes: true })) {
-      if (f.isDirectory()) walk(path.join(d, f.name));
-      else if (/\.ts$/.test(f.name)) for (const m of fs.readFileSync(path.join(d, f.name), "utf8").matchAll(/fleet_event\('([a-z_]+)'/g)) emitted.add(m[1]);
-    } };
-    walk(dir);
-    const routed = (t: string) => all.includes(t) || t === "notification" || EVENT_PREFIX_ROUTES.some(([p]) => t.startsWith(p));
-    const unrouted = [...emitted].filter((t) => !routed(t) && !t.endsWith("_")); // "payment_order_" etc. are prefixes built at runtime
-    expect(unrouted).toEqual([]);
     for (const t of ["notifications_deleted", "session_opened", "ledger_journal_posted", "api_auth_failed"]) expect(EVENT_ROUTES.AUDIT_ONLY).toContain(t);
   });
 });
@@ -89,6 +79,31 @@ describe.skipIf(!PG_BIN)("Fleet Command routing in PostgreSQL (through dash_call
       [sha(session), sha("csrf")]);
   }, 240_000);
   afterAll(async () => { await R?.close(); });
+
+  it("every event type the code emits is routed by name or family in the migrated database: the default hides nothing", async () => {
+    const emitted = new Set<string>();
+    const walk = (d: string) => { for (const f of fs.readdirSync(d, { withFileTypes: true })) {
+      if (f.isDirectory()) walk(path.join(d, f.name));
+      else if (/\.ts$/.test(f.name)) for (const m of fs.readFileSync(path.join(d, f.name), "utf8").matchAll(/fleet_event\('([a-z_]+)'/g)) emitted.add(m[1]);
+    } };
+    walk(path.join(process.cwd(), "src", "fleet"));
+    const src = await R.one<string>(`(SELECT pg_get_functiondef('fleet.fleet_event_route(text,jsonb)'::regprocedure))`);
+    const prefixes = [...src.matchAll(/starts_with\(p_type, '([a-z_]+)'\)/g)].map((m) => m[1]);
+    const unnamed = [...emitted].filter((t) => !t.endsWith("_") && !src.includes(`'${t}'`) && !prefixes.some((p) => t.startsWith(p)) && t !== "notification");
+    expect(unnamed).toEqual([]);
+  });
+
+  it("the three critical unknown-outcome events reach the top of Fleet Command", async () => {
+    for (const t of ["paypal_refund_unresolved", "operation_uncertain", "message_check_stalled"]) expect(await route(t), t).toBe("P1_HIGH");
+    for (const t of ["card_dispute_opened", "channel_payout_rejected", "browser_credential_pending"]) expect(await route(t), t).toBe("P2_IMPORTANT");
+    for (const t of ["channel_added", "operation_resolved", "money_location_added"]) expect(await route(t), t).toBe("AUDIT_ONLY");
+  });
+
+  it("an outside action with an unknown outcome alerts the owner whatever kind it is, once", async () => {
+    const ref = crypto.randomUUID();
+    for (let i = 0; i < 2; i++) await R.q(`SELECT fleet.fleet_op_lost('channel.api', $1::uuid, $2, 'a listing')`, [ref, A]);
+    expect(await R.q(`SELECT 1 FROM fleet.fleet_notifications WHERE code = 'OPERATION_UNCERTAIN' AND detail ->> 'refId' = $1`, [ref])).toHaveLength(1);
+  });
 
   it("notification delete / delete all acknowledged / acknowledge: the rows are gone; no event; no Fleet Command entry; sign-in state untouched", async () => {
     await R.q(`SELECT fleet.fleet_notify('AMBER', 'HIGH_EXPOSURE_SPEND', NULL, 'route test', '{}'::jsonb, 'route:1')`);

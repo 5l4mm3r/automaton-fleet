@@ -30,7 +30,7 @@ export class ChannelWorker {
   private readonly polledAt = new Map<string, number>();
   private readonly indexNow: IndexNowPinger;
 
-  constructor(private readonly gw: ChannelGatewayPort, private readonly store: TokenStore, private readonly http: ChannelHttp, private readonly o: ChannelWorkerOptions = {}) {
+  constructor(private readonly gw: ChannelGatewayPort, private readonly store_: TokenStore, private readonly http: ChannelHttp, private readonly o: ChannelWorkerOptions = {}) {
     this.worker = o.worker ?? "channel-gateway";
     if (!/^[a-z0-9-]{3,40}$/.test(this.worker)) throw new Error("worker name must match ^[a-z0-9-]{3,40}$");
     this.indexNow = new IndexNowPinger({ due: (n) => this.gw.indexNowDue(this.worker, n), done: (o, st) => this.gw.indexNowDone(this.worker, o, st) },
@@ -45,7 +45,7 @@ export class ChannelWorker {
     let scopes: string[] = [];
     let error: string | null = null;
     try {
-      const t = await freshToken(this.http, this.store, c.vaultRef, this.now());
+      const t = await freshToken(this.http, this.store_, c.vaultRef, this.now());
       if (c.provider === "etsy") {
         const e = new EtsyClient(this.http, t);
         const w = await e.whoami();
@@ -72,7 +72,7 @@ export class ChannelWorker {
     const c = conns.find((x) => x.connectionId === job.connectionId);
     if (!c || c.status !== "active") { await this.gw.report(job.jobId, lease, false, null, null, null, "FLEET_CHANNEL_API_NOT_CONNECTED"); return; }
     try {
-      const t = await freshToken(this.http, this.store, c.vaultRef, this.now());
+      const t = await freshToken(this.http, this.store_, c.vaultRef, this.now());
       const p = job.payload;
       const blob = job.hasBlob ? await this.gw.blob(job.jobId, lease) : null;
       if (job.provider === "etsy") {
@@ -130,17 +130,54 @@ export class ChannelWorker {
     }
   }
 
+  /**
+   * One record, on its own: a record the database refuses (or throws on) is kept with its reason and retried by itself, so one bad record neither
+   * stops the later ones nor is lost when the cursor moves on. Only a failure to keep it (the database itself is away) stops the pass, and the cursor with it.
+   */
+  private async storeRecord(c: ChannelConnection, kind: "sale" | "payout", raw: Record<string, unknown>): Promise<void> {
+    // PostgreSQL cannot hold NUL or a lone surrogate in text or JSON; provider and buyer text can contain them.
+    const record = JSON.parse(JSON.stringify(raw), (_k, v) => (typeof v === "string" ? v.replace(/\0/g, "").replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "\uFFFD") : v)) as Record<string, unknown>;
+    const ref = typeof record.ref === "string" && /^[A-Za-z0-9:_-]{1,120}$/.test(record.ref) ? record.ref : `sha:${crypto.createHash("sha256").update(JSON.stringify(record), "utf8").digest("hex").slice(0, 40)}`;
+    let code: string, reason: string;
+    try {
+      const r = await (kind === "sale" ? this.gw.saleRecord(this.worker, c.connectionId, record) : this.gw.payoutRecord(this.worker, c.connectionId, record));
+      if (r.ok) return;
+      code = String(r.code ?? "FLEET_REJECTED"); reason = String(r.reason ?? r.code ?? "refused");
+    } catch (err) {
+      // The database being away, or a transient conflict, is not this record's fault: stop the pass, keep the cursor, read it all again.
+      const sqlState = String((err as { code?: unknown }).code ?? "");
+      reason = (err instanceof Error ? err.message : String(err)).slice(0, 300);
+      if (/^(08|53|57P|40)/.test(sqlState) || /^E[A-Z]+$/.test(sqlState) || /Connection terminated|timeout exceeded when trying to connect/i.test(reason)) throw err;
+      code = /FLEET_[A-Z_]+/.exec(reason)?.[0] ?? (sqlState ? `SQL_${sqlState}` : "FLEET_RECORD_ERROR");
+    }
+    this.log("warn", "channel_record_rejected", { connectionId: c.connectionId, kind, record: ref, code });
+    try {
+      await this.gw.recordFailure(this.worker, c.connectionId, kind, ref, record, code, reason);
+    } catch (err) {
+      // A payload the table cannot hold must not hide the failure or stop the later records.
+      const sqlState = String((err as { code?: unknown }).code ?? "");
+      if (/^(08|53|57P|40)/.test(sqlState) || /^E[A-Z]+$/.test(sqlState)) throw err;
+      await this.gw.recordFailure(this.worker, c.connectionId, kind, ref, { ref, unstorable: true }, code, reason);
+    }
+  }
+
   /** Etsy: receipts become sale memos; payout ledger entries become payout claims (bank route; the owner's evidence chain). */
   async poll(c: ChannelConnection): Promise<void> {
     if (c.provider !== "etsy" || c.status !== "active") return;
-    const t = await freshToken(this.http, this.store, c.vaultRef, this.now());
+    for (const f of await this.gw.recordFailuresDue(this.worker, c.connectionId, 50)) await this.storeRecord(c, f.kind, f.payload);
+    const t = await freshToken(this.http, this.store_, c.vaultRef, this.now());
     const e = new EtsyClient(this.http, t);
     const nowS = Math.floor(this.now() / 1000);
     for (const kind of ["receipts", "ledger"] as const) {
-      const since = Number(await this.gw.cursor(this.worker, c.connectionId, kind)) || nowS - 30 * 86_400;
-      if (kind === "receipts") for (const s of await e.receipts(String(c.shopId), since - 2 * 86_400)) await this.gw.saleRecord(this.worker, c.connectionId, s);
-      else for (const p of await e.payouts(String(c.shopId), since - 2 * 86_400, nowS)) await this.gw.payoutRecord(this.worker, c.connectionId, p);
-      await this.gw.cursorSet(this.worker, c.connectionId, kind, String(nowS));
+      // A failed read of one kind leaves its cursor where it was and does not stop the other.
+      try {
+        const since = Number(await this.gw.cursor(this.worker, c.connectionId, kind)) || nowS - 30 * 86_400;
+        if (kind === "receipts") for (const s of await e.receipts(String(c.shopId), since - 2 * 86_400)) await this.storeRecord(c, "sale", s);
+        else for (const p of await e.payouts(String(c.shopId), since - 2 * 86_400, nowS)) await this.storeRecord(c, "payout", p);
+        await this.gw.cursorSet(this.worker, c.connectionId, kind, String(nowS));
+      } catch (err) {
+        this.log("warn", "channel_poll_failed", { connectionId: c.connectionId, kind, code: codeOf(err) });
+      }
     }
   }
 

@@ -372,6 +372,7 @@ describe.skipIf(!PG_BIN)("v95 durable operations: the same intended operation is
     expect(tries).toHaveLength(2);
     expect(new Set(tries.map((c) => c.requestId)).size).toBe(1);
     expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_events WHERE event_type = 'paypal_refund_unresolved')`))).toBe(1);
+    expect(await R.q(`SELECT 1 FROM fleet.fleet_notifications WHERE code = 'PAYPAL_REFUND_UNRESOLVED' AND detail ->> 'refundRequestId' = $1`, [r.refund.refundRequestId])).toHaveLength(1); // v124: the owner hears it
     pp.set("ok");
   });
 

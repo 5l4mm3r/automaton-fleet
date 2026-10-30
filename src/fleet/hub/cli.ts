@@ -213,6 +213,9 @@
  *   economy-channel-payout-decide <payoutId> book <paypalTxnId> | reject [note…]
  *                                                                           (v79) a payout paid INTO the treasury PayPal: book it against its credit
  *                                                                           (when the automatic match was ambiguous), or reject the claim
+ *   economy-external-orders                                                 (read: outside orders and records the gateway could not store)
+ *   economy-external-order-confirm <orderId> delivered|cancelled <what the platform shows…>
+ *   economy-external-order-confirm <orderId> refunded <totalMinor> <what the platform shows…>   (records your check; moves no money)
  *   economy-channel-payout-bank <payoutId> <bankRef> <YYYY-MM-DD> <amountMinor>
  *                                                                           (v79) a payout paid to your bank: its bank statement line (one per payout)
  *   economy-channel-payout-transfer <paypalTxnId> <payoutId> [payoutId…]  (v79) the PayPal credit that moved those bank payouts into the treasury
@@ -275,7 +278,7 @@ export const HUB_COMMANDS = new Set([
   "economy-treasury-watch", "economy-treasury-watch-policy", "economy-capital-backing", "economy-capital-back", "economy-spend-breaker", "economy-ai-credits", "economy-ai-credit-purchase", "economy-ai-credit-policy",
   "economy-ai-credit-confirm", "economy-ai-credit-reconcile", "economy-ai-credit-lot-cost", "economy-ai-credit-reject", "economy-ai-credit-promotional-grant", "economy-ai-credit-draw-order", "economy-ai-credit-opening",
   "economy-ai-credit-historical-preview", "economy-ai-credit-historical-cost", "economy-ai-credit-test-period-preview", "economy-ai-credit-test-period-writeoff",
-  "economy-launch-boundary", "economy-launch-boundary-record", "economy-public-site", "economy-seller-set", "economy-seller", "economy-sales", "economy-ai-credit-reimbursed", "economy-owner-withdrawal", "economy-owner-withdrawal-assess", "economy-offer-proof", "hub-offers", "hub-enquiries", "hub-business", "economy-channel-payout-decide", "economy-channel-payout-bank", "economy-channel-payout-transfer", "economy-outward", "economy-channel-connect", "economy-channel-disconnect", "hub-channel-api",
+  "economy-external-orders", "economy-external-order-confirm", "economy-launch-boundary", "economy-launch-boundary-record", "economy-public-site", "economy-seller-set", "economy-seller", "economy-sales", "economy-ai-credit-reimbursed", "economy-owner-withdrawal", "economy-owner-withdrawal-assess", "economy-offer-proof", "hub-offers", "hub-enquiries", "hub-business", "economy-channel-payout-decide", "economy-channel-payout-bank", "economy-channel-payout-transfer", "economy-outward", "economy-channel-connect", "economy-channel-disconnect", "hub-channel-api",
   "owner-identity-autonomy", "economy-account-freeze", "economy-account-unfreeze", "hub-footprint", "hub-identity-uses", "hub-custody-key", "economy-custody-credential",
   "economy-custody-credential-revoke", "economy-rail-webhook", "hub-insolvency", "hub-wallet-measure", "hub-money-states", "owner-identity-documents", "economy-provider-secret",
   "hub-provider-secrets", "hub-storefront", "economy-storefront-probe", "economy-destination-paypal", "hub-sweep-reductions", "economy-sweep-reduction",
@@ -570,6 +573,11 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
     }
     case "economy-seller":
       return h.seller();
+    case "economy-external-orders":
+      return h.externalOrders();
+    case "economy-external-order-confirm":
+      if (p.length < 3 || !["delivered", "refunded", "cancelled"].includes(p[1]) || (p[1] === "refunded" && !/^\d+$/.test(p[2]))) throw new Error("usage: economy-external-order-confirm <orderId> delivered|cancelled <what the platform shows…> | economy-external-order-confirm <orderId> refunded <totalMinor> <what the platform shows…>");
+      return p[1] === "refunded" ? h.externalOrderConfirm(p[0], p[1], Number(p[2]), p.slice(3).join(" "), actor) : h.externalOrderConfirm(p[0], p[1], null, p.slice(2).join(" "), actor);
     case "economy-channel-payout-bank":
       if (p.length !== 4 || !/^\d{4}-\d{2}-\d{2}$/.test(p[2]) || !/^\d+$/.test(p[3])) throw new Error("usage: economy-channel-payout-bank <payoutId> <bankRef> <YYYY-MM-DD> <amountMinor>");
       return h.channelPayoutBank(p[0], p[1], p[2], Number(p[3]), actor);

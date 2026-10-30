@@ -551,6 +551,7 @@ describe.skipIf(!PG_BIN)("v100 customer obligations and refusal reasons (Postgre
       expect(await R.one(`fleet.svc_message_check_failed($1, 'test-worker', 'FLEET_CONTROL_AI_BUDGET: no room', '[]'::jsonb)`, [k.check_id])).toMatchObject({ status: "deferred" });
       expect((await checks(thanks))[0]).toMatchObject({ status: "pending", attempts: 0, deferred15: true });
       for (let i = 1; i <= 3; i++) await R.one(`fleet.svc_message_check_failed($1, 'test-worker', 'FLEET_REVIEW_PROVIDER_ERROR: overloaded', '[]'::jsonb)`, [k.check_id]);
+      expect(await R.q(`SELECT 1 FROM fleet.fleet_notifications WHERE code = 'MESSAGE_CHECK_STALLED' AND detail ->> 'checkId' = $1`, [k.check_id])).toHaveLength(1); // v124: the owner hears it
       expect((await checks(thanks))[0]).toMatchObject({ status: "stalled", attempts: 3 });
       expect((await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_events WHERE event_type = 'message_check_stalled' AND detail->>'checkId' = $1`, [k.check_id]))[0].n).toBe(1);
       expect(await owed(o)).toBeUndefined();                                            // deferred: not the agent's work

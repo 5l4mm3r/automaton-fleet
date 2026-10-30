@@ -1444,12 +1444,15 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     fleet_leads: new Set(["fleet_econ_lead_add", "fleet_econ_lead_update", "fleet_leads_retention", "fleet_econ_mail_send", "svc_outreach_optout"]),
     fleet_business_obligations: new Set(["fleet_econ_obligation_add", "fleet_econ_obligation_done", "fleet_econ_obligation_cancel",
       // v124: an external order opens and closes its own obligation.
-      "fleet_external_order_open_internal", "fleet_external_order_close_obligation", "fleet_econ_external_order_update", "fleet_econ_external_order_deliver"]),
-    fleet_external_orders: new Set(["fleet_external_order_open_internal", "fleet_external_order_apply_delivered", "fleet_external_order_apply_refund", "fleet_external_order_platform_state",
+      "fleet_external_order_open_internal", "fleet_external_order_close_obligation", "fleet_external_order_reopen", "fleet_econ_external_order_update", "fleet_econ_external_order_deliver"]),
+    fleet_external_orders: new Set(["fleet_external_order_open_internal", "fleet_external_order_contradicted", "chx_sale_record", "fleet_external_order_apply_delivered", "fleet_external_order_apply_refund", "fleet_external_order_apply_cancelled",
       "fleet_econ_external_order_update", "fleet_econ_external_order_deliver", "fleet_econ_external_order_refund"]),
+    fleet_external_order_history: new Set(["fleet_external_order_log"]),
+    fleet_external_order_evidence_uses: new Set(["fleet_external_order_witness"]),
+    fleet_channel_record_failures: new Set(["chx_record_failure", "fleet_channel_record_ok"]),
     fleet_outreach_suppressions: new Set(["fleet_econ_outreach_suppress", "svc_outreach_optout"]),
     fleet_outreach_messages: new Set(["fleet_econ_mail_send", "svc_outreach_optout"]),
-    fleet_channel_sales: new Set(["fleet_econ_external_order_open", "fleet_econ_external_order_update", "fleet_external_order_apply_refund", "fleet_external_order_platform_state", "chx_sale_record", "fleet_econ_sale_report", "fleet_econ_sale_update", "fleet_econ_payout_claim", "fleet_channel_payout_post", "fleet_admin_channel_payout_decide"]),
+    fleet_channel_sales: new Set(["fleet_econ_external_order_open", "fleet_external_order_apply_refund", "fleet_external_order_apply_cancelled", "fleet_external_order_contradicted", "chx_sale_record", "fleet_econ_sale_report", "fleet_econ_sale_update", "fleet_econ_payout_claim", "fleet_channel_payout_post", "fleet_admin_channel_payout_decide"]),
     fleet_channel_payouts: new Set(["chx_payout_record", "fleet_econ_payout_claim", "fleet_channel_payout_try", "fleet_channel_payout_book", "fleet_admin_channel_payout_decide",
       "fleet_admin_channel_payout_bank", "fleet_admin_channel_payout_transfer"]),
     // v76: refunds / reversals / fees of the owner's proof purchase, only by custody's refund recorder.

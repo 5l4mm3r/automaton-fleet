@@ -42,6 +42,8 @@ export interface ChannelGatewayPort {
   report(jobId: string, lease: string, ok: boolean, result: Record<string, unknown> | null, externalId: string | null, externalUrl: string | null, error: string | null): Promise<ChxResult>;
   saleRecord(worker: string, connectionId: string, sale: Record<string, unknown>): Promise<ChxResult>;
   payoutRecord(worker: string, connectionId: string, payout: Record<string, unknown>): Promise<ChxResult>;
+  recordFailure(worker: string, connectionId: string, kind: "sale" | "payout", key: string, payload: Record<string, unknown>, code: string, reason: string): Promise<ChxResult>;
+  recordFailuresDue(worker: string, connectionId: string, limit: number): Promise<Array<{ kind: "sale" | "payout"; key: string; payload: Record<string, unknown> }>>;
   cursor(worker: string, connectionId: string, kind: "receipts" | "ledger"): Promise<string | null>;
   cursorSet(worker: string, connectionId: string, kind: "receipts" | "ledger", cursor: string): Promise<ChxResult>;
   indexNowDue(worker: string, limit: number): Promise<{ key?: string; base?: string | null; offers?: Array<{ offerId: string; slug: string; updatedAt: string }> }>;
@@ -76,6 +78,12 @@ export class PgChannelGateway implements ChannelGatewayPort {
   }
   saleRecord(worker: string, connectionId: string, sale: Record<string, unknown>) { return this.call<ChxResult>("chx_sale_record", [worker, connectionId, JSON.stringify(sale)]); }
   payoutRecord(worker: string, connectionId: string, payout: Record<string, unknown>) { return this.call<ChxResult>("chx_payout_record", [worker, connectionId, JSON.stringify(payout)]); }
+  recordFailure(worker: string, connectionId: string, kind: "sale" | "payout", key: string, payload: Record<string, unknown>, code: string, reason: string) {
+    return this.call<ChxResult>("chx_record_failure", [worker, connectionId, kind, key, JSON.stringify(payload), code, reason]);
+  }
+  recordFailuresDue(worker: string, connectionId: string, limit: number) {
+    return this.call<Array<{ kind: "sale" | "payout"; key: string; payload: Record<string, unknown> }>>("chx_record_failures_due", [worker, connectionId, limit]);
+  }
   cursor(worker: string, connectionId: string, kind: "receipts" | "ledger") { return this.call<string | null>("chx_cursor", [worker, connectionId, kind]); }
   cursorSet(worker: string, connectionId: string, kind: "receipts" | "ledger", cursor: string) { return this.call<ChxResult>("chx_cursor_set", [worker, connectionId, kind, cursor]); }
   indexNowDue(worker: string, limit: number) { return this.call<{ key?: string; base?: string | null; offers?: Array<{ offerId: string; slug: string; updatedAt: string }> }>("chx_indexnow_due", [worker, limit]); }
