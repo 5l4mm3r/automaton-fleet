@@ -3239,7 +3239,7 @@ PayPal now: 67 + 455 − 500 = **22p**. This matches the GBP balance PayPal repo
 - One T1107 transaction and one journal (1109).
 - One `fleet_offer_proof_returns` row.
 - The order is `refunded`.
-- The evidence arrived by webhook (20 Oct 21:27:48Z) and by Transaction Search (21 Oct 00:50:36Z). It counts once (the
+- [Corrected 30 Oct: no webhook was involved. The first source was PayPal's refund API result, stored under the source label `webhook`; `fleet_paypal_webhook_inbox` has never held a row.] The evidence arrived from the refund API result (20 Oct 21:27:48Z) and by Transaction Search (21 Oct 00:50:36Z). It counts once (the
   larger of the two), as designed.
 - **The fee:** PayPal kept the 45p fee on the purchase. It is reflected in the books as the gap between 455 credited and
   500 returned: your capital, net, fell 45p.
@@ -5336,7 +5336,7 @@ not repeated.
 
 **e) Refund accounting and retained fees:**
 - The owner refunds the full £5.00 **in the PayPal app** (no refund authority is granted; `REAL_PAYMENTS` stays false).
-- Observed by webhook `PAYMENT.CAPTURE.REFUNDED` and Transaction Search T1107, counted once. Booked by
+- [Corrected 30 Oct: not a webhook; see the 20 Oct evidence correction.] Observed by PayPal's refund API result (source label `webhook`) and Transaction Search T1107, counted once. Booked by
   `fleet_order_refunded` as an owner-proof return: D owner capital 500, C unallocated (500p; the 20 Oct split was 498 + 2
   owner-reimbursable). The order becomes `refunded` and its conversation closes.
 - **Retained cost to the owner:** the 45p PayPal fee, plus Fleet Control's actual (≤ 30p), plus the API usage in (b) (provider
@@ -5642,3 +5642,64 @@ was refused by the VPS (publickey: key not loaded). Operator API at the same tim
 
 **Disclosure:** `--check` writes nothing only while its gates pass. A failing gate calls `stopall`, which pauses Agent-1,
 disables cognition, closes sales and holds the offer.
+
+**Update 30 Oct 09:08Z (owner-approved):** b8eaf95 pushed (e512fb2..b8eaf95, no force). Old VPS script kept in
+`~/rlc142/prev-e512fb2/` (5a25b254…); `~/rlc142/stage2-proof.sh` = 2ac53619…, the other three files unchanged. Production
+`--check` passed, exit 0, nothing written: unallocated 0p, PayPal 22p (the owner's £2.50 not yet seen), no funding recorded,
+holds 0, 0 non-terminal checkouts, 0 live PayPal orders, 0 open reconciliation items, both agents paused, cognition off.
+
+## Financial visibility incident: the owner's £2.50 (79T2209859237554T), opened 30 Oct; root cause NOT yet confirmed
+
+The owner reports the payment Completed. Nothing is booked and no second deposit is requested.
+
+**Evidence (production, read-only, 09:17–09:40Z):**
+- `fleet_paypal_transactions`: no row with that id and no new row of any id since 20 Oct. No journal for it. Unallocated 0p.
+- PayPal's own balance report (hourly, independent of transaction ingestion): GBP 22p at 09:17:45Z.
+- Transaction Search: passes every 15 minutes, HTTP 200, token scope present. The window reaches back to about 20 Oct 21:50Z.
+- Measured Search lag on this rail: 1 h 55, 2 h 33, 3 h 34. The balance figure changed at about the same times, so it lags too.
+- Mailbox: synced 09:39:11Z. Both earlier payments produced "Notification of payment received" within 16 s and 35 s. None exists
+  for this one. The newest PayPal mail is "You've added a card" at 08:54:09Z. Those two were checkout payments; whether a personal
+  payment sends the same notice is unproven.
+
+**Classification:** "ingested but attributed or displayed wrongly" is excluded (no row exists). "PayPal has not returned it" and
+"returned but not ingested" cannot be separated from what production records: custody kept only the HTTP status, and rows dropped
+or refused were not counted. Reporting lag, a sender-side id and a different receiving account all remain open.
+
+**Reading the trace (owner correction, 30 Oct):** absence is evidence to investigate, not proof.
+- No row with PayPal's data reaching past the payment does NOT prove the account did not receive it. Query filters, pagination and
+  provider omissions must be excluded first.
+- No row with PayPal's data short of the payment is consistent with a delay; it does not prove one.
+- A row found by amount alone identifies nothing.
+
+**Owner's account of the payment, 30 Oct:** at 08:54Z, signed in to the treasury account, the owner added their own card and used
+"Add money" for £2.50. So it is a top-up, not a payment from another PayPal account; the ID is the treasury's own, and the absent
+"payment received" email is not evidence against it. Its code, status, fee and funding source still await PayPal's own record.
+The card addition is not funding. Code check: ingestion takes any `T` code and leaves a positive row unmatched; `fund` and attribution
+accept any code, which `fund` does not itself check, so the code is verified by hand first. Rehearsal: T0300 books once as owner funding,
+books stay reconciled, no card or transfer record changes. The T0300 row is a test value, not PayPal's confirmed code for this payment.
+
+**Status:** the payment's root cause is unconfirmed. Nothing in the next two sections is claimed to explain or resolve it.
+
+**Owner-run trace and probe, 30 Oct (results as reported by the owner; staged copies removed):** payment time 08:54Z. The balance
+and all searches reached only 07:59:59Z, before the payment, so the absence of a row says nothing yet about receipt. The webhook
+configuration checks passed; PayPal returned no webhook events (the probe's window is 7 days, so this does not cover the 10–20 Oct
+payments and does not explain the empty inbox). Next: recheck once PayPal's data passes 08:54Z; book only the treasury-side row.
+
+### Webhook reporting correction (recorded separately)
+`fleet_paypal_webhook_inbox` has 0 rows, ever, and its guard forbids deletion. Earlier reports of the 20 Oct refund "by webhook" were
+inaccurate (corrected above): `cx_paypal_refund_result` stores the refund API's answer under source `webhook`. Working paths: refund
+API result, order status polling (checkouts only), Transaction Search, balance report, PayPal email. Why no webhook has ever arrived
+is unknown; `paypal-probe --events` is the check. The configured events do not cover a personal payment anyway.
+
+### Prepared ingestion and UI hardening (independent of the payment's cause; uncommitted, not deployed)
+v123 + custody + HQ. To be committed separately from the diagnostic. The diagnostic is `scripts/fleet-paypal-receipt-trace.mjs`,
+SHA-256 0cffc1b8a2fe805346479971947a35b526079372eaed1fd5719e3705b8dd4e7e (adds PayPal's instrument type fields; supersedes 83e61f46…).
+- Overlap 3 h → 72 h: with a measured 3 h 34 lag, a receipt could fall behind the window once a newer row moved it (test fails on 3 h).
+- A pass records window, PayPal's `last_refreshed_datetime`, returned / ingested / dropped / refused, truncation, balance as-of and
+  account tail. A refused row no longer aborts the pass; a failing later page is recorded as failed.
+- `fleet_treasury_position.providerSync`, shown on Treasury and Fleet Command; the operations watch alerts when Search is failing,
+  stale or losing rows.
+- Tests: fleet-provider-sync-v123-pg 8/8, fleet-paypal-receipt-trace 4/4, stage2 rehearsal 14/14 (script unchanged, 2ac53619…), tsc, dashboard
+  typecheck / lint / simulation. Pre-existing on clean b8eaf95, same tests: fleet-command-centre 3, fleet-event-routing-pg 1,
+  fleet-v81-launch-dashboard-pg 4, fleet-dashboard-pg 1.
+- The trace is tested only against a fake PayPal; the classifier refused running it or the probe as the custody user.
