@@ -130,7 +130,7 @@ fund)
   # (Booleans concatenated into text by SQL read 'true'/'false', never 't'/'f'; a standalone boolean reads 't'/'f'.)
   SEEN="$(Q "SELECT count(*) FROM fleet_ledger_journal WHERE external_ref = '$REF'") $(Q "SELECT fleet_claim_taken('$REF')") $UNATT"
   [[ "$SEEN" == "0 f true" ]] || stopall "transaction $TXN is already recorded or attributed ($REF; journals, claimed, unattributed: $SEEN): no second funding entry"
-  [[ "$CUR $ST $NOCHK" == "GBP S true" && "$AMT" -gt 0 ]]   # booleans concatenated in SQL read 'true'/'false'  || stopall "transaction $TXN is not a settled, unmatched GBP receipt ($ROW)"
+  [[ "$CUR $ST $NOCHK" == "GBP S true" && "$AMT" -gt 0 ]] || stopall "transaction $TXN is not a settled, unmatched GBP receipt ($ROW)"
   NET=$(( AMT + FEE ))   # fee_minor is negative
   (( NET >= MIN_NET_FUNDING )) || stopall "net receipt ${NET}p is below the ${MIN_NET_FUNDING}p minimum (gross ${AMT}p, fee ${FEE}p)"
   U0=$(unalloc); phase "fund $TXN gross ${AMT}p fee ${FEE}p net ${NET}p ($CODE)"

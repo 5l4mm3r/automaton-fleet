@@ -5623,3 +5623,22 @@ captured), 0 open reconciliation items, no approval or capture events on the ret
 
 `stage2-proof.sh` → `d60fe5b80593e96d18a08b7d0e95ab900c7d519d6dfdb077bdadaa67a7dceb3b`; the other three files are
 unchanged.
+
+## Stage 2 script re-verification — 30 Oct ~09:05Z (local only; production preflight NOT refreshed)
+
+**Defect found in the approved script (also in e512fb2, the copy staged on the VPS, and in 5767f8d).** In `fund`, a comment sat
+between the settled / GBP / unmatched / positive gate and its `|| stopall`, so the gate never stopped anything. A pending
+(`P`) receipt of 250p was recorded as 240p owner funding when run on the rehearsal database. The net-minimum and
+already-recorded gates worked, so only this gate was affected. `fund` has not been run on production.
+
+**Fix (uncommitted):** the comment is removed. The `fund` rehearsal test now covers a pending, a USD and a negative receipt; it
+failed before the fix and passes after it. Rehearsal 14/14; controller preflight tests 7/7 (run before the fix; that script
+did not change).
+
+`stage2-proof.sh` → `2ac5361990f862c9c9d40d6b7e32ed1cea470b6a11a02a1831e0cf522b1e5ae1`; the other three files are unchanged.
+
+**Not done:** production `--check`. The first SSH read was refused by the permission classifier (Production Reads); the second
+was refused by the VPS (publickey: key not loaded). Operator API at the same time: e0dc223, schema 122, all four flags false.
+
+**Disclosure:** `--check` writes nothing only while its gates pass. A failing gate calls `stopall`, which pauses Agent-1,
+disables cognition, closes sales and holds the offer.

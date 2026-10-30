@@ -228,6 +228,14 @@ describe.skipIf(!PG_BIN || !fs.existsSync(CLI))("Stage 2 package rehearsed on Po
       r = x.run(["fund", "NOTARECEIPT01"]);
       expect(r.code).toBe(1);
       expect(r.out).toContain("is not (yet) in the treasury rail's records");
+      // Large enough to pass the net minimum: only the settled / GBP / positive gate can refuse them.
+      for (const bad of [{ status: "P" }, { currency: "USD" }, { amountMinor: -250, feeMinor: 0 }]) {
+        const id = txnId();
+        await receipt(x, { transactionId: id, amountMinor: 250, feeMinor: -10, ...bad });
+        r = x.run(["fund", id]);
+        expect(r.code, r.out).toBe(1);
+        expect(r.out).toContain("is not a settled, unmatched GBP receipt");
+      }
       expect(await x.unalloc()).toBe(u0);
       r = x.run(["fund", good]);
       expect(r.code, r.out).toBe(0);
