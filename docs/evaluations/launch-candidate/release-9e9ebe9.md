@@ -35,3 +35,20 @@
 **Fails identically on clean b8eaf95, not caused by this:** `fleet-ledger` ("migrates to v10…": expected list of 27 custody functions, 35 exist), `fleet-event-routing-pg` (85 older event types unrouted), `fleet-command-centre` 3, `fleet-v81-launch-dashboard-pg` 4, `fleet-dashboard-pg` 1; `operator-pg` signature-termination timeout under load.
 
 **Not tested:** anything against real PayPal; a live webhook; the install script itself (`bash -n` only); `fleet-paypal-custody-worker-pg`-style real restart of the custody process (restart recovery is tested by repeating passes on a fresh worker state, not by killing a process).
+
+## Group A results (30 Oct, owner-approved; production unchanged; not installed)
+Pushed b8eaf95..6d59b37 (scope and secret scan clean). VPS build = pinned build 011db0b7…; side-installed; `current` stays e0dc223. UI tgz sha 1dfdc30b… verified after copy (built locally, not on the VPS).
+
+| Check | Result |
+|---|---|
+| Data rehearsal 122 → 123 | PASSED 11:32:43Z: only 123 applies, audit clean, ledger head unchanged, re-run no-op, dump restores 122 |
+| Services rehearsal | PASSED 11:33:36Z: candidate controller, operator API, dashboard on 123; e0dc223 refuses 123; rollback restore proven |
+| Copy check (`treasury-watch/copy-check.sh`, real worker, fake PayPal, booking on in the copy only) | 0 failures: history seeded with no journal, event or notification; £2.50 one journal; re-delivery, partial page, killed worker, killed tick, concurrent tick, exactly-once recovery; reconciled |
+| Founder upgrade e0dc223 → 9e9ebe9, revision | PASSED 27/27, 19/19 (fake provider) |
+| Browser (Chrome, real components and stylesheet, sample data, no sign-in) | Desktop correct. Defect kept: on a phone the movements table has tall rows and clips columns until scrolled sideways |
+| Production before/after | Schema, ledger verify, agents, state, cognition, PIDs, units, packages, ledger head identical |
+
+Not run: `install-9e9ebe9.sh --check`; the signed-in live app. Gates to satisfy before any install: rehearsals expire after 24 h (data 31 Oct 11:32Z); the script's founder `.result` files are not written. The Stage 2 re-pin (C = 9e9ebe9, schema 123, sha 96229998…) is saved as a diff only, for use only after this release; the staged script stays 2ac53619 for e0dc223.
+
+## Stage 2 finding (30 Oct): unallocated 64p
+At 11:21:07Z, 52 s after the £2.50 was booked, journal 1184 posted 186p of AI-credit tax: treasury's share (206 draws on 23 Oct, 186.74p) on the owner-paid lot (receipts total $49.55 for $41.29 credit). First posted as 1179 on 27 Oct against unbacked estate cash, reversed by 1180 in the incident recovery, then held in the accrual until unallocated could pay. Stage 2's 75p gate is now 11p short.
