@@ -5678,7 +5678,9 @@ The card addition is not funding. Code check: ingestion takes any `T` code and l
 accept any code, which `fund` does not itself check, so the code is verified by hand first. Rehearsal: T0300 books once as owner funding,
 books stay reconciled, no card or transfer record changes. The T0300 row is a test value, not PayPal's confirmed code for this payment.
 
-**Status:** the payment's root cause is unconfirmed. Nothing in the next two sections is claimed to explain or resolve it.
+**Resolved 30 Oct 11:20Z. Confirmed cause: PayPal's reporting delay; nothing was wrong with the account or the ingestion.** Search first returned the row at 11:07:46Z, 2 h 13 after the 08:54:24Z top-up, on the treasury's own side under the owner's ID: `T0700`, status S, GBP, gross 250p, fee 0, no checkout, no counterparty recorded, no matching debit. PayPal's balance read 272p at 11:18:46Z (22p before). `fund` booked 250p once as owner funding (`paypal:b71b3f3c:79T2209859237554T`). Funding source: the owner's statement plus the code; PayPal's instrument fields were not read and are not required.
+
+The next two sections are independent of this payment.
 
 **Owner-run trace and probe, 30 Oct (results as reported by the owner; staged copies removed):** payment time 08:54Z. The balance
 and all searches reached only 07:59:59Z, before the payment, so the absence of a row says nothing yet about receipt. The webhook
