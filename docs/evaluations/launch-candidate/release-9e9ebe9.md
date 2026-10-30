@@ -52,3 +52,9 @@ Not run: `install-9e9ebe9.sh --check`; the signed-in live app. Gates to satisfy 
 
 ## Stage 2 finding (30 Oct): unallocated 64p
 At 11:21:07Z, 52 s after the £2.50 was booked, journal 1184 posted 186p of AI-credit tax: treasury's share (206 draws on 23 Oct, 186.74p) on the owner-paid lot (receipts total $49.55 for $41.29 credit). First posted as 1179 on 27 Oct against unbacked estate cash, reversed by 1180 in the incident recovery, then held in the accrual until unallocated could pay. Stage 2's 75p gate is now 11p short.
+
+## Stage 2: STOPPED, not passed (owner, 30 Oct: scope mismatch)
+The internal £5 test does not exercise the intended product, an agent operating external businesses. Stopped before any payment.
+- Done: £2.50 booked; offer published privately on review 17a35f88 and held; 5 calls on promotional credit, 56,413,760 µ¢ ($0.56), nothing charged to any agent; sales never opened.
+- Not done, not proven: purchase, delivery, buyer message, Fleet Control check, refund.
+- Proof order 2c597116-7ce9-40fb-bcd8-0b7c160373b1 is unpaid, with its PayPal order open and payable until 2 Nov 12:37Z. No owner operation closes it (`economy-paypal-order-retire` leaves the checkout open; `paypal.cancel` needs an Agent-1 turn; a closed checkout still books late money). Guard timer and both holds kept; `stage2-proof.sh monitor` reports it. Script e2678e22….
