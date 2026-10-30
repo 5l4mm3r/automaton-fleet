@@ -142,7 +142,6 @@ fund)
 publish)
   base_gates
   [[ "$(Q "SELECT status FROM fleet_offers WHERE offer_id = '$OFFER'")" == paused ]] || stopall "the offer is not in its closed Stage 1 state (paused)"
-  [[ "$(unalloc)" -ge "$MIN_NET_FUNDING" ]] || stopall "unallocated $(unalloc)p: fund first (≥ ${MIN_NET_FUNDING}p net)"
   [[ "$(holds)" == "" && "$(unresolved)" == "0 0 0" ]] || stopall "holds or unresolved costs exist before the cap: $(holds) / $(unresolved)"
   F=$(free); (( F > TOTAL )) || stopall "free credit $F is not above the \$3 total"
   phase "publish: holds"
@@ -229,14 +228,13 @@ message-verify)
 refund-check)
   base_gates; ORD=$(proof_order); CAP=$(Q "SELECT capture_id FROM fleet_paypal_checkouts WHERE checkout_id = (SELECT checkout_id FROM fleet_customer_orders WHERE order_id = '$ORD')")
   [[ -n "$ORD" && "$(paystatus $ORD)" == paid ]] || stopall "the proof order is not paid ($(paystatus $ORD))"
-  [[ "$(unalloc)" -ge "$PRICE" ]] || stopall "unallocated $(unalloc)p < ${PRICE}p: the refund booking would fail — do NOT refund yet"
   [[ "$(Q 'SELECT count(*) FROM fleet_refund_authorities a WHERE fleet_refund_authority_live(a)')" == 0 ]] || stopall "a refund authority is live"
-  phase "refund: covered (unallocated $(unalloc)p ≥ ${PRICE}p); owner may refund capture $CAP in the PayPal app"
+  phase "refund: cleared (unallocated $(unalloc)p, booking retries if short; owner's decision 30 Oct); owner may refund capture $CAP in the PayPal app"
   echo "== READY FOR THE OWNER'S MANUAL REFUND $(ts): refund £5.00 in the PayPal app on capture $CAP. Then run refund-verify (it waits up to 24 h)." ;;
 
 refund-verify)
   base_gates; ORD=$(proof_order); [[ -n "$ORD" ]] || stopall "no owner-proof order"
-  grep -q " refund: covered" $PHASES 2>/dev/null || stopall "run refund-check first"
+  grep -q " refund: cleared" $PHASES 2>/dev/null || stopall "run refund-check first"
   waitfor $WAIT_REFUND "[[ \"\$(paystatus $ORD)\" == refunded ]]" || stopall "refund not observed and booked within 24 h"
   [[ "$(Q "SELECT count(*)||' '||sum(amount_minor) FROM fleet_offer_proof_returns WHERE checkout_id = (SELECT checkout_id FROM fleet_customer_orders WHERE order_id = '$ORD') AND kind = 'refund'")" == "1 $PRICE" ]] || stopall "the proof return is not exactly one ${PRICE}p"
   proof_resolved "$ORD" || stopall "refund booked but the proof order is not resolved: $(proof_state $ORD)"
