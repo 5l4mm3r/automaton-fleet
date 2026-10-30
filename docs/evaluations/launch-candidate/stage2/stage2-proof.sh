@@ -180,8 +180,8 @@ purchase)
     phase "purchase: resumed on order $ORD ($(paystatus $ORD))"
   else
     # The whole cash flow on today's figures, BEFORE the owner is asked to pay. Nothing is changed by a refusal.
-    FEE=$(fee_estimate); U=$(unalloc); AFTER=$(( U + PRICE - FEE - FC_PENCE ))
-    echo "  cash flow: unallocated ${U}p + ${PRICE}p paid − ${FEE}p fee (last evidence) − ${FC_PENCE}p Fleet Control's full limit = ${AFTER}p against the ${PRICE}p refund"
+    FEE=$(fee_estimate); U=$(unalloc); FCL=$(Q "SELECT fleet_control_ai_state()->>'ceilingMinor'"); FCL=${FCL:-0}; AFTER=$(( U + PRICE - FEE - FCL ))
+    echo "  cash flow: unallocated ${U}p + ${PRICE}p paid − ${FEE}p fee (last evidence) − ${FCL}p Fleet Control's full limit = ${AFTER}p against the ${PRICE}p refund"
     (( AFTER >= PRICE )) || { echo "!! PURCHASE NOT OFFERED $(ts): short by $(( PRICE - AFTER ))p. Nothing changed: no order, no guard. Agent-1 stays paused."; exit 5; }
     # Guard armed BEFORE any purchase: every minute it re-asserts sales closed + offer held (independent of this script).
     [[ "$(guard_active)" == active ]] || guard_arm || stopall "guard timer could not be armed"
@@ -215,7 +215,7 @@ purchase)
 message)
   base_gates; ORD=$(proof_order); [[ -n "$ORD" ]] || stopall "no owner-proof order"
   [[ "$(Q "SELECT count(*) FROM fleet_customer_messages WHERE order_id = '$ORD' AND author = 'buyer'")" == 1 ]] || stopall "expected exactly one buyer message"
-  [[ "$(unalloc)" -ge "$FC_PENCE" ]] || stopall "unallocated $(unalloc)p cannot fund Fleet Control's check"
+  [[ "$(unalloc)" -ge "$(Q "SELECT fleet_control_ai_state()->>'ceilingMinor'")" ]] || stopall "unallocated $(unalloc)p cannot fund Fleet Control's check"
   phase "message: Agent-1 resumed for the buyer message"
   cli founder-cognition $A1 resume "stage 2: answer the buyer's message on order ${ORD:0:8}" > /dev/null || stopall "resume refused"
   echo "== MESSAGE STARTED $(ts): watch for the reply + Fleet Control check; then 'message-verify'" ;;

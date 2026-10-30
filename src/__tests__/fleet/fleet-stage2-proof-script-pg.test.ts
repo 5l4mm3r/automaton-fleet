@@ -525,11 +525,10 @@ describe.skipIf(!PG_BIN || !fs.existsSync(CLI))("Stage 2 package rehearsed on Po
       expect(r.out).toContain("64p + 500p paid − 45p fee (last evidence) − 30p Fleet Control's full limit = 489p against the 500p refund");
       expect(r.out).toContain("short by 11p. Nothing changed");
       expect((await x.db(`SELECT count(*)::int AS n FROM fleet.fleet_customer_orders WHERE owner_proof`))[0].n).toBe(0);
-      const id = txnId();
-      await receipt(x, { transactionId: id, eventCode: "T0700", amountMinor: 75, feeMinor: 0 });
-      expect(x.run(["fund", id]).code).toBe(0);
+      // The owner's route on 30 Oct: Fleet Control's limit lowered to what the books can carry, so the check passes exactly.
+      expect((await x.db(`SELECT fleet.fleet_admin_fleet_control_ai_budget(19, 'test', 'operator:test') ->> 'ok' AS ok`))[0].ok).toBe("true");
       r = x.run(["purchase"]);
-      expect(r.out).toContain("139p + 500p paid − 45p fee (last evidence) − 30p Fleet Control's full limit = 564p against the 500p refund");
+      expect(r.out).toContain("64p + 500p paid − 45p fee (last evidence) − 19p Fleet Control's full limit = 500p against the 500p refund");
       expect(r.out).not.toContain("short by");
     }, 180_000);
   });
