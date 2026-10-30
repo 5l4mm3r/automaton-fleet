@@ -385,7 +385,12 @@ describe.skipIf(!PG_BIN || !fs.existsSync(CLI))("Stage 2 package rehearsed on Po
     });
 
     it("refund-check: covered before; the owner's manual PayPal refund observed and booked exactly once; no refund authority", async () => {
+      // No PayPal reading is not coverage; a reading that holds it is.
       let r = x.run(["refund-check"]);
+      expect(r.code).toBe(1);
+      expect(r.out).toContain("PayPal available 0p < 500p: short by 500p — do NOT refund yet");
+      await x.cx("cx_paypal_balance_record", ["custody-executor", x.railId, "GBP", 900, 900]);
+      r = x.run(["refund-check"]);
       expect(r.code, r.out).toBe(0);
       expect(r.out).toContain(`READY FOR THE OWNER'S MANUAL REFUND`);
       expect(r.out).toContain(capture);
@@ -499,6 +504,34 @@ describe.skipIf(!PG_BIN || !fs.existsSync(CLI))("Stage 2 package rehearsed on Po
       expect(r.code, r.out).toBe(0);
     });
 
+  });
+
+  describe("cash before the owner is asked to pay (owner, 30 Oct: no publish prerequisite; stop before the purchase with the exact shortfall)", () => {
+    let x: Rig;
+    beforeAll(async () => { x = await stage1Closed("cover"); }, 300_000);
+    afterAll(async () => { await x?.close(); });
+
+    it("publishes on 64p; refuses the purchase 11p short with nothing changed; a booked top-up then clears it", async () => {
+      const u = await x.unalloc();
+      await x.db(`SELECT fleet.fleet_ledger_post('treasury_shortfall_cover', 'test-drain', 'controller', 'test only', 'controller', NULL, NULL, NULL, NULL, NULL, now(), jsonb_build_array(jsonb_build_object('account', 'fleet:treasury:shortfall', 'side', 'D', 'amount', $1::bigint), jsonb_build_object('account', 'fleet:treasury:unallocated', 'side', 'C', 'amount', $1::bigint)))`, [u - 64]);
+      expect(await x.unalloc()).toBe(64);
+      let r = x.run(["publish"]);
+      expect(r.code, r.out).toBe(0);
+      expect((await x.R.econ(x.F, "offer.publish", { offerId: x.offerId, reviewId: x.reviewId })).ok).toBe(true);
+      r = x.run(["publish-verify"]);
+      expect(r.code, r.out).toBe(0);
+      r = x.run(["purchase"]);
+      expect(r.code, r.out).toBe(5);
+      expect(r.out).toContain("64p + 500p paid − 45p fee (last evidence) − 30p Fleet Control's full limit = 489p against the 500p refund");
+      expect(r.out).toContain("short by 11p. Nothing changed");
+      expect((await x.db(`SELECT count(*)::int AS n FROM fleet.fleet_customer_orders WHERE owner_proof`))[0].n).toBe(0);
+      const id = txnId();
+      await receipt(x, { transactionId: id, eventCode: "T0700", amountMinor: 75, feeMinor: 0 });
+      expect(x.run(["fund", id]).code).toBe(0);
+      r = x.run(["purchase"]);
+      expect(r.out).toContain("139p + 500p paid − 45p fee (last evidence) − 30p Fleet Control's full limit = 564p against the 500p refund");
+      expect(r.out).not.toContain("short by");
+    }, 180_000);
   });
 
   describe("an Add money top-up on the treasury account itself", () => {

@@ -77,6 +77,10 @@ proof_resolved() { [[ -z "$1" ]] || [[ "$(Q "SELECT o.payment_status = 'refunded
 # A real buyer is owed while their paid order has no sent delivery, or their latest message is unanswered.
 owed() { Q "SELECT COALESCE(string_agg(left(o.order_id::text,8)||CASE WHEN o.payment_status = 'paid' AND NOT EXISTS (SELECT 1 FROM fleet_order_deliveries d WHERE d.order_id = o.order_id AND d.status = 'sent') THEN ':delivery' ELSE '' END||CASE WHEN (SELECT author FROM fleet_customer_messages m WHERE m.order_id = o.order_id ORDER BY created_at DESC LIMIT 1) = 'buyer' THEN ':answer' ELSE '' END, ' '),'') FROM fleet_customer_orders o LEFT JOIN fleet_paypal_checkouts c USING (checkout_id) WHERE NOT o.owner_proof AND (o.created_at > '$SINCE' OR c.captured_at > '$SINCE') AND ((o.payment_status = 'paid' AND NOT EXISTS (SELECT 1 FROM fleet_order_deliveries d WHERE d.order_id = o.order_id AND d.status = 'sent')) OR (SELECT author FROM fleet_customer_messages m WHERE m.order_id = o.order_id ORDER BY created_at DESC LIMIT 1) = 'buyer')"; }
 unresolved() { echo "$(Q 'SELECT count(*) FROM fleet_cognition_inflight') $(Q "SELECT count(*) FROM fleet_control_ai_reservations WHERE status IN ('open','unknown')") $(Q "SELECT count(*) FROM fleet_cognition_log WHERE at > '$SINCE' AND NOT (outcome='ok' AND usage_source='provider') AND NOT (outcome='error' AND COALESCE(provider_usd_microcents,0)=0 AND COALESCE(input_tokens,0)=0)")"; }
+# PayPal's fee on the last sale of this price, from its own record (the 45p of 19 Oct if none).
+fee_estimate() { local f; f=$(Q "SELECT abs(fee_minor) FROM fleet_paypal_transactions WHERE rail_id = '$RAIL' AND event_code = 'T0006' AND amount_minor = $PRICE ORDER BY initiated_at DESC LIMIT 1"); echo "${f:-45}"; }
+# PayPal's available balance; its report lags, so a reading older than the capture has the capture's net added.
+paypal_after_capture() { Q "SELECT (fleet_capital_backing() #>> '{paypal,availableMinor}')::bigint + CASE WHEN (fleet_capital_backing() #>> '{paypal,observedAt}')::timestamptz < c.captured_at THEN $PRICE - COALESCE((SELECT abs(t.fee_minor) FROM fleet_paypal_transactions t WHERE t.checkout_id = c.checkout_id AND t.event_code = 'T0006'), $(fee_estimate)) ELSE 0 END FROM fleet_paypal_checkouts c JOIN fleet_customer_orders o USING (checkout_id) WHERE o.order_id = '$1'"; }
 stopall() {  # the kill switch: never leaves a failing step running; no database restore
   echo "!! STOP: $*"
   [[ "$(cog $A1)" == t ]] || { cli founder-cognition $A1 pause "stage 2 stopped: $1" > /dev/null; echo "  Agent-1 paused"; }
@@ -175,6 +179,10 @@ purchase)
   if [[ -n "$ORD" && "$(paystatus $ORD)" != awaiting_payment ]]; then
     phase "purchase: resumed on order $ORD ($(paystatus $ORD))"
   else
+    # The whole cash flow on today's figures, BEFORE the owner is asked to pay. Nothing is changed by a refusal.
+    FEE=$(fee_estimate); U=$(unalloc); AFTER=$(( U + PRICE - FEE - FC_PENCE ))
+    echo "  cash flow: unallocated ${U}p + ${PRICE}p paid − ${FEE}p fee (last evidence) − ${FC_PENCE}p Fleet Control's full limit = ${AFTER}p against the ${PRICE}p refund"
+    (( AFTER >= PRICE )) || { echo "!! PURCHASE NOT OFFERED $(ts): short by $(( PRICE - AFTER ))p. Nothing changed: no order, no guard. Agent-1 stays paused."; exit 5; }
     # Guard armed BEFORE any purchase: every minute it re-asserts sales closed + offer held (independent of this script).
     [[ "$(guard_active)" == active ]] || guard_arm || stopall "guard timer could not be armed"
     [[ "$(guard_active)" == active ]] || stopall "guard timer not active"
@@ -229,12 +237,16 @@ refund-check)
   base_gates; ORD=$(proof_order); CAP=$(Q "SELECT capture_id FROM fleet_paypal_checkouts WHERE checkout_id = (SELECT checkout_id FROM fleet_customer_orders WHERE order_id = '$ORD')")
   [[ -n "$ORD" && "$(paystatus $ORD)" == paid ]] || stopall "the proof order is not paid ($(paystatus $ORD))"
   [[ "$(Q 'SELECT count(*) FROM fleet_refund_authorities a WHERE fleet_refund_authority_live(a)')" == 0 ]] || stopall "a refund authority is live"
-  phase "refund: cleared (unallocated $(unalloc)p, booking retries if short; owner's decision 30 Oct); owner may refund capture $CAP in the PayPal app"
+  # Actual coverage, before asking the owner to refund (a booking that would only retry is not success): nothing still reserved, the books and PayPal both hold it.
+  [[ "$(Q "SELECT count(*) FROM fleet_control_ai_reservations WHERE status IN ('open','unknown')")" == 0 ]] || stopall "a Fleet Control reservation is still open: coverage is not final — do NOT refund yet"
+  [[ "$(unalloc)" -ge "$PRICE" ]] || stopall "unallocated $(unalloc)p < ${PRICE}p: short by $(( PRICE - $(unalloc) ))p — do NOT refund yet"
+  PPC=$(paypal_after_capture "$ORD"); PPC=${PPC:-0}; [[ "$PPC" -ge "$PRICE" ]] || stopall "PayPal available ${PPC}p < ${PRICE}p: short by $(( PRICE - PPC ))p — do NOT refund yet"
+  phase "refund: covered (unallocated $(unalloc)p ≥ ${PRICE}p, PayPal ${PPC}p); owner may refund capture $CAP in the PayPal app"
   echo "== READY FOR THE OWNER'S MANUAL REFUND $(ts): refund £5.00 in the PayPal app on capture $CAP. Then run refund-verify (it waits up to 24 h)." ;;
 
 refund-verify)
   base_gates; ORD=$(proof_order); [[ -n "$ORD" ]] || stopall "no owner-proof order"
-  grep -q " refund: cleared" $PHASES 2>/dev/null || stopall "run refund-check first"
+  grep -q " refund: covered" $PHASES 2>/dev/null || stopall "run refund-check first"
   waitfor $WAIT_REFUND "[[ \"\$(paystatus $ORD)\" == refunded ]]" || stopall "refund not observed and booked within 24 h"
   [[ "$(Q "SELECT count(*)||' '||sum(amount_minor) FROM fleet_offer_proof_returns WHERE checkout_id = (SELECT checkout_id FROM fleet_customer_orders WHERE order_id = '$ORD') AND kind = 'refund'")" == "1 $PRICE" ]] || stopall "the proof return is not exactly one ${PRICE}p"
   proof_resolved "$ORD" || stopall "refund booked but the proof order is not resolved: $(proof_state $ORD)"
