@@ -136,6 +136,12 @@ export function sealProviderSecret(brokerPublicDer: Buffer, name: string, json: 
   return sealTo(brokerPublicDer, json, `provider-upload:${name}`);
 }
 
+/** v125: the login of an account the owner made for an agent, sealed to the broker for that agent and platform. */
+export function sealAccountLogin(brokerPublicDer: Buffer, agentId: string, json: string): Buffer {
+  if (!json || json.length > 8_000) throw new Error("a login is at most 8 kB");
+  return sealTo(brokerPublicDer, json, `account-login:${agentId}`);
+}
+
 export class OwnerIdentityVault {
   constructor(private readonly dir: string, private readonly privateDer: Buffer, private readonly publicDer: Buffer) {}
 
@@ -162,6 +168,13 @@ export class OwnerIdentityVault {
     if (!/^[a-z0-9][a-z0-9._-]{1,40}$/.test(name)) throw new Error("bad provider name");
     const v = JSON.parse(openSealed(this.privateDer, this.publicDer, sealed, `provider-upload:${name}`)) as unknown;
     if (!v || typeof v !== "object" || Array.isArray(v) || Object.values(v as Record<string, unknown>).some((x) => typeof x !== "string")) throw new Error("FLEET_BAD_REQUEST");
+    return v as Record<string, string>;
+  }
+
+  /** v125: open a login the owner sealed for this agent. */
+  openAccountLogin(sealed: Buffer, agentId: string): Record<string, string> {
+    const v = JSON.parse(openSealed(this.privateDer, this.publicDer, sealed, `account-login:${agentId}`)) as unknown;
+    if (!v || typeof v !== "object" || Array.isArray(v) || Object.values(v as Record<string, unknown>).some((x) => typeof x !== "string")) throw new Error("a login is one JSON object of strings");
     return v as Record<string, string>;
   }
 

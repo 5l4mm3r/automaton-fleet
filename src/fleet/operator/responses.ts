@@ -109,6 +109,37 @@ export interface RuntimeFlagsView {
   dryRunChildEnabled: boolean | null;
 }
 
+/** v125: what stops a run, field by field. An unknown value reads as null, never as "stopped". */
+export function containmentBody(c: Record<string, unknown>): Record<string, unknown> {
+  const credit = (c.credit ?? {}) as Record<string, unknown>;
+  const num = (v: unknown) => (typeof v === "number" && Number.isSafeInteger(v) ? v : null);
+  const when = (v: unknown) => (typeof v === "string" && !Number.isNaN(Date.parse(v)) ? new Date(v).toISOString() : null);
+  return {
+    actionsEnabled: bool(c.actionsEnabled),
+    cognitionEnabled: bool(c.cognitionEnabled),
+    salesOpen: bool(c.salesOpen),
+    spendBreakerTripped: bool(c.spendBreakerTripped),
+    inflightCalls: num(c.inflightCalls),
+    credit: {
+      balanceUsd1e8: num(credit.balanceUsd1e8), heldUsd1e8: num(credit.heldUsd1e8), freeUsd1e8: num(credit.freeUsd1e8),
+      holds: (Array.isArray(credit.holds) ? credit.holds : []).slice(0, 50).map((h) => {
+        const x = h as Record<string, unknown>;
+        return { runId: typeof x.runId === "string" && /^[A-Za-z0-9._:-]{1,80}$/.test(x.runId) ? x.runId : null, usd1e8: num(x.usd1e8) };
+      }),
+    },
+    agents: (Array.isArray(c.agents) ? c.agents : []).slice(0, 100).map((a) => {
+      const x = a as Record<string, unknown>;
+      const run = x.run && typeof x.run === "object" ? (x.run as Record<string, unknown>) : null;
+      return {
+        agentId: typeof x.agentId === "string" && /^[0-9A-Za-z]{26}$/.test(x.agentId) ? x.agentId.toLowerCase() : null,
+        paused: bool(x.paused), held: bool(x.held), outwardHeld: bool(x.outwardHeld),
+        calls24h: num(x.calls24h), lastCallAt: when(x.lastCallAt), openOwnerTasks: num(x.openOwnerTasks),
+        run: run ? { ceilingMinor: num(run.ceilingMinor), endsAt: when(run.endsAt), spentMicro: num(run.spentMicro) } : null,
+      };
+    }),
+  };
+}
+
 export function statusBody(
   db: Record<string, unknown>,
   flags: RuntimeFlagsView,
@@ -160,7 +191,7 @@ const OP_REASON = {
 const OP_ROUTE = {
   enum: [
     "GET /v1/operator/whoami", "GET /v1/operator/status", "GET /v1/operator/agents", "GET /v1/operator/agents/{agent_id}", "GET /v1/operator/events",
-    "GET /v1/operator/lifecycle", "GET /v1/operator/treasury", "GET /v1/operator/runtime", "GET /v1/operator/reservations", "GET /v1/operator/orphans",
+    "GET /v1/operator/lifecycle", "GET /v1/operator/treasury", "GET /v1/operator/containment", "GET /v1/operator/runtime", "GET /v1/operator/reservations", "GET /v1/operator/orphans",
     "GET /v1/operator/proposals", "GET /v1/operator/actions", "POST /v1/operator/actions/hold-agent",
     "POST /v1/operator/actions/release-agent-hold", "POST /v1/operator/actions/request-health-challenge",
     "POST /v1/operator/actions/revoke-agent-sessions", "POST /v1/operator/actions/reconcile-lifecycle", "POST /v1/operator/proposals", "unknown",

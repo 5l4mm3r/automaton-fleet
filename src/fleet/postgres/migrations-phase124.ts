@@ -38,7 +38,7 @@ export const EVENT_ROUTES_V124 = Object.freeze({
     // Money position changes, or something waiting on a person.
     "card_dispute_opened", "card_dispute_resolved", "channel_payout_rejected", "treasury_shortfall_covered", "money_location_transfer", "money_location_transfer_arrived",
     "card_hold_released_verified", "browser_credential_pending", "repo_access_requested", "owner_request_superseded"],
-  P3_SUMMARY: ["external_order_delivered", "external_order_refunded", "external_order_cancelled", "external_order_owner_confirmed"],
+  P3_SUMMARY: ["external_order_delivered", "external_order_refunded", "external_order_cancelled", "external_order_owner_confirmed", "account_handed_over", "account_handover_installed"],
   // The owner's own actions and routine records: named, so that the default no longer hides a new event.
   AUDIT_ONLY: ["inference_profile_set", "order_correction_withdrawn", "message_check_decided", "public_site_set", "browser_credential_confirmed", "channel_added", "money_location_added",
     "money_location_status", "money_location_card", "repo_access_consented", "repo_access_active", "code_job_done", "repo_access_revoked", "card_slot_set", "operation_replayed", "operation_resolved"],
@@ -221,6 +221,8 @@ BEGIN
   SELECT * INTO c FROM fleet_venture_channels WHERE channel_id = fleet_identity_uuid(a, 'channelId') AND agent_id = p_agent;
   IF NOT FOUND THEN RAISE EXCEPTION 'FLEET_NOT_FOUND: no such channel of yours'; END IF;
   IF c.kind = 'own_pages' THEN RAISE EXCEPTION 'FLEET_SALE_OWN_PAGES: orders on your own offer pages are recorded automatically'; END IF;
+  -- No customer obligation starts while the agent is held from outside work: nothing it could have sold is live.
+  IF fleet_outward_held(p_agent) THEN RAISE EXCEPTION 'FLEET_PREPARATION_HOLD: you are in preparation: no customer orders until the owner releases outside work'; END IF;
   IF (SELECT count(*) FROM fleet_external_orders WHERE agent_id = p_agent AND created_at > now() - interval '1 day') >= 2000 THEN
     RAISE EXCEPTION 'FLEET_INFRASTRUCTURE_CEILING: an infrastructure failsafe against runaway loops was hit';
   END IF;

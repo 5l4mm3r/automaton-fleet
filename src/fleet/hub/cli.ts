@@ -213,6 +213,7 @@
  *   economy-channel-payout-decide <payoutId> book <paypalTxnId> | reject [note…]
  *                                                                           (v79) a payout paid INTO the treasury PayPal: book it against its credit
  *                                                                           (when the automatic match was ambiguous), or reject the claim
+ *   economy-account-handover <agentId> <kind> <platform> <https://origin> <username> <login.json> --fingerprint <sha256>   seal the login of an account you made for an agent; delete the file after
  *   economy-external-orders                                                 (read: outside orders and records the gateway could not store)
  *   economy-external-order-confirm <orderId> delivered|cancelled <what the platform shows…>
  *   economy-external-order-confirm <orderId> refunded <totalMinor> <what the platform shows…>   (records your check; moves no money)
@@ -256,7 +257,7 @@ import crypto from "crypto";
 import fs from "fs";
 import { HUB_SECTIONS, type HubSection, type PgHubAdmin } from "./admin.js";
 import { renderHub } from "./render.js";
-import { OWNER_IDENTITY_CLASSES, sealOwnerFact, sealProviderSecret, type OwnerIdentityClass } from "../identity/vaults.js";
+import { OWNER_IDENTITY_CLASSES, sealAccountLogin, sealOwnerFact, sealProviderSecret, type OwnerIdentityClass } from "../identity/vaults.js";
 import { generateX25519, openSealed, sealTo } from "../identity/crypto.js";
 import { parseStatement } from "../treasury/bank-statement.js";
 
@@ -278,7 +279,7 @@ export const HUB_COMMANDS = new Set([
   "economy-treasury-watch", "economy-treasury-watch-policy", "economy-capital-backing", "economy-capital-back", "economy-spend-breaker", "economy-ai-credits", "economy-ai-credit-purchase", "economy-ai-credit-policy",
   "economy-ai-credit-confirm", "economy-ai-credit-reconcile", "economy-ai-credit-lot-cost", "economy-ai-credit-reject", "economy-ai-credit-promotional-grant", "economy-ai-credit-draw-order", "economy-ai-credit-opening",
   "economy-ai-credit-historical-preview", "economy-ai-credit-historical-cost", "economy-ai-credit-test-period-preview", "economy-ai-credit-test-period-writeoff",
-  "economy-external-orders", "economy-external-order-confirm", "economy-launch-boundary", "economy-launch-boundary-record", "economy-public-site", "economy-seller-set", "economy-seller", "economy-sales", "economy-ai-credit-reimbursed", "economy-owner-withdrawal", "economy-owner-withdrawal-assess", "economy-offer-proof", "hub-offers", "hub-enquiries", "hub-business", "economy-channel-payout-decide", "economy-channel-payout-bank", "economy-channel-payout-transfer", "economy-outward", "economy-channel-connect", "economy-channel-disconnect", "hub-channel-api",
+  "economy-external-orders", "economy-external-order-confirm", "economy-account-handover", "economy-launch-boundary", "economy-launch-boundary-record", "economy-public-site", "economy-seller-set", "economy-seller", "economy-sales", "economy-ai-credit-reimbursed", "economy-owner-withdrawal", "economy-owner-withdrawal-assess", "economy-offer-proof", "hub-offers", "hub-enquiries", "hub-business", "economy-channel-payout-decide", "economy-channel-payout-bank", "economy-channel-payout-transfer", "economy-outward", "economy-channel-connect", "economy-channel-disconnect", "hub-channel-api",
   "owner-identity-autonomy", "economy-account-freeze", "economy-account-unfreeze", "hub-footprint", "hub-identity-uses", "hub-custody-key", "economy-custody-credential",
   "economy-custody-credential-revoke", "economy-rail-webhook", "hub-insolvency", "hub-wallet-measure", "hub-money-states", "owner-identity-documents", "economy-provider-secret",
   "hub-provider-secrets", "hub-storefront", "economy-storefront-probe", "economy-destination-paypal", "hub-sweep-reductions", "economy-sweep-reduction",
@@ -765,6 +766,18 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
       return h.storefrontProbe(p[0], actor);
     case "economy-destination-paypal":
       return h.destinationPaypal(p[0], p[1], actor);
+    case "economy-account-handover": {
+      const [agentId, kind, platform, origin, handle, file] = positional(a, ["--fingerprint"]);
+      if (!agentId || !kind || !platform || !origin || !handle || !file) throw new Error("FLEET_BAD_REQUEST: economy-account-handover <agentId> <kind> <platform> <https://origin> <username> <login.json> --fingerprint <sha256>");
+      const key = await h.brokerOwnerKey();
+      if (!key.ownerPub) throw new Error("FLEET_NOT_FOUND: the identity broker has not published its key (is it running?)");
+      if (flag(a, "--fingerprint") !== key.fingerprint) throw new Error(`FLEET_KEY_MISMATCH: the broker key fingerprint is ${key.fingerprint}; pin it with --fingerprint`);
+      const value = JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown>;
+      if (typeof value.password !== "string" || !value.password || Object.keys(value).some((k) => !["password", "totpSeed"].includes(k)) || Object.values(value).some((v) => typeof v !== "string" || !v)) {
+        throw new Error('FLEET_BAD_REQUEST: the file is {"password": "...", "totpSeed": "..."} (totpSeed optional)');
+      }
+      return h.accountHandover(agentId, kind, platform, origin, handle, sealAccountLogin(Buffer.from(key.ownerPub, "base64"), agentId, JSON.stringify(value)), actor);
+    }
     case "economy-provider-secret": {
       const [name, file] = positional(a, ["--fingerprint"]);
       if (!name || !file) throw new Error("FLEET_BAD_REQUEST: economy-provider-secret <proton-bridge|twilio> <file.json> --fingerprint <sha256>");

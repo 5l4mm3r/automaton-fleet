@@ -352,6 +352,9 @@ export class PgHubAdmin {
   /** v79: each agent's business beyond the offer pages (channels, live presence, leads, obligations, outreach, payouts awaiting the owner). */
   business(agentId: string | null) { return this.one(`SELECT fleet_business_admin_json($1) AS r`, [agentId]); }
   /** v79: the bank statement line that received a marketplace payout (owner_bank route). */
+  accountHandover(agentId: string, kind: string, platform: string, origin: string, handle: string, sealed: Buffer, actor: string) {
+    return this.one(`SELECT fleet_admin_account_handover($1, $2, $3, $4, $5, $6, $7) AS r`, [agentId, kind, platform, origin, handle, sealed, actor]);
+  }
   externalOrders() { return this.one(`SELECT fleet_admin_external_orders_json() AS r`, []); }
   externalOrderConfirm(orderId: string, what: string, totalMinor: number | null, evidence: string, actor: string) {
     return this.one(`SELECT fleet_admin_external_order_confirm($1::uuid, $2, $3, $4, $5) AS r`, [orderId, what, totalMinor, evidence, actor]);

@@ -10,6 +10,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import crypto from "crypto";
+import { sealAccountLogin } from "../../fleet/identity/vaults.js";
 import { execFileSync } from "child_process";
 import fs from "fs";
 import https from "https";
@@ -485,6 +486,36 @@ describe.skipIf(!PG_BIN || !CHROME || !OPENSSL)("v37 general browser operator wi
       await R.q(`SELECT fleet.fleet_admin_outward_hold($1, $2)`, [A.id, OWNER]);
       await R.q(`SELECT fleet.fleet_admin_sales_set(true, $1)`, [OWNER]);
     }
+  });
+
+  it("v125: the owner hands over an account they made: sealed to the broker, used by the agent, never seen; its sites and password stay the owner's", async () => {
+    const password = `Owner-${crypto.randomUUID()}`;
+    users.set("ownerhanded", { email: "owner@site.test", password, verified: true });
+    const pub = (broker as any).o.ownerVault.publicKeyBase64();
+    const sealed = sealAccountLogin(Buffer.from(pub, "base64"), A.id, JSON.stringify({ password }));
+    const h = (await R.q(`SELECT fleet.fleet_admin_account_handover($1, 'marketplace', 'shop.test', $2, 'ownerhanded', $3, $4) AS r`, [A.id, SITE, sealed, OWNER]))[0].r as any;
+    expect((await R.q(`SELECT sealed IS NOT NULL AS s, status FROM fleet.fleet_account_handover_inbox WHERE upload_id = $1`, [h.uploadId]))[0]).toMatchObject({ s: true, status: "pending" });
+    await broker.tick();
+    expect((await R.q(`SELECT sealed IS NULL AS s, status FROM fleet.fleet_account_handover_inbox WHERE upload_id = $1`, [h.uploadId]))[0]).toMatchObject({ s: true, status: "installed" });
+    expect((await R.q(`SELECT status FROM fleet.fleet_agent_accounts WHERE account_id = $1`, [h.accountId]))[0].status).toBe("active");
+    const task = (await R.q(`SELECT body FROM fleet.fleet_owner_tasks WHERE agent_id = $1 AND closed_at IS NULL ORDER BY created_at DESC LIMIT 1`, [A.id]))[0] as any;
+    expect(task.body).toContain(h.accountId);
+    const opened = await ok(R.econ(A, "browser.open", { url: `${SITE}/login`, accountId: h.accountId }));
+    const r = await browse(A, "browser.act", { sessionId: opened.sessionId, steps: [{ action: "fill", selector: "#user", credential: "username" }, { action: "fill", selector: "#pass", credential: "password" }, { action: "click", text: "Log in" }, { action: "wait_for", selector: "#key" }] });
+    expect(r.status, JSON.stringify(r.result)).toBe("done");
+    const everything = JSON.stringify(r) + JSON.stringify(await R.q(`SELECT (SELECT jsonb_agg(result) FROM fleet.fleet_browser_actions) a, (SELECT jsonb_agg(steps) FROM fleet.fleet_browser_actions) s, (SELECT jsonb_agg(detail) FROM fleet.fleet_events) e, (SELECT jsonb_agg(t.body) FROM fleet.fleet_owner_tasks t) t`));
+    expect(everything).not.toContain(password);
+    const refused = (p: Promise<any>) => p.catch((e: Error) => ({ ok: false, code: e.message }));
+    expect(JSON.stringify(await refused(R.econ(A, "account.add_origin", { accountId: h.accountId, origin: "https://elsewhere.test" })))).toMatch(/FLEET_OWNER_ACCOUNT/);
+    expect(JSON.stringify(await refused(R.econ(A, "account.password_confirm", { accountId: h.accountId })))).toMatch(/FLEET_OWNER_ACCOUNT/);
+    const phish = await browse(A, "browser.act", { sessionId: opened.sessionId, steps: [{ action: "goto", url: PHISH }, { action: "fill", selector: "#password", credential: "password" }] });
+    expect(phish.result.code).toBe("FLEET_ORIGIN_NOT_PINNED");
+    // Sealed for another agent: refused, erased, and the owner hears it.
+    const wrong = sealAccountLogin(Buffer.from(pub, "base64"), "01M3F50SH7PNX2E3GST13J52AS", JSON.stringify({ password }));
+    const bad = (await R.q(`SELECT fleet.fleet_admin_account_handover($1, 'marketplace', 'shop2.test', $2, 'ownerhanded2', $3, $4) AS r`, [A.id, SITE, wrong, OWNER]))[0].r as any;
+    await broker.tick();
+    expect((await R.q(`SELECT sealed IS NULL AS s, status FROM fleet.fleet_account_handover_inbox WHERE upload_id = $1`, [bad.uploadId]))[0]).toMatchObject({ s: true, status: "failed" });
+    expect(await R.q(`SELECT 1 FROM fleet.fleet_notifications WHERE code = 'ACCOUNT_HANDOVER_FAILED' AND detail ->> 'accountId' = $1`, [bad.accountId])).toHaveLength(1);
   });
 
   it("scope and reach: sessions are per agent; private addresses are unreachable; roles are least-privilege", async () => {

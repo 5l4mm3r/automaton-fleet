@@ -151,6 +151,14 @@ export const TOOLS: readonly ToolDef[] = Object.freeze([
     run: (c) => c.treasuryWatch(),
   },
   {
+    name: "fleet_containment",
+    operation: "containment",
+    description:
+      "Read-only. What stops a run: inference switch, operator actions switch, each agent's pause, hold, outward state, calls and run ceiling, calls in flight, API credit and its holds, sales and the spend breaker. An unknown value is null, never 'stopped'. Facts only; it changes nothing.",
+    inputSchema: noArgs,
+    run: (c) => c.containment(),
+  },
+  {
     name: "fleet_runtime_verification",
     operation: "runtime_verification",
     description:

@@ -130,10 +130,11 @@ import { V120_SQL } from "./migrations-phase120.js";
 import { V121_SQL } from "./migrations-phase121.js";
 import { V123_SQL } from "./migrations-phase123.js";
 import { V124_SQL } from "./migrations-phase124.js";
+import { V125_SQL } from "./migrations-phase125.js";
 import { V122_SQL } from "./migrations-phase122.js";
 import { V40_SQL } from "./migrations-phase40.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 124;
+export const FLEET_PG_SCHEMA_VERSION = 125;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1353,6 +1354,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 122, name: "founder_recovery", sql: V122_SQL },
   { version: 123, name: "treasury_watch", sql: V123_SQL },
   { version: 124, name: "external_orders", sql: V124_SQL },
+  { version: 125, name: "operator_containment", sql: V125_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1689,6 +1691,8 @@ export const IDENTITY_API_FUNCTIONS: readonly string[] = Object.freeze([
   "ix_browser_secrets_pending(text)",
   "ix_browser_secret_serve(uuid, text, bytea, text, uuid)",
   "ix_browser_credential_record(uuid, text, text, text)",
+  "ix_account_handover_inbox(text)",
+  "ix_account_handover_installed(uuid, text, boolean, text, jsonb)",
   // v41: the broker's provider configuration and health, shared-mailbox ingestion and sending, provider-secret names,
   // live number quotes, cost-checked provisioning and message prices.
   "ix_comms_configure(text, jsonb)",
@@ -1851,6 +1855,7 @@ export const OPERATOR_API_FUNCTIONS: readonly string[] = Object.freeze([
   "op_list_events(uuid, bigint, integer, text)",
   "op_lifecycle_health(uuid)",
   "op_treasury_watch(uuid)",
+  "op_containment(uuid)",
   "op_runtime_status(uuid)",
   "op_list_reservations(uuid, text, integer)",
   "op_list_orphans(uuid, bigint, integer)",
@@ -1895,6 +1900,7 @@ export const OPERATOR_READ_FUNCTIONS: readonly string[] = Object.freeze([
   "op_list_events",
   "op_lifecycle_health",
   "op_treasury_watch",
+  "op_containment",
   "op_runtime_status",
   "op_list_reservations",
   "op_list_orphans",

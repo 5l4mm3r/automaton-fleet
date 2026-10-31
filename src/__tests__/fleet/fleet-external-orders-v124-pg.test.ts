@@ -321,6 +321,15 @@ describe.skipIf(!PG_BIN)("external orders (v124)", () => {
     expect((await listed(odd)).refundedMinor).toBeUndefined();
   });
 
+  it("while the agent is held from outside work, it cannot open a customer order", async () => {
+    await R.q(`SELECT fleet.fleet_admin_sales_set(false, $1)`, [OWNER]);
+    try {
+      expect(JSON.stringify(await refused(R.econ(F, "external_order.open", { channelId: channel, externalRef: ref() })))).toMatch(/FLEET_PREPARATION_HOLD/);
+    } finally {
+      await R.q(`SELECT fleet.fleet_admin_sales_set(true, $1)`, [OWNER]);
+    }
+  });
+
   it("the owner's route: the real CLI command confirms, attributes and audits; a bad call is refused", async () => {
     const hub = new PgHubAdmin({ connectionString: R.pgc.ownerUrl });
     const { order } = await open({ grossMinor: 600 });

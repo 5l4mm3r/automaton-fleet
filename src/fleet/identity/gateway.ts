@@ -98,6 +98,8 @@ export interface IdentityGatewayPort {
   reconcileMail?(job: string, found: "sent" | "absent" | "unknowable", externalId: string | null): Promise<IxResult & { status?: string }>;
   // v51 (optional for in-memory test gateways): provider secrets sealed to the broker from the dashboard.
   providerSecretInbox?(worker: string): Promise<Array<{ uploadId: string; name: string; sealedB64: string }>>;
+  accountHandoverInbox?(worker: string): Promise<Array<{ uploadId: string; accountId: string; agentId: string; sealedB64: string }>>;
+  accountHandoverInstalled?(uploadId: string, worker: string, ok: boolean, error: string | null, refs: Array<{ kind: string; vaultRef: string }>): Promise<IxResult>;
   providerSecretInstalled?(uploadId: string, worker: string, ok: boolean, error: string | null): Promise<IxResult>;
 }
 
@@ -241,6 +243,10 @@ export class PgIdentityGateway implements IdentityGatewayPort {
   }
   smsCostsPending(worker: string) { return this.call<Array<{ smsId: string; providerMessageId: string; provider: string }>>("ix_sms_costs_pending", [worker]); }
   smsCost(worker: string, smsId: string, priceMicro: number, currency: string) { return this.call<IxResult>("ix_sms_cost", [worker, smsId, priceMicro, currency]); }
+  accountHandoverInbox(worker: string) { return this.call<Array<{ uploadId: string; accountId: string; agentId: string; sealedB64: string }>>("ix_account_handover_inbox", [worker]); }
+  accountHandoverInstalled(uploadId: string, worker: string, ok: boolean, error: string | null, refs: Array<{ kind: string; vaultRef: string }>) {
+    return this.call<IxResult>("ix_account_handover_installed", [uploadId, worker, ok, error, JSON.stringify(refs)]);
+  }
   providerSecretInbox(worker: string) { return this.call<Array<{ uploadId: string; name: string; sealedB64: string }>>("ix_provider_secret_inbox", [worker]); }
   providerSecretInstalled(uploadId: string, worker: string, ok: boolean, error: string | null) {
     return this.call<IxResult>("ix_provider_secret_installed", [uploadId, worker, ok, error]);

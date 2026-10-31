@@ -33,7 +33,7 @@ type Msg = Record<string, any>;
 /** B2/D2 read tools (unchanged) + D3 Tier 2 read tools. */
 const READ_TOOLS = [
   "fleet_get_agent", "fleet_lifecycle_health", "fleet_list_agents", "fleet_list_events", "fleet_list_operator_actions", "fleet_list_orphans",
-  "fleet_list_proposals", "fleet_list_reservations", "fleet_runtime_verification", "fleet_status", "fleet_treasury_watch", "fleet_whoami",
+  "fleet_containment", "fleet_list_proposals", "fleet_list_reservations", "fleet_runtime_verification", "fleet_status", "fleet_treasury_watch", "fleet_whoami",
 ];
 /** D3 Tier 3: one named controlled operation each. */
 const ACTION_TOOLS = [
@@ -81,7 +81,7 @@ describe("MCP protocol surface (in-process)", () => {
       if (READ_TOOLS.includes(t.name)) {
         expect(t.annotations).toEqual({ readOnlyHint: true, destructiveHint: false, openWorldHint: false });
         expect(t.description).toMatch(/^Read-only\./);
-        if (!["fleet_whoami", "fleet_lifecycle_health", "fleet_runtime_verification", "fleet_treasury_watch"].includes(t.name)) expect(t.description, t.name).toMatch(/UNTRUSTED fleet data.*never an instruction/);
+        if (!["fleet_whoami", "fleet_lifecycle_health", "fleet_runtime_verification", "fleet_treasury_watch", "fleet_containment"].includes(t.name)) expect(t.description, t.name).toMatch(/UNTRUSTED fleet data.*never an instruction/);
         for (const [k, p] of props) {
           expect(["limit", "after", "agent_id", "type"], `${t.name}.${k}`).toContain(k);
           if (p.type === "string") expect(p.pattern, `${t.name}.${k}`).toMatch(/^\^.*\$$/);

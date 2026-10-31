@@ -337,6 +337,13 @@ export function validateTreasury(d: unknown): Record<string, unknown> {
   return o;
 }
 
+export function validateContainment(d: unknown): Record<string, unknown> {
+  const o = obj(d, ["actionsEnabled", "cognitionEnabled", "salesOpen", "spendBreakerTripped", "inflightCalls", "credit", "agents"], "containment");
+  obj(o.credit, ["balanceUsd1e8", "heldUsd1e8", "freeUsd1e8", "holds"], "containment.credit");
+  if (!Array.isArray(o.agents)) bad("containment.agents", "expected a list");
+  return o;
+}
+
 export function validateLifecycle(d: unknown): Record<string, unknown> {
   const counts = ["held", "staleHeartbeats", "pendingChallenges", "overdueChallenges", "openReservations", "expiredOpenReservations",
     "openOrphans", "orphansHoldingSlots", "pendingTerminations", "provisioningNeedingCleanup", "pendingProposals"];

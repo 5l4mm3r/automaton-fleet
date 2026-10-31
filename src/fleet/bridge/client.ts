@@ -34,6 +34,7 @@ import {
   validateAgentOne,
   validateLifecycle,
   validateTreasury,
+  validateContainment,
   validateOrphanPage,
   validateProposalPage,
   validateReservationPage,
@@ -126,6 +127,9 @@ export class OperatorBridgeClient {
 
   // ── D3 Tier 2 reads
 
+  async containment(): Promise<Result<Record<string, unknown>>> {
+    return this.call("/v1/operator/containment", validateContainment);
+  }
   async treasuryWatch(): Promise<Result<Record<string, unknown>>> {
     return this.call("/v1/operator/treasury", validateTreasury);
   }

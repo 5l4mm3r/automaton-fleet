@@ -67,6 +67,7 @@ import {
   eventItem,
   lifecycleBody,
   treasuryBody,
+  containmentBody,
   orphanItem,
   proposalItem,
   reservationItem,
@@ -571,6 +572,8 @@ export class OperatorService {
       }
       case "op_treasury_watch":
         return treasuryBody(await g.treasuryWatch(requestId));
+      case "op_containment":
+        return containmentBody(await g.containment(requestId));
       case "op_lifecycle_health":
         return lifecycleBody(await g.lifecycleHealth(requestId));
       case "op_runtime_status": {

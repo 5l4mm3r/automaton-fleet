@@ -439,7 +439,9 @@ const SIDE_EFFECT_BUILTINS = /^(nextval|setval|set_config|pg_notify|pg_advisory_
 const OPERATOR_READ_HELPERS = ["fleet_operator_request_ok", "fleet_operator_agent_json",
   // v123: op_treasury_watch reads the position, all STABLE and read-only (the audit below holds each of them to that).
   "fleet_treasury_position", "fleet_provider_sync_visibility", "fleet_treasury_movements_recent", "fleet_capital_backing", "fleet_paypal_balance_latest", "fleet_ledger_balance",
-  "fleet_provider_credit_balance", "fleet_provider_credit_held", "fleet_ledger_account"];
+  "fleet_provider_credit_balance", "fleet_provider_credit_held", "fleet_ledger_account",
+  // v125: op_containment reads what stops a run.
+  "fleet_operator_containment", "fleet_sales_open", "fleet_outward_held", "fleet_cognition_run_json"];
 
 /**
  * Schema v8 signature-termination invariant, checked against the live
@@ -1147,11 +1149,12 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     // v34: agent operational identity (agent ops), the broker protocol (ix_*), owner identity metadata/consent (owner).
     // (v35: an estate transfer re-owns an inherited identity/account/mailbox and queues the credential re-seal.)
     fleet_agent_identities: new Set(["fleet_econ_identity_create", "fleet_econ_identity_update", "fleet_estate_assign_internal"]),
-    fleet_agent_accounts: new Set(["fleet_admin_account_freeze", "fleet_admin_account_unfreeze", "fleet_econ_account_create", "fleet_econ_mailbox_provision", "fleet_econ_account_revoke", "ix_claim_job",
+    fleet_agent_accounts: new Set(["fleet_admin_account_handover", "ix_account_handover_installed", "fleet_admin_account_freeze", "fleet_admin_account_unfreeze", "fleet_econ_account_create", "fleet_econ_mailbox_provision", "fleet_econ_account_revoke", "ix_claim_job",
       "ix_credential_record", "ix_mailbox_record", "ix_report_job", "fleet_estate_assign_internal",
       // v37: browser-created accounts (register / pin origins / record outcome) and broker-stored browser credentials.
       "fleet_econ_account_register", "fleet_econ_account_add_origin", "fleet_econ_account_mark", "fleet_account_human_dependency", "ix_browser_credential_record"]),
-    fleet_agent_account_credentials: new Set(["fleet_econ_account_password_confirm", "fleet_econ_account_password_discard", "fleet_econ_account_revoke", "ix_credential_record", "ix_browser_credential_record"]),
+    fleet_account_handover_inbox: new Set(["fleet_admin_account_handover", "ix_account_handover_installed"]),
+    fleet_agent_account_credentials: new Set(["ix_account_handover_installed", "fleet_econ_account_password_confirm", "fleet_econ_account_password_discard", "fleet_econ_account_revoke", "ix_credential_record", "ix_browser_credential_record"]),
     fleet_agent_mailboxes: new Set(["ix_mailbox_record", "fleet_estate_assign_internal", "fleet_econ_mailbox_provision"]),
     fleet_identity_jobs: new Set(["fleet_identity_enqueue", "ix_claim_job", "ix_report_job", "fleet_estate_assign_internal", "svc_estate_tick",
       // v95: a lost answer is uncertain (never re-sent blindly); uncertain mail is reconciled against the Sent folder.

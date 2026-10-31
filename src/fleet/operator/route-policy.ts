@@ -106,6 +106,7 @@ export const OPERATOR_ROUTE_POLICY: Readonly<Record<string, Readonly<OperatorRou
   // ── D3 Tier 2 reads (STABLE, READ ONLY)
   "GET /v1/operator/lifecycle": Object.freeze({ scope: "ops.read.lifecycle", kinds: CLAUDE, fn: "op_lifecycle_health", params: NONE }),
   "GET /v1/operator/treasury": Object.freeze({ scope: "ops.read.treasury", kinds: CLAUDE, fn: "op_treasury_watch", params: NONE }),
+  "GET /v1/operator/containment": Object.freeze({ scope: "ops.read.status", kinds: CLAUDE, fn: "op_containment", params: NONE }),
   "GET /v1/operator/runtime": Object.freeze({ scope: "ops.read.status", kinds: CLAUDE, fn: "op_runtime_status", params: NONE }),
   "GET /v1/operator/reservations": Object.freeze({
     scope: "ops.read.lifecycle",

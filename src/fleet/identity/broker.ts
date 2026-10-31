@@ -246,6 +246,32 @@ export class IdentityBroker {
 
   /** v36: install owner identity uploads sealed (at the dashboard) to this broker's key; the database copy is erased. */
   /**
+   * v125: logins of accounts the owner made for an agent: opened here, stored in the agent's encrypted vault under that account, then forgotten.
+   * The registry learns references only, and the agent is told the account is ready. A TOTP seed is optional.
+   */
+  async installAccountHandovers(): Promise<number> {
+    const ov = this.o.ownerVault;
+    if (!ov || !this.gw.accountHandoverInbox || !this.gw.accountHandoverInstalled) return 0;
+    let n = 0;
+    for (const u of await this.gw.accountHandoverInbox(this.worker)) {
+      let error: string | null = null;
+      const refs: Array<{ kind: string; vaultRef: string }> = [];
+      try {
+        const v = ov.openAccountLogin(Buffer.from(u.sealedB64, "base64"), u.agentId);
+        if (!v.password) throw new Error("FLEET_ACCOUNT_LOGIN_FIELDS");
+        refs.push({ kind: "password", vaultRef: this.vault.put({ agentId: u.agentId, accountId: u.accountId, kind: "password" }, v.password) });
+        if (v.totpSeed) refs.push({ kind: "totp", vaultRef: this.vault.put({ agentId: u.agentId, accountId: u.accountId, kind: "totp" }, v.totpSeed) });
+        n++;
+      } catch (err) {
+        error = /FLEET_[A-Z_]+/.exec(err instanceof Error ? err.message : "")?.[0] ?? "not sealed to this broker's key for that agent";
+      }
+      await this.gw.accountHandoverInstalled(u.uploadId, this.worker, error === null, error, refs);
+      this.log(error ? "error" : "info", "account_handover_install", { accountId: u.accountId, ok: error === null, code: error });
+    }
+    return n;
+  }
+
+  /**
    * v51: provider secrets the owner sealed to this broker's key (dashboard or CLI onboarding): opened here, checked for the
    * provider's fields, installed in the encrypted provider vault and — when the provider was not configured — started at
    * once (re-registered with the registry). The plaintext never leaves this process; the registry learns names only.
@@ -765,6 +791,7 @@ export class IdentityBroker {
   async tick(max = 10): Promise<{ processed: number; outcomes: string[] }> {
     const outcomes: string[] = [];
     await this.pass("provider_secrets", () => this.installProviderSecrets());
+    await this.pass("account_handovers", () => this.installAccountHandovers());
     if (!this.registered) await this.pass("comms_register", () => this.registerProviders());
     if (!this.keyPublished && this.o.ownerVault) {
       const r = await this.gw.publishOwnerKey(this.worker, this.o.ownerVault.publicKeyBase64());
