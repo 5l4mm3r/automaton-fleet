@@ -6,7 +6,8 @@ Prepared 31 Oct 2026. **Nothing here has run on production.** No paid call was m
 | | |
 |---|---|
 | Commit | `bedb0b0a1b3aa51e39ab184262e3c45c47b7ca81` (supersedes ef4b880 and 608624a) |
-| Build, local | `b0e39d6bd3eba67c1bbca8548301ef04e3da4eb62b86e842a68a0949eeadfbe0`; the VPS build must print this, otherwise stop |
+| Build | `fab6b089e16272f189c8f93f65d1c32cc458da7c8802ed37e7298ba417ef192d`: VPS pass 1, VPS pass 2 and a clean local build all agree |
+| Correction | The build first packaged here (`b0e39d6bd3eba67c1bbca8548301ef04e3da4eb62b86e842a68a0949eeadfbe0`) was wrong: it was computed from a working tree without `packages/dashboard-web/out`, which the identity covers (2,646 files against 2,799). `dist`, `src` and the manifests are byte-identical. The commit did not change. |
 | Lockfile | `1df54e3526cb39c847d18fec14f1d4e3595557e34d94040c5b774f9b2f2a21c1` (unchanged) |
 | Change | schema 122 → 125, UI 0.27.0 → 0.28.0. Treasury Watch (auto-booking off), external orders, containment read, narrowed operator switch, **account handover disabled** |
 | Restart | Controller restarts once, target under 90 s; agents stay paused |

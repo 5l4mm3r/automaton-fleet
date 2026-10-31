@@ -11,7 +11,7 @@ SELF=$(readlink -f "${BASH_SOURCE[0]}"); ARGS=("$@")
 if [[ "${FLEET_TEELOG:-}" != "$SELF" ]]; then FLEET_TEELOG="$SELF" bash "$SELF" "${ARGS[@]}" 2>&1 | tee -a "$R/install-bedb0b0.log"; exit "${PIPESTATUS[0]}"; fi
 unset FLEET_TEELOG
 A1=01M3F50SH7PNX2E3GST13J52AS; A2=01M4C4NXT786Q4E9725N5A15KV
-C=bedb0b0a1b3aa51e39ab184262e3c45c47b7ca81; BUILD=b0e39d6bd3eba67c1bbca8548301ef04e3da4eb62b86e842a68a0949eeadfbe0
+C=bedb0b0a1b3aa51e39ab184262e3c45c47b7ca81; BUILD=fab6b089e16272f189c8f93f65d1c32cc458da7c8802ed37e7298ba417ef192d
 LOCK=1df54e3526cb39c847d18fec14f1d4e3595557e34d94040c5b774f9b2f2a21c1; PREV=e0dc22321c0a6633ae74aadef0279074011a5b0a
 UI=0.28.0; UITGZ=$R/ui-0.28.0-9e9ebe9.tgz; UISHA=1dfdc30b3a02d7bbc4bbe790e34635ebcbb71f499721df37ce978d088fd300f0
 REL=/opt/automaton-fleet/releases/$C; N=/opt/automaton-fleet/node/bin/node
