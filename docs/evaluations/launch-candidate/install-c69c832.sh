@@ -56,11 +56,13 @@ echo "== startup preflight: the LIVE configuration with the CANDIDATE's validato
 T=$(sudo -n mktemp -d /root/inst.XXXXXX); trap 'sudo -n rm -rf "$T"' EXIT
 sudo -n bash -c "sed -e 's/^FLEET_RUNTIME_COMMIT=.*/FLEET_RUNTIME_COMMIT=$C/' -e 's/^FLEET_RUNTIME_BUILD_ID=.*/FLEET_RUNTIME_BUILD_ID=$BUILD/' /etc/automaton-fleet/runtime.env > $T/runtime.env"
 (cd /tmp && sudo -n $N $PF --release $REL --runtime-env $T/runtime.env) > $R/install-preflight.log 2>&1
+# Before the cutover the database is still on 122: these two exact statements of that are expected, and nothing else is. Every other check ran and must pass;
+# the full preflight must then pass after the release (step 3), when both are evaluated for real.
+EXPECTED="FAIL registry health (service role) — Fleet registry unhealthy: schema version 122 != 125
+FAIL runtime pins match the registry's approved runtime — Fleet registry schema version 122 != required 125."
 FAILS=$(grep '^FAIL' $R/install-preflight.log)
-# Before the cutover the registry still approves ${PREV:0:7}: that single, expected mismatch is the cutover's own approval step.
-[[ -z "$FAILS" || ( "$(grep -c '^FAIL' $R/install-preflight.log)" == 1 && "$FAILS" == "FAIL runtime pins match the registry's approved runtime"* ) ]] \
-  || die "the candidate refuses the live configuration: $FAILS"
-echo "  $(grep -c '^PASS' $R/install-preflight.log) checks passed${FAILS:+; expected before the cutover: registry still approves ${PREV:0:7}}"
+[[ "$FAILS" == "$EXPECTED" ]] || die "the candidate refuses the live configuration: $FAILS"
+echo "  $(grep -c '^PASS' $R/install-preflight.log) checks passed; expected before the cutover: the two statements that the database is still on schema 122"
 if [[ $MODE == --check ]]; then state; echo "== CHECK PASSED $(ts): nothing changed"; exit 0; fi
 
 echo "== 1. backup"

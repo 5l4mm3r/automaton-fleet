@@ -13,6 +13,17 @@ Prepared 31 Oct 2026. **Nothing here has run on production.** No paid call was m
 
 Steps, each run by the owner: push; VPS build prints the pins; data, services and founder rehearsals; kit `~/rlc147`; `bash ~/rlc147/install-c69c832.sh --check`; then without `--check`.
 
+### Pins
+| | |
+|---|---|
+| `install-c69c832.sh` | `05accb6775864f4e06ccdcf1544ee403598d357546f6b4125baf76960a6a9536` |
+| `external-run.sh` | `ee5dd059d531dc05f2485c4473e66959d19446211d80309ca37b017c986ec045` (not staged: item 3 is not approved) |
+| `fleet-controller-preflight.mjs` | `2c6f6c37ad900b92b1d461996040facfcbfb88fbf27989797fe9e1be5594d628` |
+| `ui-0.28.0-9e9ebe9.tgz` | `1dfdc30b3a02d7bbc4bbe790e34635ebcbb71f499721df37ce978d088fd300f0` |
+
+### Corrections during this deployment
+1. **Install script preflight exception (31 Oct).** `--check` stopped: its exception was written for a release with no migration, so it refused the two exact statements that the database is on 122 and the release needs 125. 14 of 16 checks ran and passed. The script now accepts those two exact lines only; anything else aborts, and the full preflight must pass after the release. Packaged script hash before: `6e9b7b98…`.
+
 ### What happened to bedb0b0
 Pushed, built and rehearsed on the VPS on 31 Oct; **never installed**. Production stayed on e0dc223, schema 122, and matched its baseline afterwards.
 | Check on bedb0b0 | Result |
