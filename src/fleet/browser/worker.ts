@@ -212,10 +212,22 @@ export class BrowserWorker {
             // origin and, for the card, an open hold); the value is filled and forgotten like any credential.
             const kind = step.credential === "owner_fact" ? `owner_fact:${String(step.class)}${typeof step.field === "string" ? `:${step.field}` : ""}`
               : step.credential === "owner_card" ? `owner_card:${String(step.field)}` : step.credential;
-            const v = await this.secret(action, lease, kind, this.origin(page));
+            // v125: a login goes only into a real password field on the page's own document, and the page is checked again at the last moment: the origin
+            // is read once the field exists, and a page that moved meanwhile gets nothing. Elsewhere it could be read back, or sent to another site.
+            const login = ["password", "new_password", "generate_password"].includes(step.credential);
+            const target = this.locator(page, step);
+            if (login) {
+              if (typeof step.frame === "string") throw new Error("FLEET_ORIGIN_NOT_PINNED");
+              await target.waitFor({ state: "visible", timeout: 15_000 });
+              const field = await target.evaluate((el) => (el as HTMLInputElement).tagName === "INPUT" && (el as HTMLInputElement).type === "password");
+              if (!field) throw new Error("FLEET_BROWSER_FIELD_REFUSED");
+            }
+            const at = this.origin(page);
+            const v = await this.secret(action, lease, kind, at);
             s.secrets.add(v);
             if (step.credential === "owner_fact" || step.credential === "owner_card") s.ownerValues.add(v);
-            await this.locator(page, step).fill(v);
+            if (login && this.origin(page) !== at) throw new Error("FLEET_ORIGIN_NOT_PINNED");
+            await target.fill(v, login ? { timeout: 2_000 } : undefined);
           } else {
             await this.locator(page, step).fill(String(step.value ?? ""));
           }
@@ -307,6 +319,8 @@ export class BrowserWorker {
         }
         case "pdf": {
           this.imageAllowed(s);
+          // v125: a PDF prints field values as they are, unmasked.
+          if (s.secrets.size) throw new Error("FLEET_BROWSER_CAPTURE_REFUSED");
           const data = await page.pdf({ printBackground: true, format: step.format === "Letter" ? "Letter" : "A4", landscape: step.landscape === true });
           await this.produce(s, action, lease, "pdf", `page-${Date.now().toString(36)}.pdf`, data);
           break;
@@ -376,7 +390,10 @@ export class BrowserWorker {
     try { const u = new URL(page.url()); url = u.protocol === "about:" ? page.url() : `${u.origin}${u.pathname}`; } catch { url = ""; }
     const where = (p: Page) => { try { const x = new URL(p.url()); return x.protocol === "about:" ? p.url() : `${x.origin}${x.pathname}`; } catch { return ""; } };
     const tabs = s.pages.length > 1 ? s.pages.map((p, i) => ({ index: i, current: p === s.page, url: where(p) })) : undefined;
-    return { url, title: data.title, text: text.slice(0, TEXT_MAX),
+    // v125: a page can echo a value into its title.
+    let title = String(data.title ?? "");
+    for (const secret of s.secrets) if (secret.length >= (s.ownerValues.has(secret) ? 3 : 4)) title = title.split(secret).join("[credential]");
+    return { url, title, text: text.slice(0, TEXT_MAX),
       truncated: text.length > TEXT_MAX, fields: data.fields, links: JSON.parse(linksJson), buttons: data.buttons, captcha: data.captcha,
       ...(tabs ? { tabs } : {}), ...(s.lastDialog ? { lastDialog: s.lastDialog } : {}),
       ...(data.captcha ? { note: "A CAPTCHA is present: a human-only step. account.mark {status: human_action_required} keeps every other action going." } : {}) };

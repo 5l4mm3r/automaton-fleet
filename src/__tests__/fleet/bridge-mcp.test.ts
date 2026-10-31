@@ -385,6 +385,9 @@ describe.skipIf(!PG_BIN)("MCP stdio process against the real Operator API", () =
     expect((await m.wait(5)).result.isError).toBe(false);
     m.send({ jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "fleet_status", arguments: {} } });
     expect(JSON.parse((await m.wait(6)).result.content[0].text).data.schema.version).toBe(FLEET_PG_SCHEMA_VERSION);
+    m.send({ jsonrpc: "2.0", id: 61, method: "tools/call", params: { name: "fleet_containment", arguments: {} } });
+    const contained = JSON.parse((await m.wait(61)).result.content[0].text);
+    expect(contained.data).toMatchObject({ cognitionEnabled: expect.any(Boolean), inflightCalls: expect.any(Number), credit: { freeUsd1e8: expect.any(Number) } });
     m.send({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "shell", arguments: { cmd: "id" } } });
     expect((await m.wait(7)).error.code).toBe(-32602);
 

@@ -136,7 +136,7 @@ export function sealProviderSecret(brokerPublicDer: Buffer, name: string, json: 
   return sealTo(brokerPublicDer, json, `provider-upload:${name}`);
 }
 
-/** v125: the login of an account the owner made for an agent, sealed to the broker for that agent and platform. */
+/** v125: the login of an account the owner made for an agent, sealed to the broker for that agent. */
 export function sealAccountLogin(brokerPublicDer: Buffer, agentId: string, json: string): Buffer {
   if (!json || json.length > 8_000) throw new Error("a login is at most 8 kB");
   return sealTo(brokerPublicDer, json, `account-login:${agentId}`);

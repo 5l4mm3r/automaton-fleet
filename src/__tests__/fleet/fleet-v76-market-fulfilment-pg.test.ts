@@ -126,6 +126,9 @@ describe.skipIf(!PG_BIN)("v76: offers, buyers, reviews and delivery (PostgreSQL)
   });
 
   it("custody reads open checkouts' status: APPROVED is captured, COMPLETED read back, VOIDED fails; backed off", async () => {
+    // v125: a held agent cannot open a payment link; a named release can.
+    expect((await R.econ(F, "paypal.checkout", { venture: "sheets", amountMinor: 900, description: "Budget workbook", fulfilment: "digital_file", idempotencyKey: idem() })).code).toBe("FLEET_PREPARATION_HOLD");
+    await R.q(`SELECT fleet.fleet_admin_outward_release($1, $2::jsonb, 'proof: checkout status reads', $3)`, [F.id, JSON.stringify({ actions: ["storefront"], expiresHours: 1 }), OWNER]);
     const c = await R.econ(F, "paypal.checkout", { venture: "sheets", amountMinor: 900, description: "Budget workbook", fulfilment: "digital_file", idempotencyKey: idem() });
     const checkoutId = c.checkout.checkoutId as string;
     const orderId = await open(checkoutId);
@@ -145,6 +148,7 @@ describe.skipIf(!PG_BIN)("v76: offers, buyers, reviews and delivery (PostgreSQL)
     await cx("cx_paypal_status_checked", ["custody-executor", v.checkout.checkoutId, "VOIDED"]);
     expect(await R.one(`(SELECT status || '/' || failure_code FROM fleet.fleet_paypal_checkouts WHERE checkout_id = $1)`, [v.checkout.checkoutId])).toBe("failed/paypal_order_voided");
     expect((await R.econ(F, "order.list", { orderId: v.order.orderId })).orders[0]).toMatchObject({ payment: "cancelled", status: "cancelled" });
+    await R.q(`SELECT fleet.fleet_admin_outward_hold($1, $2)`, [F.id, OWNER]);
   });
 
   it("a product publishes only on a passing review of exactly its files, with the public site, a rail and a mailbox", async () => {

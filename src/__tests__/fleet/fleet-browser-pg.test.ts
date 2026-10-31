@@ -510,12 +510,40 @@ describe.skipIf(!PG_BIN || !CHROME || !OPENSSL)("v37 general browser operator wi
     expect(JSON.stringify(await refused(R.econ(A, "account.password_confirm", { accountId: h.accountId })))).toMatch(/FLEET_OWNER_ACCOUNT/);
     const phish = await browse(A, "browser.act", { sessionId: opened.sessionId, steps: [{ action: "goto", url: PHISH }, { action: "fill", selector: "#password", credential: "password" }] });
     expect(phish.result.code).toBe("FLEET_ORIGIN_NOT_PINNED");
+    // The password goes only into a real password field: never a text box or an embedded frame, where it could be read back or sent elsewhere.
+    const step = async (st: any[]) => browse(A, "browser.act", { sessionId: opened.sessionId, steps: st });
+    await step([{ action: "goto", url: `${SITE}/login` }]);
+    expect((await step([{ action: "fill", selector: "#user", credential: "password" }])).result.code).toBe("FLEET_BROWSER_FIELD_REFUSED");
+    expect((await step([{ action: "fill", frame: "iframe", selector: "#pass", credential: "password" }])).result.code).toBe("FLEET_ORIGIN_NOT_PINNED");
+    expect((await step([{ action: "fill", selector: "#pass", credential: "password" }, { action: "pdf" }])).result.code).toBe("FLEET_BROWSER_CAPTURE_REFUSED");
+    // The agent's own-account path cannot replace the owner's login; nor can it shred or re-label the account.
+    const gen = await step([{ action: "fill", selector: "#pass", credential: "generate_password" }]);
+    expect(gen.status, JSON.stringify(gen.result)).toBe("failed");
+    expect((await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_agent_account_credentials WHERE account_id = $1 AND status = 'active' AND kind = 'password'`, [h.accountId]))[0].n).toBe(1);
+    expect((await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_agent_account_credentials WHERE account_id = $1 AND status <> 'active'`, [h.accountId]))[0].n).toBe(0);
+    for (const op of ["account.revoke", "account.close", "account.rotate", "account.recover"]) {
+      expect(JSON.stringify(await refused(R.econ(A, op, { accountId: h.accountId, reason: "not mine to do", kind: "password" }))), op).toMatch(/FLEET_OWNER_ACCOUNT/);
+    }
+    expect(JSON.stringify(await refused(R.econ(A, "account.mark", { accountId: h.accountId, status: "closed" })))).toMatch(/FLEET_OWNER_ACCOUNT/);
+    expect(JSON.stringify(await refused(R.econ(A, "account.mark", { accountId: h.accountId, status: "human_action_required", verification: "identity_verified" })))).toMatch(/FLEET_OWNER_ACCOUNT/);
+    await ok(R.econ(A, "account.mark", { accountId: h.accountId, status: "human_action_required", note: "a CAPTCHA needs the owner" }));
+    // A corrected login for the same account replaces the old one; it doesn't reopen a state the owner chose.
+    const again = (await R.q(`SELECT fleet.fleet_admin_account_handover($1, 'marketplace', 'shop.test', $2, 'ownerhanded', $3, $4) AS r`, [A.id, SITE, sealAccountLogin(Buffer.from(pub, "base64"), A.id, JSON.stringify({ password: `${password}-2` })), OWNER]))[0].r as any;
+    expect(again.accountId).toBe(h.accountId);
+    await broker.tick();
+    expect((await R.q(`SELECT status FROM fleet.fleet_agent_accounts WHERE account_id = $1`, [h.accountId]))[0].status).toBe("human_action_required");
+    expect((await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_agent_account_credentials WHERE account_id = $1 AND status = 'rotated' AND kind = 'password'`, [h.accountId]))[0].n).toBe(1);
     // Sealed for another agent: refused, erased, and the owner hears it.
     const wrong = sealAccountLogin(Buffer.from(pub, "base64"), "01M3F50SH7PNX2E3GST13J52AS", JSON.stringify({ password }));
     const bad = (await R.q(`SELECT fleet.fleet_admin_account_handover($1, 'marketplace', 'shop2.test', $2, 'ownerhanded2', $3, $4) AS r`, [A.id, SITE, wrong, OWNER]))[0].r as any;
     await broker.tick();
     expect((await R.q(`SELECT sealed IS NULL AS s, status FROM fleet.fleet_account_handover_inbox WHERE upload_id = $1`, [bad.uploadId]))[0]).toMatchObject({ s: true, status: "failed" });
     expect(await R.q(`SELECT 1 FROM fleet.fleet_notifications WHERE code = 'ACCOUNT_HANDOVER_FAILED' AND detail ->> 'accountId' = $1`, [bad.accountId])).toHaveLength(1);
+    // Sealing it again after a failure works: same account, no dead end.
+    const fixed = (await R.q(`SELECT fleet.fleet_admin_account_handover($1, 'marketplace', 'shop2.test', $2, 'ownerhanded2', $3, $4) AS r`, [A.id, SITE, sealAccountLogin(Buffer.from(pub, "base64"), A.id, JSON.stringify({ password })), OWNER]))[0].r as any;
+    expect(fixed.accountId).toBe(bad.accountId);
+    await broker.tick();
+    expect((await R.q(`SELECT status FROM fleet.fleet_agent_accounts WHERE account_id = $1`, [bad.accountId]))[0].status).toBe("active");
   });
 
   it("scope and reach: sessions are per agent; private addresses are unreachable; roles are least-privilege", async () => {

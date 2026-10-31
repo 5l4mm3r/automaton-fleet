@@ -4,10 +4,14 @@
  * its own route for Claude's bridge alone under the existing `ops.read.status` scope, so no new key and no new authority; `fleet_status` is unchanged.
  */
 import { V37_SQL } from "./migrations-phase37.js";
-import { V79_SQL } from "./migrations-phase79.js";
+import { BROWSER_READ_STEPS, V79_SQL } from "./migrations-phase79.js";
+import { V124_SQL } from "./migrations-phase124.js";
 import { restate as restateRaw } from "./migrations-phase42.js";
 
 const restate = (src: string, name: string, edits: Array<[string, string]>) => restateRaw(src, name, edits.map(([a, b]) => [a, b.replace(/\$/g, "$$$$")] as [string, string]));
+const READ_STEPS = BROWSER_READ_STEPS.filter((x) => x !== "set_content").map((x) => `'${x}'`).join(",");
+const OUTWARD_GATE = /  IF p_op IN \([^)]*\) AND fleet_outward_refusal\(p_agent, p_op, a\) IS NOT NULL THEN/.exec(V124_SQL)?.[0] ?? "";
+if (!OUTWARD_GATE) throw new Error("v125: the outward gate was not found");
 const IXWORKER = `IF p_worker IS NULL OR p_worker !~ '^[a-z0-9-]{3,40}$' THEN RAISE EXCEPTION 'FLEET_BAD_REQUEST: worker name'; END IF;`;
 
 export const V125_SQL = `
@@ -40,8 +44,18 @@ BEGIN
   IF lower(p_platform) !~ '^[a-z0-9][a-z0-9._-]{1,40}$' THEN RAISE EXCEPTION 'FLEET_BAD_REQUEST: platform is a short slug such as the site''s host'; END IF;
   IF NOT fleet_origin_ok(lower(p_origin)) THEN RAISE EXCEPTION 'FLEET_ORIGIN_INVALID: origin is https://host[:port] of the site''s login pages'; END IF;
   IF p_sealed IS NULL OR octet_length(p_sealed) NOT BETWEEN 32 AND 64000 THEN RAISE EXCEPTION 'FLEET_BAD_REQUEST: a sealed login'; END IF;
-  INSERT INTO fleet_agent_accounts (account_id, agent_id, account_kind, platform, handle, status, origins, owner_provided)
-    VALUES (gen_random_uuid(), p_agent, p_kind, lower(p_platform), p_handle, 'creating', ARRAY[lower(p_origin)], true) RETURNING * INTO x;
+  -- A corrected or changed login for the same account: the same record, a new upload.
+  SELECT * INTO x FROM fleet_agent_accounts WHERE agent_id = p_agent AND platform = lower(p_platform) AND lower(handle) = lower(p_handle) FOR UPDATE;
+  IF x.account_id IS NULL THEN
+    INSERT INTO fleet_agent_accounts (account_id, agent_id, account_kind, platform, handle, status, origins, owner_provided)
+      VALUES (gen_random_uuid(), p_agent, p_kind, lower(p_platform), p_handle, 'creating', ARRAY[lower(p_origin)], true) RETURNING * INTO x;
+  ELSIF NOT x.owner_provided THEN
+    RAISE EXCEPTION 'FLEET_INVALID_STATE: the agent already runs its own account with that name';
+  ELSIF EXISTS (SELECT 1 FROM fleet_account_handover_inbox WHERE account_id = x.account_id AND status = 'pending') THEN
+    RAISE EXCEPTION 'FLEET_INVALID_STATE: a login for this account is still being installed';
+  ELSE
+    UPDATE fleet_agent_accounts SET origins = ARRAY[lower(p_origin)], updated_at = now() WHERE account_id = x.account_id RETURNING * INTO x;
+  END IF;
   INSERT INTO fleet_account_handover_inbox (account_id, agent_id, sealed, uploaded_by) VALUES (x.account_id, p_agent, p_sealed, p_actor) RETURNING upload_id INTO v_id;
   PERFORM fleet_event('account_handed_over', p_agent, p_actor, jsonb_build_object('accountId', x.account_id, 'platform', x.platform, 'origin', lower(p_origin), 'uploadId', v_id));
   RETURN jsonb_build_object('ok', true, 'accountId', x.account_id, 'uploadId', v_id, 'note', 'the identity broker installs it within a minute; the agent is told when it is ready');
@@ -69,18 +83,52 @@ BEGIN
       'action', 'seal it again with economy-account-handover'), 'account-handover-failed:' || p_upload);
     RETURN jsonb_build_object('ok', true);
   END IF;
+  UPDATE fleet_agent_account_credentials SET status = 'rotated', retired_at = now() WHERE account_id = r.account_id AND kind IN ('password','totp') AND status = 'active';
   INSERT INTO fleet_agent_account_credentials (credential_id, account_id, agent_id, kind, vault_ref)
     SELECT gen_random_uuid(), r.account_id, r.agent_id, e ->> 'kind', e ->> 'vaultRef' FROM jsonb_array_elements(p_refs) e WHERE e ->> 'kind' IN ('password','totp');
-  UPDATE fleet_agent_accounts SET status = 'active', updated_at = now() WHERE account_id = r.account_id RETURNING * INTO x;
+  -- A frozen or closed account stays as the owner left it.
+  UPDATE fleet_agent_accounts SET status = CASE WHEN status = 'creating' THEN 'active' ELSE status END, updated_at = now() WHERE account_id = r.account_id RETURNING * INTO x;
   PERFORM fleet_event('account_handover_installed', r.agent_id, 'identity-broker', jsonb_build_object('accountId', r.account_id, 'platform', x.platform));
-  PERFORM fleet_admin_owner_task_send(r.agent_id, left('Your account on ' || x.platform || ' is ready', 120),
-    format('The owner set up your account on %s (accountId %s, origin %s). Log in through the browser with {credential: "username"} and {credential: "password"}; you will never see the password. Outside work there needs the owner''s release first. Its login and origins are the owner''s: you cannot change them.', x.platform, x.account_id, x.origins[1]), r.uploaded_by);
+  -- The login is safe in the vault whatever happens next; telling the agent must not undo that.
+  BEGIN
+    PERFORM fleet_admin_owner_task_send(r.agent_id, left('Your account on ' || x.platform || ' is ready', 120),
+      format('The owner set up your account on %s (accountId %s, origin %s). Log in through the browser with {credential: "username"} and {credential: "password"}; you will never see the password. Outside work there needs the owner''s release first. Its login and sites are the owner''s: you cannot change them.', x.platform, x.account_id, x.origins[1]), r.uploaded_by);
+  EXCEPTION WHEN OTHERS THEN
+    PERFORM fleet_notify('AMBER', 'ACCOUNT_HANDOVER_UNTOLD', r.agent_id, 'An account login was installed, but the agent could not be told', jsonb_build_object('accountId', r.account_id, 'action', 'send the agent an owner task naming the account'), 'account-handover-untold:' || p_upload);
+  END;
   RETURN jsonb_build_object('ok', true);
 END $$;
 
 ${restate(V37_SQL, "fleet_econ_account_add_origin", [[`  IF NOT fleet_origin_ok(v_origin) THEN RAISE EXCEPTION 'FLEET_ORIGIN_INVALID: origin is https://host[:port]'; END IF;`,
   `  IF x.owner_provided THEN RAISE EXCEPTION 'FLEET_OWNER_ACCOUNT: this account''s sites are the owner''s to set; your login is only ever filled on them'; END IF;
   IF NOT fleet_origin_ok(v_origin) THEN RAISE EXCEPTION 'FLEET_ORIGIN_INVALID: origin is https://host[:port]'; END IF;`]])}
+
+-- ═══ Second review, 31 Oct: what a hold really holds, and whose account it is ═══
+-- A page the agent writes itself can run script that reaches any site, so set_content is not reading.
+CREATE OR REPLACE FUNCTION fleet_browser_steps_read_only(p_steps jsonb) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
+  SELECT jsonb_typeof(p_steps) = 'array' AND jsonb_array_length(p_steps) > 0
+     AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(p_steps) e WHERE COALESCE(e ->> 'action', '') NOT IN (${READ_STEPS}))
+$$;
+
+-- The agent's own account path cannot replace the login of an account the owner made: no generated password, no captured seed.
+${restate(V79_SQL, "ix_browser_credential_record", [[`  -- v79: a new password for an account that already has one waits as PENDING`,
+  `  IF EXISTS (SELECT 1 FROM fleet_agent_accounts x WHERE x.account_id = r.account_id AND x.owner_provided) THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'FLEET_OWNER_ACCOUNT');
+  END IF;
+  -- v79: a new password for an account that already has one waits as PENDING`]])}
+
+${restate(V124_SQL, "api_economy", [[OUTWARD_GATE, `  IF (p_op IN ('account.revoke','account.rotate','account.recover','account.close','account.operate','account.password_discard')
+      OR (p_op = 'account.mark' AND (COALESCE(a ->> 'status', '') <> 'human_action_required' OR a ? 'verification')))
+     AND EXISTS (SELECT 1 FROM fleet_agent_accounts x WHERE x.account_id::text = a ->> 'accountId' AND x.agent_id = p_agent AND x.owner_provided) THEN
+    RAISE EXCEPTION 'FLEET_OWNER_ACCOUNT: this account is the owner''s; you can use it and ask them to change it';
+  END IF;
+${OUTWARD_GATE.replace(") AND fleet_outward_refusal", ",'enquiry.reply','enquiry.quote','enquiry.decline','paypal.checkout') AND fleet_outward_refusal")}`]])}
+
+-- No sale record starts while the agent is held from outside work: nothing it could have sold is live.
+${restate(V79_SQL, "fleet_econ_sale_report", [[`BEGIN
+`, `BEGIN
+  IF fleet_outward_held(p_agent) THEN RAISE EXCEPTION 'FLEET_PREPARATION_HOLD: you are in preparation: no sales until the owner releases outside work'; END IF;
+`]])}
 
 ${restate(V79_SQL, "fleet_econ_account_password_confirm", [[`  IF NOT EXISTS (SELECT 1 FROM fleet_agent_account_credentials WHERE account_id = x.account_id AND kind = 'password' AND status = 'pending') THEN`,
   `  IF x.owner_provided THEN RAISE EXCEPTION 'FLEET_OWNER_ACCOUNT: this account''s password is the owner''s: ask the owner to change it'; END IF;
