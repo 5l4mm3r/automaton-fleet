@@ -35,10 +35,25 @@ CREATE TABLE fleet_account_handover_inbox (
 );
 CREATE TRIGGER fleet_account_handover_inbox_no_delete BEFORE DELETE ON fleet_account_handover_inbox FOR EACH ROW EXECUTE FUNCTION fleet_history_immutable();
 
+-- ═══ Disabled in this release ═══
+-- The review of 31 Oct found defects in how a handed-over login is protected in the browser (docs/evaluations/launch-candidate/external-run/ACTIVATION.md). Until they are
+-- fixed and reviewed, no login can be taken in, stored or installed, and no account can be marked as the owner's, whoever asks and by whatever route.
+-- Nothing in this release can turn it on: only a later migration can replace this function.
+CREATE FUNCTION fleet_account_handover_enabled() RETURNS boolean LANGUAGE sql STABLE AS $$ SELECT false $$;
+CREATE FUNCTION fleet_account_handover_gate() RETURNS trigger LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+BEGIN
+  IF NOT fleet_account_handover_enabled() THEN RAISE EXCEPTION 'FLEET_HANDOVER_DISABLED: account handover is disabled in this release'; END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER fleet_account_handover_inbox_gate BEFORE INSERT ON fleet_account_handover_inbox FOR EACH ROW EXECUTE FUNCTION fleet_account_handover_gate();
+CREATE TRIGGER fleet_agent_accounts_owner_gate BEFORE INSERT OR UPDATE OF owner_provided ON fleet_agent_accounts FOR EACH ROW WHEN (NEW.owner_provided) EXECUTE FUNCTION fleet_account_handover_gate();
+
 CREATE FUNCTION fleet_admin_account_handover(p_agent text, p_kind text, p_platform text, p_origin text, p_handle text, p_sealed bytea, p_actor text) RETURNS jsonb LANGUAGE plpgsql
 SET search_path = @@SCHEMA@@, pg_temp AS $$
 DECLARE x fleet_agent_accounts; v_id uuid;
 BEGIN
+  IF NOT fleet_account_handover_enabled() THEN RAISE EXCEPTION 'FLEET_HANDOVER_DISABLED: account handover is disabled in this release'; END IF;
   IF p_actor IS NULL OR p_actor !~ '^operator:[A-Za-z0-9._-]{1,64}$' THEN RAISE EXCEPTION 'FLEET_ACTOR_INVALID: an owner operation names its operator'; END IF;
   IF NOT EXISTS (SELECT 1 FROM fleet_agents WHERE agent_id = p_agent) THEN RAISE EXCEPTION 'FLEET_NOT_FOUND: no such agent'; END IF;
   IF p_kind NOT IN ('domain','website','marketplace','storefront','social','service','api','payment_profile','other') THEN RAISE EXCEPTION 'FLEET_BAD_REQUEST: kind'; END IF;
@@ -66,6 +81,7 @@ CREATE FUNCTION ix_account_handover_inbox(p_worker text) RETURNS jsonb LANGUAGE 
 SET search_path = @@SCHEMA@@, pg_temp AS $$
 BEGIN
   ${IXWORKER}
+  IF NOT fleet_account_handover_enabled() THEN RETURN '[]'::jsonb; END IF;
   RETURN COALESCE((SELECT jsonb_agg(jsonb_build_object('uploadId', upload_id, 'accountId', account_id, 'agentId', agent_id, 'sealedB64', encode(sealed, 'base64')) ORDER BY created_at)
     FROM fleet_account_handover_inbox WHERE status = 'pending'), '[]'::jsonb);
 END $$;
@@ -76,6 +92,7 @@ SET search_path = @@SCHEMA@@, pg_temp AS $$
 DECLARE r fleet_account_handover_inbox; x fleet_agent_accounts;
 BEGIN
   ${IXWORKER}
+  IF NOT fleet_account_handover_enabled() THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_HANDOVER_DISABLED'); END IF;
   UPDATE fleet_account_handover_inbox SET status = CASE WHEN p_ok THEN 'installed' ELSE 'failed' END, sealed = NULL, error = CASE WHEN p_ok THEN NULL ELSE left(p_error, 200) END, installed_at = now()
    WHERE upload_id = p_upload AND status = 'pending' RETURNING * INTO r;
   IF NOT FOUND THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_NOT_FOUND'); END IF;

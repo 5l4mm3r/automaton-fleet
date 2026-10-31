@@ -489,6 +489,8 @@ describe.skipIf(!PG_BIN || !CHROME || !OPENSSL)("v37 general browser operator wi
   });
 
   it("v125: the owner hands over an account they made: sealed to the broker, used by the agent, never seen; its sites and password stay the owner's", async () => {
+    // Disabled in this release (fleet-v125-containment-pg proves it). These checks stay for the later release that replaces this function.
+    await R.q(`CREATE OR REPLACE FUNCTION fleet.fleet_account_handover_enabled() RETURNS boolean LANGUAGE sql STABLE AS $$ SELECT true $$`);
     const password = `Owner-${crypto.randomUUID()}`;
     users.set("ownerhanded", { email: "owner@site.test", password, verified: true });
     const pub = (broker as any).o.ownerVault.publicKeyBase64();

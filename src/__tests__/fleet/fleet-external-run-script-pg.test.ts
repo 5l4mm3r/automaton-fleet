@@ -98,7 +98,7 @@ need_sudo() { true; }
     expect(await paused(G)).toBe(true);
     expect(fs.existsSync(path.join(dir, "fleet-external-run-stop.timer"))).toBe(true);
     expect((await R.q(`SELECT ceiling_minor FROM fleet.fleet_cognition_run_budgets WHERE agent_id = $1 AND ended_at IS NULL`, [F.id]))[0].ceiling_minor).toBeTruthy();
-    expect((await R.q(`SELECT title FROM fleet.fleet_owner_tasks WHERE agent_id = $1 AND closed_at IS NULL`, [F.id]))[0].title).toBe("Choose your venture");
+    expect((await R.q(`SELECT title FROM fleet.fleet_owner_tasks WHERE agent_id = $1 AND closed_at IS NULL`, [F.id]))[0].title).toBe("Preparation: venture, evidence, offer, setup request");
     expect(await R.q(`SELECT 1 FROM fleet.fleet_outward_release`)).toHaveLength(0);
     expect((await R.q(`SELECT fleet.fleet_sales_open() AS o`))[0].o).toBe(false);
     const held = (p: Promise<any>) => p.then((x) => x.code, (e: Error) => e.message);

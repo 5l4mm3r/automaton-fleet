@@ -186,6 +186,29 @@ need_sudo() { true; }
     expect(ended[0].end_reason).toMatch(/finished and is waiting/);
   });
 
+  it("reaching a human dependency stops the run through the timer, and an older one does not", async () => {
+    const ask = (key: string) => R.q(`INSERT INTO fleet.fleet_owner_requests (request_id, agent_id, idempotency_key, kind, action, title, detail, blocks_action)
+      VALUES (gen_random_uuid(), $1, $2, 'non_delegable_credential', 'open account', 'An account', 'Which site, for what', true)`, [F.id, key]);
+    await ask("older-than-the-run");
+    await new Promise((res) => setTimeout(res, 1100));
+    const r = run("start", "1");
+    expect(r.code, r.out).toBe(0);
+    expect(sc("start", `${TIMER}.service`).status).toBe(0); // a tick with only the older request does not stop it
+    expect(await paused()).toBe(false);
+    await ask("in-this-run");
+    await until("the stop at the dependency", async () => (await paused()) && !(await inference()));
+    await until("the timer removing itself", () => unitFiles().length === 0);
+    const ended = await R.q(`SELECT end_reason FROM fleet.fleet_cognition_run_budgets WHERE agent_id = $1 ORDER BY starts_at DESC LIMIT 1`, [F.id]);
+    expect(ended[0].end_reason).toMatch(/human dependency/);
+  });
+
+  it("refuses to start if account handover has been turned on", async () => {
+    await R.q(`CREATE OR REPLACE FUNCTION fleet.fleet_account_handover_enabled() RETURNS boolean LANGUAGE sql STABLE AS $$ SELECT true $$`);
+    expect(run("--check", "1").out).toMatch(/account handover must be disabled/);
+    await R.q(`CREATE OR REPLACE FUNCTION fleet.fleet_account_handover_enabled() RETURNS boolean LANGUAGE sql STABLE AS $$ SELECT false $$`);
+    expect(run("--check", "1").code).toBe(0);
+  });
+
   it("with the timer gone altogether, the database still refuses a paid call past the end time", async () => {
     const r = run("start", "1");
     expect(r.code, r.out).toBe(0);

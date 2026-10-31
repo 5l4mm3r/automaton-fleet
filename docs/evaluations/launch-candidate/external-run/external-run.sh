@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# PREPARATION PHASE ONLY. Agent-1 chooses a venture and platform, records why, prepares an actionable offer privately and, if it needs an account, asks once; then it is stopped.
+# PREPARATION RUN ONLY, not the external pilot. Deliverable: one selected venture, the evidence for it, an actionable offer, and the exact account or setup request needed to proceed.
+# It reuses Agent-1's existing research and is stopped once the deliverable is written or a human dependency is reached.
 # PREPARED, NOT RUN. Needs the owner's word and the release in place. Nothing here registers, publishes, sends, pays or accepts an order: the agent stays held from outside work.
 # The later external pilot is a separate approval and is not started by anything in this script.
 #
@@ -14,7 +15,7 @@
 # Limits, each enforced apart from the agent's instructions:
 #   1. Provider credit: free credit is set to exactly the allowance, by a hold that stays after a stop. A call reserves its worst case first, so spend cannot pass it; the run usually stops short of it.
 #   2. Run ceiling and end time in the database (fleet_cognition_run_budgets): past the end time every paid call is refused, with or without any timer.
-#   3. A durable timer on this host (unit files, Persistent=true) runs `tick` every 5 minutes: at the end time, or once Agent-1's latest call slept, or after IDLE_MINUTES without a call,
+#   3. A durable timer on this host (unit files, Persistent=true) runs `tick` every 5 minutes: at the end time, once Agent-1 has asked for something only a person can do, once its latest call slept, or after IDLE_MINUTES without a call,
 #      it pauses Agent-1 and turns inference off. So waiting costs nothing: there is no paid wake to poll with. A tick that fails exits non-zero and the next tick tries again.
 #   4. Outward hold: no release is granted, so account registration, browser actions that change a page, mail, listings and API jobs are refused.
 #   Sales stay closed and the spend breaker stays tripped: customer checkout and card or order spending stay shut. Fleet Control AI and image generation must be off.
@@ -70,15 +71,17 @@ total_units() { python3 -c "from decimal import Decimal as D; print(int(D('$TOTA
 
 # Free: reads only, unless a stop is due. The time limit always applies; the waiting rules wait for a call in flight.
 tick() {
-  local row rc due slept idle inflight why=""
+  local row rc due slept idle inflight human why=""
   row=$(Q "WITH b AS (SELECT starts_at, ends_at FROM fleet_cognition_run_budgets WHERE agent_id = '$A1' AND ended_at IS NULL),
     l AS (SELECT at, tool_calls FROM fleet_cognition_log WHERE agent_id = '$A1' AND at >= (SELECT starts_at FROM b) ORDER BY seq DESC LIMIT 1)
     SELECT COALESCE((SELECT now() >= ends_at FROM b), true), COALESCE((SELECT tool_calls::text ~ '\"sleep\"' FROM l), false),
       COALESCE(now() - GREATEST((SELECT starts_at FROM b), (SELECT at FROM l)) > make_interval(mins => $IDLE_MINUTES), true),
-      (SELECT count(*) FROM fleet_cognition_inflight WHERE agent_id = '$A1')"); rc=$?
+      (SELECT count(*) FROM fleet_cognition_inflight WHERE agent_id = '$A1'),
+      (SELECT count(*) FROM fleet_owner_requests WHERE agent_id = '$A1' AND status = 'pending' AND created_at >= (SELECT starts_at FROM b))"); rc=$?
   (( rc == 0 )) && [[ -n "$row" ]] || { echo "tick: the database cannot be read; the next tick tries again"; return 1; }
-  IFS='|' read -r due slept idle inflight <<< "$row"
+  IFS='|' read -r due slept idle inflight human <<< "$row"
   if [[ "$due" == t ]]; then why="time limit reached or no run open"
+  elif [[ "$inflight" == 0 && "$human" != 0 ]]; then why="a human dependency has been reached"
   elif [[ "$inflight" == 0 && "$slept" == t ]]; then why="Agent-1 has finished and is waiting"
   elif [[ "$inflight" == 0 && "$idle" == t ]]; then why="no paid call for $IDLE_MINUTES minutes"
   fi
@@ -121,6 +124,7 @@ gates() {
   [[ "$(Q "SELECT string_agg(left(agent_id,6)||':'||paused,',' ORDER BY agent_id) FROM fleet_founder_cognition")" == "$AGENTS_PAUSED" ]] || die "both agents must be paused"
   [[ "$(Q 'SELECT cognition_enabled FROM fleet_cognition_policy WHERE id = 1')" == f ]] || die "inference must be off"
   [[ "$(Q 'SELECT count(*) FROM fleet_cognition_inflight')" == 0 ]] || die "a call is in flight"
+  [[ "$(Q 'SELECT fleet_account_handover_enabled()')" == f ]] || die "account handover must be disabled"
   [[ "$(Q 'SELECT fleet_sales_open()')" == f ]] || die "sales must be closed"
   [[ "$(Q 'SELECT tripped FROM fleet_spend_circuit_breaker WHERE id = 1')" == t ]] || die "the spend breaker must be tripped"
   [[ "$(Q 'SELECT count(*) FROM fleet_outward_release WHERE expires_at > now()')" == 0 ]] || die "an outward release is live"
@@ -140,7 +144,7 @@ gates() {
   echo "gates passed for $hours h. Cumulative ceiling $TOTAL_USD USD; actually consumed since $ANCHOR_HOLD: $USED; allowance now: $CEIL; balance $BAL, reserve $RES, new cap hold $NEWHOLD (all 1e-8 USD); run ceiling $RUNMINOR minor units"
 }
 
-TASK='This is the preparation phase. Choose the business you will run, for customers outside the Fleet, on whichever platform you judge best; nothing is pre-selected. Decide from the public web. Record it with venture create. Write research/venture-decision.md: the customer problem, evidence of real demand, why this platform, cost, your doubts, and what its terms let an automated operator do, with sources. Write research/offer.md, complete enough to act on without asking you: who it is for, what they get, price, delivery, the listing or outreach text as it would appear, and the first week of actions once you have access. Nothing goes outside in this phase: registering, publishing, mail and orders are refused, so do not try. If you need an account, record one external dependency of kind non_delegable_credential: which site, account type, purpose, email, and the actions you need permitted there. Ask once. When all of this is done, call sleep with no review time; only then. Your run is stopped at that point and costs nothing while it waits. The owner reads your work and decides what happens next. Your budget is small and a hard limit.'
+TASK='This is a preparation run, not the launch. Deliver four things, reusing what is already in research/ (including external-opportunities.md) instead of repeating it; search only for what your decision still depends on. 1. One selected venture and platform: record it with venture create. Nothing is pre-selected. 2. The evidence for it, in research/venture-decision.md: the customer problem, real demand, cost, your doubts, and what the terms of the platform let an automated operator do, with sources. 3. An actionable offer, in research/offer.md, complete enough to act on without asking you: who it is for, what they get, price, delivery, the listing or outreach text as it would appear, and the first week of actions once you have access. 4. The exact account or setup request needed to proceed: site, account type, purpose, email, and the actions you need permitted. Put it at the end of research/offer.md. Nothing goes outside in this run: registering, publishing, mail and orders are refused, so do not try. Write the files first. Then, as your last step, record that request once as an external dependency of kind non_delegable_credential if a person must do it, and call sleep with no review time. Either one ends your run, at no cost while it waits. The owner reads your work and decides what happens next. Your budget is small and a hard limit.'
 
 case "${1:-}" in
   --check) gates "${2:-}"; status ;;
@@ -158,15 +162,15 @@ case "${1:-}" in
     cli economy-engineering-credit-hold "$HOLD" anthropic "$NEWHOLD" "external run cap: leaves only what is left of the owner's ceiling free" > /dev/null || die "cap hold refused: stopped; inference is off"
     [[ "$(free)" == "$CEIL" ]] || die "free credit is $(free), expected $CEIL: stopped; inference is off"
     undo() { stop_run "$1" || die "$1, and the stop did not complete: see above"; die "$1: stopped"; }
-    cli cognition-run "$A1" start "$RUNMINOR" "$HOURS" "preparation run: venture selection and actionable offer" > /dev/null || undo "run ceiling refused"
+    cli cognition-run "$A1" start "$RUNMINOR" "$HOURS" "preparation run: venture, evidence, offer, setup request" > /dev/null || undo "run ceiling refused"
     timer_arm || undo "stop timer refused"
     [[ "$(timer_active)" == active ]] || undo "stop timer not active"
     # The tick must have worked from inside its own unit before Agent-1 can spend anything.
     tick_now || undo "the stop tick failed in its unit"
     cli cognition-enable anthropic claude-opus-5-5 --max-output 4000 --in-microcents 400 --out-microcents 2000 > /dev/null || undo "inference refused"
-    [[ "$(Q "SELECT count(*) FROM fleet_owner_tasks WHERE agent_id='$A1' AND closed_at IS NULL AND title='Choose your venture'")" != 0 ]] \
-      || cli founder-task "$A1" "Choose your venture" "$TASK" > /dev/null || undo "task refused"
-    cli founder-cognition "$A1" resume "preparation run approved by the owner: venture selection and actionable offer" > /dev/null || undo "resume refused"
+    [[ "$(Q "SELECT count(*) FROM fleet_owner_tasks WHERE agent_id='$A1' AND closed_at IS NULL AND title='Preparation: venture, evidence, offer, setup request'")" != 0 ]] \
+      || cli founder-task "$A1" "Preparation: venture, evidence, offer, setup request" "$TASK" > /dev/null || undo "task refused"
+    cli founder-cognition "$A1" resume "preparation run approved by the owner: venture, evidence, offer, setup request" > /dev/null || undo "resume refused"
     echo "== Agent-1 resumed $(date -u +%FT%TZ); it stops within 5 minutes of finishing and at $HOURS h at the latest"; status ;;
   *) sed -n 2,11p "$0"; exit 2 ;;
 esac

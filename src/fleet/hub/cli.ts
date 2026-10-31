@@ -213,7 +213,7 @@
  *   economy-channel-payout-decide <payoutId> book <paypalTxnId> | reject [note…]
  *                                                                           (v79) a payout paid INTO the treasury PayPal: book it against its credit
  *                                                                           (when the automatic match was ambiguous), or reject the claim
- *   economy-account-handover <agentId> <kind> <platform> <https://origin> <username> <login.json> --fingerprint <sha256>   seal the login of an account you made for an agent; delete the file after
+ *   economy-account-handover (DISABLED in this release, refused at the database) <agentId> <kind> <platform> <https://origin> <username> <login.json> --fingerprint <sha256>   seal the login of an account you made for an agent; delete the file after
  *   economy-external-orders                                                 (read: outside orders and records the gateway could not store)
  *   economy-external-order-confirm <orderId> delivered|cancelled <what the platform shows…>
  *   economy-external-order-confirm <orderId> refunded <totalMinor> <what the platform shows…>   (records your check; moves no money)
@@ -767,6 +767,7 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
     case "economy-destination-paypal":
       return h.destinationPaypal(p[0], p[1], actor);
     case "economy-account-handover": {
+      if ((await h.accountHandoverEnabled()) !== true) throw new Error("FLEET_HANDOVER_DISABLED: account handover is disabled in this release; nothing was read or sent");
       const [agentId, kind, platform, origin, handle, file] = positional(a, ["--fingerprint"]);
       if (!agentId || !kind || !platform || !origin || !handle || !file) throw new Error("FLEET_BAD_REQUEST: economy-account-handover <agentId> <kind> <platform> <https://origin> <username> <login.json> --fingerprint <sha256>");
       const key = await h.brokerOwnerKey();

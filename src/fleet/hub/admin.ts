@@ -23,6 +23,7 @@ export class PgHubAdmin {
     this.pool.on("error", () => {});
   }
 
+
   async close(): Promise<void> {
     await this.pool.end();
   }
@@ -352,6 +353,8 @@ export class PgHubAdmin {
   /** v79: each agent's business beyond the offer pages (channels, live presence, leads, obligations, outreach, payouts awaiting the owner). */
   business(agentId: string | null) { return this.one(`SELECT fleet_business_admin_json($1) AS r`, [agentId]); }
   /** v79: the bank statement line that received a marketplace payout (owner_bank route). */
+  /** v125: disabled in this release, at the database; asked first so a login file is never opened for nothing. */
+  accountHandoverEnabled() { return this.one(`SELECT fleet_account_handover_enabled() AS r`, []) as Promise<unknown>; }
   accountHandover(agentId: string, kind: string, platform: string, origin: string, handle: string, sealed: Buffer, actor: string) {
     return this.one(`SELECT fleet_admin_account_handover($1, $2, $3, $4, $5, $6, $7) AS r`, [agentId, kind, platform, origin, handle, sealed, actor]);
   }
