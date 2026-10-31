@@ -136,10 +136,14 @@ export function sealProviderSecret(brokerPublicDer: Buffer, name: string, json: 
   return sealTo(brokerPublicDer, json, `provider-upload:${name}`);
 }
 
-/** v125: the login of an account the owner made for an agent, sealed to the broker for that agent. */
-export function sealAccountLogin(brokerPublicDer: Buffer, agentId: string, json: string): Buffer {
+/** v126: what a sealed login belongs to: it cannot be replayed onto another account or site. */
+export interface AccountLoginBinding { agentId: string; platform: string; handle: string; loginUrl: string }
+const loginAad = (b: AccountLoginBinding) => `account-login:${b.agentId}:${b.platform.toLowerCase()}:${b.handle.toLowerCase()}:${b.loginUrl.toLowerCase()}`;
+
+/** v125: the login of an account the owner made for an agent, sealed to the broker for that agent, account and site. */
+export function sealAccountLogin(brokerPublicDer: Buffer, binding: AccountLoginBinding, json: string): Buffer {
   if (!json || json.length > 8_000) throw new Error("a login is at most 8 kB");
-  return sealTo(brokerPublicDer, json, `account-login:${agentId}`);
+  return sealTo(brokerPublicDer, json, loginAad(binding));
 }
 
 export class OwnerIdentityVault {
@@ -171,9 +175,9 @@ export class OwnerIdentityVault {
     return v as Record<string, string>;
   }
 
-  /** v125: open a login the owner sealed for this agent. */
-  openAccountLogin(sealed: Buffer, agentId: string): Record<string, string> {
-    const v = JSON.parse(openSealed(this.privateDer, this.publicDer, sealed, `account-login:${agentId}`)) as unknown;
+  /** v125: open a login the owner sealed for this agent, account and site. */
+  openAccountLogin(sealed: Buffer, binding: AccountLoginBinding): Record<string, string> {
+    const v = JSON.parse(openSealed(this.privateDer, this.publicDer, sealed, loginAad(binding))) as unknown;
     if (!v || typeof v !== "object" || Array.isArray(v) || Object.values(v as Record<string, unknown>).some((x) => typeof x !== "string")) throw new Error("a login is one JSON object of strings");
     return v as Record<string, string>;
   }

@@ -213,7 +213,7 @@
  *   economy-channel-payout-decide <payoutId> book <paypalTxnId> | reject [note…]
  *                                                                           (v79) a payout paid INTO the treasury PayPal: book it against its credit
  *                                                                           (when the automatic match was ambiguous), or reject the claim
- *   economy-account-handover (DISABLED in this release, refused at the database) <agentId> <kind> <platform> <https://origin> <username> <login.json> --fingerprint <sha256>   seal the login of an account you made for an agent; delete the file after
+ *   economy-account-handover <agentId> <kind> <platform> <https://site/login-page> <username> <login.json> --fingerprint <sha256>   seal the login of an account you made for an agent; delete the file after
  *   economy-external-orders                                                 (read: outside orders and records the gateway could not store)
  *   economy-external-order-confirm <orderId> delivered|cancelled <what the platform shows…>
  *   economy-external-order-confirm <orderId> refunded <totalMinor> <what the platform shows…>   (records your check; moves no money)
@@ -767,9 +767,9 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
     case "economy-destination-paypal":
       return h.destinationPaypal(p[0], p[1], actor);
     case "economy-account-handover": {
-      if ((await h.accountHandoverEnabled()) !== true) throw new Error("FLEET_HANDOVER_DISABLED: account handover is disabled in this release; nothing was read or sent");
-      const [agentId, kind, platform, origin, handle, file] = positional(a, ["--fingerprint"]);
-      if (!agentId || !kind || !platform || !origin || !handle || !file) throw new Error("FLEET_BAD_REQUEST: economy-account-handover <agentId> <kind> <platform> <https://origin> <username> <login.json> --fingerprint <sha256>");
+      if ((await h.accountHandoverEnabled()) !== true) throw new Error("FLEET_HANDOVER_DISABLED: account handover is switched off; nothing was read or sent");
+      const [agentId, kind, platform, loginUrl, handle, file] = positional(a, ["--fingerprint"]);
+      if (!agentId || !kind || !platform || !loginUrl || !handle || !file) throw new Error("FLEET_BAD_REQUEST: economy-account-handover <agentId> <kind> <platform> <https://site/login-page> <username> <login.json> --fingerprint <sha256>");
       const key = await h.brokerOwnerKey();
       if (!key.ownerPub) throw new Error("FLEET_NOT_FOUND: the identity broker has not published its key (is it running?)");
       if (flag(a, "--fingerprint") !== key.fingerprint) throw new Error(`FLEET_KEY_MISMATCH: the broker key fingerprint is ${key.fingerprint}; pin it with --fingerprint`);
@@ -777,7 +777,7 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
       if (typeof value.password !== "string" || !value.password || Object.keys(value).some((k) => !["password", "totpSeed"].includes(k)) || Object.values(value).some((v) => typeof v !== "string" || !v)) {
         throw new Error('FLEET_BAD_REQUEST: the file is {"password": "...", "totpSeed": "..."} (totpSeed optional)');
       }
-      return h.accountHandover(agentId, kind, platform, origin, handle, sealAccountLogin(Buffer.from(key.ownerPub, "base64"), agentId, JSON.stringify(value)), actor);
+      return h.accountHandover(agentId, kind, platform, loginUrl, handle, sealAccountLogin(Buffer.from(key.ownerPub, "base64"), { agentId, platform, handle, loginUrl }, JSON.stringify(value)), actor);
     }
     case "economy-provider-secret": {
       const [name, file] = positional(a, ["--fingerprint"]);

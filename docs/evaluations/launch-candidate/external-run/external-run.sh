@@ -39,7 +39,7 @@ search_up() { systemctl is-active -q automaton-fleet-media; }
 need_sudo() { sudo -v; }
 # ── end of host bindings ──
 TIMER=fleet-external-run-stop; IDLE_MINUTES=${IDLE_MINUTES:-15}
-EXPECT_SCHEMA=125; HOLD="external-run-cap-$(date +%s)"; KEEP=stage2-obligation-reserve; OLD_HOLDS="stage1-research-cap stage2-cap"
+EXPECT_SCHEMA=126; HOLD="external-run-cap-$(date +%s)"; KEEP=stage2-obligation-reserve; OLD_HOLDS="stage1-research-cap stage2-cap"
 free() { Q "SELECT fleet_provider_credit_balance('anthropic') - fleet_provider_credit_held('anthropic')"; }
 die() { echo "!! $*"; exit 1; }
 
@@ -124,7 +124,6 @@ gates() {
   [[ "$(Q "SELECT string_agg(left(agent_id,6)||':'||paused,',' ORDER BY agent_id) FROM fleet_founder_cognition")" == "$AGENTS_PAUSED" ]] || die "both agents must be paused"
   [[ "$(Q 'SELECT cognition_enabled FROM fleet_cognition_policy WHERE id = 1')" == f ]] || die "inference must be off"
   [[ "$(Q 'SELECT count(*) FROM fleet_cognition_inflight')" == 0 ]] || die "a call is in flight"
-  [[ "$(Q 'SELECT fleet_account_handover_enabled()')" == f ]] || die "account handover must be disabled"
   [[ "$(Q 'SELECT fleet_sales_open()')" == f ]] || die "sales must be closed"
   [[ "$(Q 'SELECT tripped FROM fleet_spend_circuit_breaker WHERE id = 1')" == t ]] || die "the spend breaker must be tripped"
   [[ "$(Q 'SELECT count(*) FROM fleet_outward_release WHERE expires_at > now()')" == 0 ]] || die "an outward release is live"

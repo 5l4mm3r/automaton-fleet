@@ -202,13 +202,6 @@ need_sudo() { true; }
     expect(ended[0].end_reason).toMatch(/human dependency/);
   });
 
-  it("refuses to start if account handover has been turned on", async () => {
-    await R.q(`CREATE OR REPLACE FUNCTION fleet.fleet_account_handover_enabled() RETURNS boolean LANGUAGE sql STABLE AS $$ SELECT true $$`);
-    expect(run("--check", "1").out).toMatch(/account handover must be disabled/);
-    await R.q(`CREATE OR REPLACE FUNCTION fleet.fleet_account_handover_enabled() RETURNS boolean LANGUAGE sql STABLE AS $$ SELECT false $$`);
-    expect(run("--check", "1").code).toBe(0);
-  });
-
   it("with the timer gone altogether, the database still refuses a paid call past the end time", async () => {
     const r = run("start", "1");
     expect(r.code, r.out).toBe(0);

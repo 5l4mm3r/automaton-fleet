@@ -20,6 +20,9 @@ export interface BrowserAction {
   origins?: string[];
   /** v80: under an owner's scoped release (sales closed), outward steps run only on these origins; absent = unrestricted. */
   outwardOrigins?: string[];
+  /** v126: the session is on an account the owner made, and the login URL the owner pinned. */
+  ownerAccount?: boolean;
+  loginUrl?: string;
 }
 
 export type BxResult = { ok: true; [k: string]: unknown } | { ok: false; code: string; [k: string]: unknown };

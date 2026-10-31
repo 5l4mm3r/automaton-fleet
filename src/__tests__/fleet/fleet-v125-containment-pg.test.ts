@@ -45,6 +45,8 @@ describe.skipIf(!PG_BIN)("v125 containment (PostgreSQL)", { timeout: 300_000 }, 
   });
 
   it("account handover is disabled at the database, by every route, and the CLI opens no login file", async () => {
+    // v126 switches handover on; the gate stays the way to switch it off, and this is what off means.
+    await R.q(`CREATE OR REPLACE FUNCTION fleet.fleet_account_handover_enabled() RETURNS boolean LANGUAGE sql STABLE AS $$ SELECT false $$`);
     const sealed = Buffer.alloc(64, 1), site = "https://shop.test";
     const accounts = async () => (await R.q(`SELECT count(*)::int AS n FROM fleet.fleet_agent_accounts WHERE owner_provided`))[0].n;
     const refused = /FLEET_HANDOVER_DISABLED/;
@@ -61,7 +63,7 @@ describe.skipIf(!PG_BIN)("v125 containment (PostgreSQL)", { timeout: 300_000 }, 
     expect(await R.q(`SELECT 1 FROM fleet.fleet_events WHERE event_type LIKE 'account_hand%'`)).toHaveLength(0);
     // A login that got in earlier stays inert: the broker is given nothing and cannot install anything.
     await R.q(`CREATE OR REPLACE FUNCTION fleet.fleet_account_handover_enabled() RETURNS boolean LANGUAGE sql STABLE AS $$ SELECT true $$`);
-    const h = (await R.q(`SELECT fleet.fleet_admin_account_handover($1, 'marketplace', 'shop.test', $2, 'owner3', $3, $4) AS r`, [F.id, site, sealed, OWNER]))[0].r as { uploadId: string };
+    const h = (await R.q(`SELECT fleet.fleet_admin_account_handover($1, 'marketplace', 'shop.test', $2, 'owner3', $3, $4) AS r`, [F.id, `${site}/login`, sealed, OWNER]))[0].r as { uploadId: string };
     await R.q(`CREATE OR REPLACE FUNCTION fleet.fleet_account_handover_enabled() RETURNS boolean LANGUAGE sql STABLE AS $$ SELECT false $$`);
     expect((await R.q(`SELECT fleet.ix_account_handover_inbox('identity-broker') AS r`))[0].r).toEqual([]);
     expect((await R.q(`SELECT fleet.ix_account_handover_installed($1, 'identity-broker', true, NULL, '[]'::jsonb) AS r`, [h.uploadId]))[0].r).toMatchObject({ ok: false, code: "FLEET_HANDOVER_DISABLED" });

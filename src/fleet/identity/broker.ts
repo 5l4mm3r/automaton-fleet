@@ -257,15 +257,19 @@ export class IdentityBroker {
       let error: string | null = null;
       const refs: Array<{ kind: string; vaultRef: string }> = [];
       try {
-        const v = ov.openAccountLogin(Buffer.from(u.sealedB64, "base64"), u.agentId);
+        const v = ov.openAccountLogin(Buffer.from(u.sealedB64, "base64"), { agentId: u.agentId, platform: u.platform, handle: u.handle, loginUrl: u.loginUrl });
         if (!v.password) throw new Error("FLEET_ACCOUNT_LOGIN_FIELDS");
         refs.push({ kind: "password", vaultRef: this.vault.put({ agentId: u.agentId, accountId: u.accountId, kind: "password" }, v.password) });
         if (v.totpSeed) refs.push({ kind: "totp", vaultRef: this.vault.put({ agentId: u.agentId, accountId: u.accountId, kind: "totp" }, v.totpSeed) });
         n++;
       } catch (err) {
-        error = /FLEET_[A-Z_]+/.exec(err instanceof Error ? err.message : "")?.[0] ?? "not sealed to this broker's key for that agent";
+        error = /FLEET_[A-Z_]+/.exec(err instanceof Error ? err.message : "")?.[0] ?? "not sealed to this broker's key for that agent, account and site";
+        for (const r of refs) this.vault.shred(r.vaultRef); // v126: nothing half-installed stays behind
+        refs.length = 0;
       }
-      await this.gw.accountHandoverInstalled(u.uploadId, this.worker, error === null, error, refs);
+      const done = await this.gw.accountHandoverInstalled(u.uploadId, this.worker, error === null, error, refs);
+      // v126: the login just replaced is destroyed, not only retired.
+      if (done.ok) for (const ref of (done as { retired?: string[] }).retired ?? []) this.vault.shred(ref);
       this.log(error ? "error" : "info", "account_handover_install", { accountId: u.accountId, ok: error === null, code: error });
     }
     return n;
