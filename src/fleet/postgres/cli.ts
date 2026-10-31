@@ -47,7 +47,7 @@
  *   pnpm fleet:admin operator-api enable|disable <reason…>
  *   pnpm fleet:admin operator-list
  *   pnpm fleet:admin operator-archive --before <ISO time> --out <new file> [--max-rows N<=100000]
- *   pnpm fleet:admin operator-actions enable|disable <reason…>   (schema v9, Phase D3 mutation kill switch; default off)
+ *   pnpm fleet:admin operator-actions enable|disable [--only hold_agent,release_agent_hold] [--agent <id>] <reason…>   (schema v9, Phase D3 mutation kill switch; default off; v125 narrows it)
  *   pnpm fleet:admin proposal-list [all]
  *   pnpm fleet:admin proposal-approve <proposalId> [note…]      (executes the proposal; owner only)
  *   pnpm fleet:admin proposal-reject <proposalId> [note…]
@@ -247,7 +247,12 @@ export async function runOperatorCommand(cmd: string, rest: string[], admin: PgO
     case "operator-actions": {
       const mode = positional[0];
       if (mode !== "enable" && mode !== "disable") throw new Error("usage: operator-actions enable|disable <reason…>");
-      return admin.setActionsEnabled({ enabled: mode === "enable", reason: reason(1), actor });
+      // v125: --only and --agent narrow what the switch allows, enforced at the database. Without them it is the whole switch, as before.
+      const list = (f: string) => argValue(rest, f)?.split(",").map((x) => x.trim()).filter(Boolean);
+      const only = list("--only"), agents = list("--agent");
+      if (only && (!only.length || only.some((x) => !["hold_agent", "release_agent_hold"].includes(x)))) throw new Error("--only takes hold_agent and/or release_agent_hold");
+      if (agents && (!agents.length || agents.some((x) => !/^[0-9A-Za-z]{26}$/.test(x)))) throw new Error("--agent takes agent ids");
+      return admin.setActionsEnabled({ enabled: mode === "enable", reason: reason(1), actor, only, agents });
     }
     case "proposal-list":
       return admin.listProposals({ all: positional[0] === "all" });

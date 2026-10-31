@@ -45,6 +45,8 @@ export interface EphemeralPg {
   superUrl: string;
   /** Re-run scripts/fleet-db-roles.sql (idempotency tests). */
   applyRoles(): void;
+  /** Stops or starts this server, keeping its data (a real outage for restart tests); stop() still removes everything. */
+  ctl(mode: "stop" | "start"): void;
   stop(): void;
 }
 
@@ -109,6 +111,10 @@ export async function startEphemeralPg(bin: string): Promise<EphemeralPg> {
     ["-D", data, "-l", path.join(dir, "log"), "-w", "-o", `-p ${port} -c listen_addresses=127.0.0.1 -c unix_socket_directories='' -c max_connections=200`, "start"],
     { stdio: "ignore" },
   );
+  const ctl = (mode: "stop" | "start") => {
+    execFileSync(path.join(bin, "pg_ctl"), mode === "stop" ? ["-D", data, "-m", "fast", "-w", "stop"]
+      : ["-D", data, "-l", path.join(dir, "log"), "-w", "-o", `-p ${port} -c listen_addresses=127.0.0.1 -c unix_socket_directories='' -c max_connections=200`, "start"], { stdio: "ignore" });
+  };
   const stop = () => {
     try {
       execFileSync(path.join(bin, "pg_ctl"), ["-D", data, "-m", "immediate", "stop"], { stdio: "ignore" });
@@ -158,6 +164,7 @@ export async function startEphemeralPg(bin: string): Promise<EphemeralPg> {
       codeUrl: `postgresql://fleet_code_login:${codePw}@127.0.0.1:${port}/${dbname}`,
       buildUrl: `postgresql://fleet_build_login:${buildPw}@127.0.0.1:${port}/${dbname}`,
       applyRoles,
+      ctl,
       stop,
     };
   } catch (err) {

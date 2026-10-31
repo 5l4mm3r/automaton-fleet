@@ -116,6 +116,8 @@ export function containmentBody(c: Record<string, unknown>): Record<string, unkn
   const when = (v: unknown) => (typeof v === "string" && !Number.isNaN(Date.parse(v)) ? new Date(v).toISOString() : null);
   return {
     actionsEnabled: bool(c.actionsEnabled),
+    actionsOnly: Array.isArray(c.actionsOnly) ? c.actionsOnly.filter((x) => typeof x === "string" && /^op_act_[a-z_]{1,40}$/.test(x)) : null,
+    actionsAgents: Array.isArray(c.actionsAgents) ? c.actionsAgents.filter((x) => typeof x === "string" && /^[0-9A-Z]{26}$/.test(x)) : null,
     cognitionEnabled: bool(c.cognitionEnabled),
     salesOpen: bool(c.salesOpen),
     spendBreakerTripped: bool(c.spendBreakerTripped),

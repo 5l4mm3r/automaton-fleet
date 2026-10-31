@@ -42,13 +42,14 @@ describe.skipIf(!PG_BIN)("the activation script, rehearsed", { timeout: 300_000 
     for (const m of [ID, BIND, END]) expect(src.split(m).length, m).toBe(2);
     const [head, rest] = src.split(ID), [, tail] = rest.split(END);
     const sorted = [F.id, G.id].sort();
-    const ids = `A1=${F.id}; AGENTS_PAUSED="${sorted.map((a) => `${a.slice(0, 6)}:true`).join(",")}"; EXPECT_COMMIT=rehearsal\n`;
+    const ids = `A1=${F.id}; AGENTS_PAUSED="${sorted.map((a) => `${a.slice(0, 6)}:true`).join(",")}"; EXPECT_COMMIT=rehearsal\nTOTAL_USD=\${TOTAL_USD:-10}; ANCHOR_HOLD=stage2-cap; RECORDED_USED=\${RECORDED_USED:-0}\n`;
     const bind = `Q() { "${path.join(PG_BIN!, "psql")}" "${R.pgc.ownerUrl}" -X -q -At -c "SET default_transaction_read_only=on; SET search_path=fleet; $1"; }
 cli() { echo "cli $*" >> ${dir}/cli.log; if [[ -n "\${FAIL:-}" && "$*" == *"\${FAIL}"* ]]; then return 1; fi; FLEET_ADMIN_DATABASE_URL='${R.pgc.ownerUrl}' FLEET_PG_SCHEMA=fleet "${process.execPath}" "${CLI}" "$@"; }
 release_now() { echo "\${RELEASE:-rehearsal}"; }
-timer_arm() { echo "$1" > ${dir}/timer; }
-timer_active() { [[ -f ${dir}/timer ]] && echo active || echo inactive; }
-timer_off() { rm -f ${dir}/timer; true; }
+W=${dir}; UNITDIR=${dir}; UNIT_IDENTITY=""; TICK_CAL='*:0/5'
+sc() { [[ "$1" != is-active ]] && return 0; [[ -f ${dir}/$2 ]] && echo active || echo inactive; }
+unit_write() { [[ -z "\${FAIL_TIMER:-}" ]] || return 1; printf '%s\\n' "$2" > "$UNITDIR/$1"; }
+unit_rm() { rm -f -- "$UNITDIR/$1"; }
 search_up() { true; }
 need_sudo() { true; }
 `;
@@ -58,7 +59,7 @@ need_sudo() { true; }
 
   it("--check passes, reports the figures and changes nothing", async () => {
     const before = await holds(), f0 = await free();
-    const r = run(["--check", "10", "6"]);
+    const r = run(["--check", "6"]);
     expect(r.code, r.out).toBe(0);
     expect(r.out).toContain("gates passed");
     expect(await holds()).toEqual(before);
@@ -68,33 +69,34 @@ need_sudo() { true; }
 
   it("refuses a ceiling below one call's reservation, bad hours and the wrong release, with nothing changed", async () => {
     const before = await holds();
-    expect(run(["start", "0.50", "6"]).out).toMatch(/below one call/);
-    expect(run(["start", "10", "99"]).out).toMatch(/hours is 1 to 24/);
-    expect(run(["start", "10", "6"], { RELEASE: "other" }).out).toMatch(/current release/);
+    expect(run(["start", "6"], { TOTAL_USD: "0.50" }).out).toMatch(/below one call/);
+    expect(run(["start", "6"], { RECORDED_USED: "1" }).out).toMatch(/anchor is wrong/);
+    expect(run(["start", "99"]).out).toMatch(/hours is 1 to 24/);
+    expect(run(["start", "6"], { RELEASE: "other" }).out).toMatch(/current release/);
     expect(await holds()).toEqual(before);
     expect(await inference()).toBe(false);
     expect(await paused(F)).toBe(true);
   });
 
   it("a failure at inference leaves Agent-1 paused, inference off, no timer or task, and a retry works from there", async () => {
-    const r = run(["start", "10", "6"], { FAIL: "cognition-enable" });
+    const r = run(["start", "6"], { FAIL: "cognition-enable" });
     expect(r.code).toBe(1);
     expect(r.out).toMatch(/inference refused/);
     expect(await inference()).toBe(false);
     expect(await paused(F)).toBe(true);
-    expect(fs.existsSync(path.join(dir, "timer"))).toBe(false);
+    expect(fs.existsSync(path.join(dir, "fleet-external-run-stop.timer"))).toBe(false);
     expect(await R.q(`SELECT 1 FROM fleet.fleet_owner_tasks WHERE closed_at IS NULL`)).toHaveLength(0);
   });
 
   it("start: free credit is exactly the ceiling, the customer reserve stays, one agent runs under its stops, and outside work is refused", async () => {
-    const r = run(["start", "10", "6"]);
+    const r = run(["start", "6"]);
     expect(r.code, r.out).toBe(0);
     expect(await free()).toBe(1_000_000_000);
     expect(await holds()).toEqual(["external-run-cap", "stage2-obligation-reserve"]);
     expect(await inference()).toBe(true);
     expect(await paused(F)).toBe(false);
     expect(await paused(G)).toBe(true);
-    expect(fs.existsSync(path.join(dir, "timer"))).toBe(true);
+    expect(fs.existsSync(path.join(dir, "fleet-external-run-stop.timer"))).toBe(true);
     expect((await R.q(`SELECT ceiling_minor FROM fleet.fleet_cognition_run_budgets WHERE agent_id = $1 AND ended_at IS NULL`, [F.id]))[0].ceiling_minor).toBeTruthy();
     expect((await R.q(`SELECT title FROM fleet.fleet_owner_tasks WHERE agent_id = $1 AND closed_at IS NULL`, [F.id]))[0].title).toBe("Choose your venture");
     expect(await R.q(`SELECT 1 FROM fleet.fleet_outward_release`)).toHaveLength(0);
@@ -113,22 +115,50 @@ need_sudo() { true; }
     expect(st).toContain("inference t");
     expect(st).toMatch(/since start: calls 0, errors 0, cost 1e-8 USD 0/);
     expect(st).not.toMatch(/ERROR|does not exist/);
-    expect(run(["start", "10", "6"]).out).toMatch(/both agents must be paused/);
+    expect(run(["start", "6"]).out).toMatch(/both agents must be paused/);
   });
 
   it("a stop that fails to stop says so and keeps the stop timer and run ceiling", async () => {
     const r = run(["stop", "rehearsal"], { FAIL: "founder-cognition", SETTLE: "0" });
     expect(r.code).toBe(1);
     expect(r.out).toContain("NOT STOPPED");
-    expect(fs.existsSync(path.join(dir, "timer"))).toBe(true);
+    expect(fs.existsSync(path.join(dir, "fleet-external-run-stop.timer"))).toBe(true);
     expect(await R.q(`SELECT 1 FROM fleet.fleet_cognition_run_budgets WHERE agent_id = $1 AND ended_at IS NULL`, [F.id])).toHaveLength(1);
+  });
+
+  it("the tick does nothing while Agent-1 works, and a due tick that cannot stop reports failure", async () => {
+    expect(run(["tick"]).code).toBe(0);
+    expect(await paused(F)).toBe(false);
+    const r = run(["tick"], { IDLE_MINUTES: "0", FAIL: "founder-cognition" });
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("NOT STOPPED");
+    expect(fs.existsSync(path.join(dir, "fleet-external-run-stop.timer"))).toBe(true);
+    expect(await inference()).toBe(false);
+    expect(run(["stop", "rehearsal"]).code).toBe(0);
+    const again = run(["start", "6"]);
+    expect(again.code, again.out).toBe(0);
+    expect(await R.q(`SELECT 1 FROM fleet.fleet_owner_tasks WHERE closed_at IS NULL`)).toHaveLength(1);
+  });
+
+  it("a fresh ceiling is impossible: a second start allows only what the credit log says is left", async () => {
+    expect(run(["stop", "rehearsal"]).code).toBe(0);
+    await R.q(`INSERT INTO fleet.fleet_provider_credit_events (provider, kind, usd_microcents, request_id, recorded_by) VALUES ('anthropic', 'consumption', -123456789, gen_random_uuid(), 'controller')`);
+    const check = run(["--check", "6"]);
+    expect(check.out).toMatch(/actually consumed since stage2-cap: 123456789; allowance now: 876543211/);
+    const r = run(["start", "6"]);
+    expect(r.code, r.out).toBe(0);
+    expect(await free()).toBe(876_543_211);
+    expect(run(["status"]).out).toMatch(/consumed since stage2-cap 123456789; left 876543211/);
+    expect(await holds()).toEqual(["external-run-cap", "stage2-obligation-reserve"]);
+    const row = await R.q(`SELECT 1 FROM fleet.fleet_provider_credit_holds WHERE run_id = 'stage2-cap' AND status <> 'open'`);
+    expect(row).toHaveLength(1);
   });
 
   it("stop: paused, inference off, timer gone, run ended; holds stay; repeating it is harmless", async () => {
     for (let i = 0; i < 2; i++) expect(run(["stop", "rehearsal"]).code).toBe(0);
     expect(await paused(F)).toBe(true);
     expect(await inference()).toBe(false);
-    expect(fs.existsSync(path.join(dir, "timer"))).toBe(false);
+    expect(fs.existsSync(path.join(dir, "fleet-external-run-stop.timer"))).toBe(false);
     expect(await R.q(`SELECT 1 FROM fleet.fleet_cognition_run_budgets WHERE agent_id = $1 AND ended_at IS NULL`, [F.id])).toHaveLength(0);
     expect(await holds()).toEqual(["external-run-cap", "stage2-obligation-reserve"]);
   });

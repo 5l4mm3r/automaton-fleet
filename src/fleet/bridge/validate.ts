@@ -338,7 +338,11 @@ export function validateTreasury(d: unknown): Record<string, unknown> {
 }
 
 export function validateContainment(d: unknown): Record<string, unknown> {
-  const o = obj(d, ["actionsEnabled", "cognitionEnabled", "salesOpen", "spendBreakerTripped", "inflightCalls", "credit", "agents"], "containment");
+  const o = obj(d, ["actionsEnabled", "actionsOnly", "actionsAgents", "cognitionEnabled", "salesOpen", "spendBreakerTripped", "inflightCalls", "credit", "agents"], "containment");
+  for (const k of ["actionsOnly", "actionsAgents"] as const) {
+    const v = o[k];
+    if (v !== null && (!Array.isArray(v) || v.some((x) => typeof x !== "string"))) bad(`containment.${k}`, "expected a list of names, or null");
+  }
   obj(o.credit, ["balanceUsd1e8", "heldUsd1e8", "freeUsd1e8", "holds"], "containment.credit");
   if (!Array.isArray(o.agents)) bad("containment.agents", "expected a list");
   return o;

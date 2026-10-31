@@ -206,15 +206,17 @@ export class PgOperatorAdmin {
   }
 
   /** Phase D3 mutation kill switch (default off). Enabling requires the API to be enabled. */
-  async setActionsEnabled(p: { enabled: boolean; reason: string; actor: string }) {
+  async setActionsEnabled(p: { enabled: boolean; reason: string; actor: string; only?: string[]; agents?: string[] }) {
     PgOperatorAdmin.requireActor(p.actor);
     return this.tx(async (c) => {
       const s = await c.query<{ api: boolean }>("SELECT operator_api_enabled AS api FROM fleet_operator_state WHERE id = 1 FOR UPDATE");
       if (p.enabled && !s.rows[0]?.api) throw new Error("enable the Operator API first (operator-api enable)");
-      await c.query("UPDATE fleet_operator_state SET operator_actions_enabled = $1, updated_at = now(), updated_by = $2 WHERE id = 1", [p.enabled, p.actor.slice(0, 128)]);
+      // v125: limits go with this switching; switching off clears them, so the next enable states its own.
+      await c.query("UPDATE fleet_operator_state SET operator_actions_enabled = $1, actions_only = $3, actions_agents = $4, updated_at = now(), updated_by = $2 WHERE id = 1",
+        [p.enabled, p.actor.slice(0, 128), p.enabled ? p.only?.map((x) => `op_act_${x}`) ?? null : null, p.enabled ? p.agents?.map((x) => x.toUpperCase()) ?? null : null]);
       const generation = await this.bumpGeneration(c, p.actor);
-      await this.event(c, "operator_actions_enabled_set", p.actor, { enabled: p.enabled, generation, reason: p.reason });
-      return { actionsEnabled: p.enabled, generation };
+      await this.event(c, "operator_actions_enabled_set", p.actor, { enabled: p.enabled, generation, reason: p.reason, only: p.only ?? null, agents: p.agents ?? null });
+      return { actionsEnabled: p.enabled, generation, only: p.only ?? null, agents: p.agents ?? null };
     });
   }
 

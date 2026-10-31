@@ -3,6 +3,7 @@
  * stops it: pause, inference switch, hold, calls in flight, credit and its holds, the run's ceiling, sales, the spend breaker and the outward state. Read only:
  * its own route for Claude's bridge alone under the existing `ops.read.status` scope, so no new key and no new authority; `fleet_status` is unchanged.
  */
+import { V9_SQL } from "./migrations-phase9.js";
 import { V37_SQL } from "./migrations-phase37.js";
 import { BROWSER_READ_STEPS, V79_SQL } from "./migrations-phase79.js";
 import { V124_SQL } from "./migrations-phase124.js";
@@ -103,6 +104,15 @@ ${restate(V37_SQL, "fleet_econ_account_add_origin", [[`  IF NOT fleet_origin_ok(
   `  IF x.owner_provided THEN RAISE EXCEPTION 'FLEET_OWNER_ACCOUNT: this account''s sites are the owner''s to set; your login is only ever filled on them'; END IF;
   IF NOT fleet_origin_ok(v_origin) THEN RAISE EXCEPTION 'FLEET_ORIGIN_INVALID: origin is https://host[:port]'; END IF;`]])}
 
+-- ═══ The operator actions switch, narrowed ═══
+-- Switched on as a whole it allows session revocation, health challenges, the lifecycle reaper and proposals, on any agent. Now it can be limited to named actions
+-- on named agents, enforced at the database whatever the API is asked. NULL keeps the earlier meaning.
+ALTER TABLE fleet_operator_state ADD COLUMN actions_only text[], ADD COLUMN actions_agents text[];
+${restate(V9_SQL, "fleet_operator_action_ok", [[`JOIN fleet_operator_state s ON s.id = 1 AND s.operator_api_enabled AND s.operator_actions_enabled`,
+  `JOIN fleet_operator_state s ON s.id = 1 AND s.operator_api_enabled AND s.operator_actions_enabled
+      AND (s.actions_only IS NULL OR p_fn = ANY (s.actions_only))
+      AND (s.actions_agents IS NULL OR upper(COALESCE(p_body, '{}')::jsonb ->> 'agentId') = ANY (s.actions_agents))`]])}
+
 -- ═══ Second review, 31 Oct: what a hold really holds, and whose account it is ═══
 -- A page the agent writes itself can run script that reaches any site, so set_content is not reading.
 CREATE OR REPLACE FUNCTION fleet_browser_steps_read_only(p_steps jsonb) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
@@ -138,6 +148,8 @@ CREATE FUNCTION fleet_operator_containment() RETURNS jsonb LANGUAGE sql STABLE
 SET search_path = @@SCHEMA@@, pg_temp AS $$
   SELECT jsonb_build_object(
     'actionsEnabled', (SELECT operator_actions_enabled FROM fleet_operator_state WHERE id = 1),
+    'actionsOnly', (SELECT to_jsonb(actions_only) FROM fleet_operator_state WHERE id = 1),
+    'actionsAgents', (SELECT to_jsonb(actions_agents) FROM fleet_operator_state WHERE id = 1),
     'cognitionEnabled', (SELECT cognition_enabled FROM fleet_cognition_policy WHERE id = 1),
     'salesOpen', fleet_sales_open(),
     'spendBreakerTripped', (SELECT tripped FROM fleet_spend_circuit_breaker WHERE id = 1),

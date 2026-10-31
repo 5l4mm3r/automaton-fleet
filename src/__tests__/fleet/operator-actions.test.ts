@@ -119,6 +119,7 @@ describe.skipIf(!PG_BIN)("D3 controlled operator actions (schema v9, PostgreSQL 
   const ledger = async () => (await owner.query(`SELECT * FROM fleet.fleet_operator_actions ORDER BY seq`)).rows;
   const agentRow = async (id: string) => (await owner.query(`SELECT * FROM fleet.fleet_agents WHERE agent_id = $1`, [id])).rows[0];
   const idem = () => crypto.randomBytes(18).toString("base64url");
+  const containment = async () => (await owner.query(`SELECT fleet.fleet_operator_containment() AS c`)).rows[0].c;
 
   beforeAll(async () => {
     pgc = await startEphemeralPg(PG_BIN!);
@@ -226,6 +227,44 @@ describe.skipIf(!PG_BIN)("D3 controlled operator actions (schema v9, PostgreSQL 
   });
 
   // ── Hold (pause) ──────────────────────────────────────────────
+
+  it("v125: narrowed, the switch allows only holding and releasing the named agent, whatever is asked", async () => {
+    const lim = await enroll("claude-limited-1", "bridge_claude", ALL_SCOPES);
+    const [a, other] = [agents[0], agents[1]];
+    await opAdmin.setActionsEnabled({ enabled: true, reason: "narrow", actor: OWNER, only: ["hold_agent", "release_agent_hold"], agents: [a.agentId] });
+    try {
+      expect((await client(lim).holdAgent({ agentId: a.agentId, reason: "narrow test" })).data).toMatchObject({ decision: "executed" });
+      expect((await client(lim).releaseAgentHold({ agentId: a.agentId, reason: "narrow test" })).data).toMatchObject({ decision: "executed" });
+      expect(await code(() => client(lim).holdAgent({ agentId: other.agentId, reason: "another agent" }))).toBe("SERVER_ERROR"); // refused at the database, reported as an internal failure: closed, not descriptive
+      expect((await agentRow(other.agentId)).operator_hold_at).toBeNull();
+            for (const refused of [() => client(lim).revokeAgentSessions({ agentId: a.agentId, reason: "not allowed" }), () => client(lim).requestHealthChallenge({ agentId: a.agentId }),
+        () => client(lim).reconcileLifecycle({}), () => client(lim).proposeAgentAction({ agentId: a.agentId, kind: "terminate_agent", reason: "not allowed" })]) {
+        expect(await code(refused)).toBe("SERVER_ERROR");
+      }
+      expect((await owner.query(`SELECT 1 FROM fleet.fleet_operator_proposals WHERE target_agent_id = $1 AND status = 'pending'`, [a.agentId])).rows).toHaveLength(0);
+      expect((await containment()).actionsOnly).toEqual(["op_act_hold_agent", "op_act_release_agent_hold"]);
+    } finally {
+      await opAdmin.setActionsEnabled({ enabled: true, reason: "test", actor: OWNER });
+    }
+    expect((await containment()).actionsOnly).toBeNull();
+  });
+
+  it("v125: limited to holding, the principal cannot lift its own hold; the owner can, and switching off clears the limits", async () => {
+    const lim = await enroll("claude-limited-2", "bridge_claude", ALL_SCOPES);
+    const a = agents[0];
+    await opAdmin.setActionsEnabled({ enabled: true, reason: "hold only", actor: OWNER, only: ["hold_agent"], agents: [a.agentId.toLowerCase()] });
+    try {
+      expect((await client(lim).holdAgent({ agentId: a.agentId, reason: "stop test" })).data).toMatchObject({ decision: "executed" });
+      expect(await code(() => client(lim).releaseAgentHold({ agentId: a.agentId, reason: "not allowed" }))).toBe("SERVER_ERROR");
+      expect((await agentRow(a.agentId)).operator_hold_at).not.toBeNull();
+      expect(await opAdmin.releaseHold({ agentId: a.agentId, actor: OWNER })).toBe("released");
+      await opAdmin.setActionsEnabled({ enabled: false, reason: "off", actor: OWNER });
+      const off = await containment();
+      expect(off).toMatchObject({ actionsEnabled: false, actionsOnly: null, actionsAgents: null });
+    } finally {
+      await opAdmin.setActionsEnabled({ enabled: true, reason: "test", actor: OWNER });
+    }
+  });
 
   it("hold: executed once, idempotent, audited; the agent keeps liveness only (database and service layers)", async () => {
     const a = agents[0];
