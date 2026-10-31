@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# Install ef4b880 (v123 Treasury Watch, v124 external orders, v125 containment and handover; schema 122 -> 125; UI 0.27.0 -> 0.28.0). PREPARED 31 Oct, NOT RUN: needs the owner's explicit approval.
-#   bash ~/rlc145/install-ef4b880.sh --check    read-only: every gate + the preflight of the LIVE config with the CANDIDATE code
-#   bash ~/rlc145/install-ef4b880.sh            gates → backup → fleet-release.sh → verification
+# Install bedb0b0 (v123 Treasury Watch, v124 external orders, v125 containment, narrowed operator switch, account handover disabled; schema 122 -> 125; UI 0.27.0 -> 0.28.0). PREPARED 31 Oct, NOT RUN: needs the owner's explicit approval.
+#   bash ~/rlc146/install-bedb0b0.sh --check    read-only: every gate + the preflight of the LIVE config with the CANDIDATE code
+#   bash ~/rlc146/install-bedb0b0.sh            gates → backup → fleet-release.sh → verification
 # The migration posts nothing: existing PayPal rows become history, without events, alerts or booking. Auto-booking stays OFF; switching
 # it on, the operator read's principal, the agents, inference, sales and the spend breaker are all separate decisions, untouched here.
 # Controller, custody, operator API and dashboard restart once. Founders keep running, PAUSED. Never restores a database.
 set -uo pipefail
-R=~/rlc145; MODE=${1:-apply}
+R=~/rlc146; MODE=${1:-apply}
 SELF=$(readlink -f "${BASH_SOURCE[0]}"); ARGS=("$@")
-if [[ "${FLEET_TEELOG:-}" != "$SELF" ]]; then FLEET_TEELOG="$SELF" bash "$SELF" "${ARGS[@]}" 2>&1 | tee -a "$R/install-ef4b880.log"; exit "${PIPESTATUS[0]}"; fi
+if [[ "${FLEET_TEELOG:-}" != "$SELF" ]]; then FLEET_TEELOG="$SELF" bash "$SELF" "${ARGS[@]}" 2>&1 | tee -a "$R/install-bedb0b0.log"; exit "${PIPESTATUS[0]}"; fi
 unset FLEET_TEELOG
 A1=01M3F50SH7PNX2E3GST13J52AS; A2=01M4C4NXT786Q4E9725N5A15KV
-C=ef4b880a1b5df6602c863efe5e673ac29dc5dcec; BUILD=efffa255067f1550332af4543919a6172e3fe378f299340b9c8665b51c0e010c
+C=bedb0b0a1b3aa51e39ab184262e3c45c47b7ca81; BUILD=b0e39d6bd3eba67c1bbca8548301ef04e3da4eb62b86e842a68a0949eeadfbe0
 LOCK=1df54e3526cb39c847d18fec14f1d4e3595557e34d94040c5b774f9b2f2a21c1; PREV=e0dc22321c0a6633ae74aadef0279074011a5b0a
 UI=0.28.0; UITGZ=$R/ui-0.28.0-9e9ebe9.tgz; UISHA=1dfdc30b3a02d7bbc4bbe790e34635ebcbb71f499721df37ce978d088fd300f0
 REL=/opt/automaton-fleet/releases/$C; N=/opt/automaton-fleet/node/bin/node
@@ -87,6 +87,7 @@ T2=$(date +%s); until [[ "$(founders)" == "$FOUNDERS_OK" ]] || (( $(date +%s) - 
 [[ "$(pid automaton-fleet-founder@$A1.service) $(pid automaton-fleet-founder@$A2.service)" == "$P1 $P2" ]] || die "a founder process changed"
 [[ "$(Q "SELECT count(*) FROM fleet_events WHERE created_at > to_timestamp($T0) AND event_type ~ 'unresponsive|died|challenge_failed|terminat'")" == 0 ]] || echo "  note: lifecycle events during the outage: $(Q "SELECT string_agg(event_type, ',') FROM fleet_events WHERE created_at > to_timestamp($T0) AND event_type ~ 'unresponsive|died|challenge_failed|terminat'")"
 contained || die "containment changed"
+[[ "$(Q 'SELECT fleet_account_handover_enabled()')" == f && "$(Q 'SELECT count(*) FROM fleet_account_handover_inbox')" == 0 ]] || die "account handover is not disabled and empty"
 [[ "$(Q "SELECT head_seq||' '||head_hash FROM fleet_ledger_head")" == "$H0" && "$(Q "SELECT fleet_ledger_verify()->>'ok'")" == true ]] || die "the ledger moved or does not verify"
 [[ "$(Q "SELECT count(*) FROM fleet_cognition_log")" == "$CL0" ]] || die "a cognition turn happened"
 [[ "$(Q "SELECT heartbeat_unresponsive_s||' '||heartbeat_dead_s||' '||termination_grace_s||' '||health_grace_s FROM fleet_state")" == "$TIMINGS" ]] || die "timings changed"

@@ -23,7 +23,7 @@
 set -uo pipefail
 SELF=$(readlink -f "$0")
 # ── production identities ──
-A1=01M3F50SH7PNX2E3GST13J52AS; AGENTS_PAUSED="01M3F5:true,01M4C4:true"; EXPECT_COMMIT=ef4b880a1b5df6602c863efe5e673ac29dc5dcec
+A1=01M3F50SH7PNX2E3GST13J52AS; AGENTS_PAUSED="01M3F5:true,01M4C4:true"; EXPECT_COMMIT=bedb0b0a1b3aa51e39ab184262e3c45c47b7ca81
 TOTAL_USD=11.511769; ANCHOR_HOLD=stage2-cap; RECORDED_USED=151176900
 # ── host bindings (a rehearsal replaces exactly this block; nothing else) ──
 N=/opt/automaton-fleet/node/bin/node; W=/opt/automaton-fleet/current
