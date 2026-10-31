@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# Install bedb0b0 (v123 Treasury Watch, v124 external orders, v125 containment, narrowed operator switch, account handover disabled; schema 122 -> 125; UI 0.27.0 -> 0.28.0). PREPARED 31 Oct, NOT RUN: needs the owner's explicit approval.
-#   bash ~/rlc146/install-bedb0b0.sh --check    read-only: every gate + the preflight of the LIVE config with the CANDIDATE code
-#   bash ~/rlc146/install-bedb0b0.sh            gates → backup → fleet-release.sh → verification
+# Install c69c832 (v123 Treasury Watch, v124 external orders, v125 containment, narrowed operator switch, account handover disabled; schema 122 -> 125; UI 0.27.0 -> 0.28.0). PREPARED 31 Oct, NOT RUN: needs the owner's explicit approval.
+#   bash ~/rlc147/install-c69c832.sh --check    read-only: every gate + the preflight of the LIVE config with the CANDIDATE code
+#   bash ~/rlc147/install-c69c832.sh            gates → backup → fleet-release.sh → verification
 # The migration posts nothing: existing PayPal rows become history, without events, alerts or booking. Auto-booking stays OFF; switching
 # it on, the operator read's principal, the agents, inference, sales and the spend breaker are all separate decisions, untouched here.
 # Controller, custody, operator API and dashboard restart once. Founders keep running, PAUSED. Never restores a database.
 set -uo pipefail
-R=~/rlc146; MODE=${1:-apply}
+R=~/rlc147; MODE=${1:-apply}
 SELF=$(readlink -f "${BASH_SOURCE[0]}"); ARGS=("$@")
-if [[ "${FLEET_TEELOG:-}" != "$SELF" ]]; then FLEET_TEELOG="$SELF" bash "$SELF" "${ARGS[@]}" 2>&1 | tee -a "$R/install-bedb0b0.log"; exit "${PIPESTATUS[0]}"; fi
+if [[ "${FLEET_TEELOG:-}" != "$SELF" ]]; then FLEET_TEELOG="$SELF" bash "$SELF" "${ARGS[@]}" 2>&1 | tee -a "$R/install-c69c832.log"; exit "${PIPESTATUS[0]}"; fi
 unset FLEET_TEELOG
 A1=01M3F50SH7PNX2E3GST13J52AS; A2=01M4C4NXT786Q4E9725N5A15KV
-C=bedb0b0a1b3aa51e39ab184262e3c45c47b7ca81; BUILD=fab6b089e16272f189c8f93f65d1c32cc458da7c8802ed37e7298ba417ef192d
+C=c69c8322f3f23ed2a240bf8bf07005962589cfa2; BUILD=1213542d7b08442c2695ec73e2da4b378d3e140a5eed3dcc0698638b26ee97fd
 LOCK=1df54e3526cb39c847d18fec14f1d4e3595557e34d94040c5b774f9b2f2a21c1; PREV=e0dc22321c0a6633ae74aadef0279074011a5b0a
 UI=0.28.0; UITGZ=$R/ui-0.28.0-9e9ebe9.tgz; UISHA=1dfdc30b3a02d7bbc4bbe790e34635ebcbb71f499721df37ce978d088fd300f0
 REL=/opt/automaton-fleet/releases/$C; N=/opt/automaton-fleet/node/bin/node

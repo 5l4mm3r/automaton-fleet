@@ -1,21 +1,32 @@
-# Approval package: release bedb0b0, one narrow operator permission, one optional preparation run
+# Approval package: release c69c832, one narrow operator permission, one optional preparation run
 
 Prepared 31 Oct 2026. **Nothing here has run on production.** No paid call was made. Agents paused; production is still e0dc223, schema 122 (signed read, 31 Oct).
 
 ## 1. The release
 | | |
 |---|---|
-| Commit | `bedb0b0a1b3aa51e39ab184262e3c45c47b7ca81` (supersedes ef4b880 and 608624a) |
-| Build | `fab6b089e16272f189c8f93f65d1c32cc458da7c8802ed37e7298ba417ef192d`: VPS pass 1, VPS pass 2 and a clean local build all agree |
-| Correction | The build first packaged here (`b0e39d6bd3eba67c1bbca8548301ef04e3da4eb62b86e842a68a0949eeadfbe0`) was wrong: it was computed from a working tree without `packages/dashboard-web/out`, which the identity covers (2,646 files against 2,799). `dist`, `src` and the manifests are byte-identical. The commit did not change. |
+| Commit | `c69c8322f3f23ed2a240bf8bf07005962589cfa2` (bedb0b0 plus a two-line fix to the revision rehearsal) |
+| Build | `1213542d7b08442c2695ec73e2da4b378d3e140a5eed3dcc0698638b26ee97fd` from a clean local build; VPS passes 1 and 2 must print this, otherwise stop |
 | Lockfile | `1df54e3526cb39c847d18fec14f1d4e3595557e34d94040c5b774f9b2f2a21c1` (unchanged) |
 | Change | schema 122 → 125, UI 0.27.0 → 0.28.0. Treasury Watch (auto-booking off), external orders, containment read, narrowed operator switch, **account handover disabled** |
 | Restart | Controller restarts once, target under 90 s; agents stay paused |
 
-Steps, each run by the owner: push; VPS build prints the pins; data, services and founder rehearsals; kit `~/rlc146`; `bash ~/rlc146/install-bedb0b0.sh --check`; then without `--check`.
+Steps, each run by the owner: push; VPS build prints the pins; data, services and founder rehearsals; kit `~/rlc147`; `bash ~/rlc147/install-c69c832.sh --check`; then without `--check`.
+
+### What happened to bedb0b0
+Pushed, built and rehearsed on the VPS on 31 Oct; **never installed**. Production stayed on e0dc223, schema 122, and matched its baseline afterwards.
+| Check on bedb0b0 | Result |
+|---|---|
+| Build | `fab6b089e16272f189c8f93f65d1c32cc458da7c8802ed37e7298ba417ef192d`, the same on VPS passes 1 and 2 and a clean local build. The build first packaged (`b0e39d6b…`) was wrong: computed from a working tree without `packages/dashboard-web/out`, which the identity covers |
+| Data rehearsal 122 → 125 | PASSED |
+| Services rehearsal | PASSED |
+| Founder upgrade e0dc223 → bedb0b0 | PASSED 27 of 27 |
+| Revision rehearsal | **FAILED at setup**: its registry still expected a held agent to open a checkout, which v125 now refuses |
+
+c69c832 launches that throwaway registry, and changes nothing else. All of these must run again on it.
 
 ### Checks on the frozen tree
-TypeScript clean. 60 targeted test files on this tree: 668 of 672 passed.
+TypeScript clean. 60 targeted test files on bedb0b0: 668 of 672 passed; c69c832 changes only the rehearsal, and its two test files pass (4 of 4, phases 1 to 3 here; the VPS runs all four).
 
 The other four also fail, the same way, on unmodified 608624a. Left as they are:
 | Test | Failure |
@@ -81,8 +92,8 @@ It registers, publishes, sends and sells nothing: outward hold, sales closed, sp
 | Limit | Value | Enforced by |
 |---|---|---|
 | **One cumulative ceiling** | **$11.511769** since `stage2-cap` was placed | Fixed in the script; raising it means editing the file |
-| Consumed | **$1.511769 at the 30 Oct reading; not re-read yet** | Credit log, read afresh by every `--check` and `start` |
-| Allowance | **$10.00 if usage is unchanged**; otherwise ceiling minus actual | Free credit set to exactly this by a hold that stays after a stop |
+| Consumed | **$1.5117686, read from production 31 Oct; last model call 30 Oct 13:43Z** | Credit log, read afresh by every `--check` and `start` |
+| Allowance | **$10.0000004** while usage stays there; otherwise ceiling minus actual | Free credit set to exactly this by a hold that stays after a stop |
 | Time | 6 hours | Database end time, and the timer |
 | Stops early | At a human dependency, at sleep, or after 15 minutes with no paid call | Timer, every 5 minutes |
 | Customer-reply reserve | $0.50 stays held | Not spendable |
@@ -92,12 +103,6 @@ It registers, publishes, sends and sells nothing: outward hold, sales closed, sp
 A second `start` allows only what is left (tested). If the log shows less than the recorded figure, the script refuses: that would mean the anchor is wrong. Earlier spend is counted once and never reset. Stage 1 ($5.3991206) closed before the anchor and is outside this ceiling.
 
 The run may stop well short of the allowance: a call needs $0.74 free to start, Agent-1's daily fuse applies, and stopping at sleep is deliberate. Unspent allowance stays available. No outcome or number of calls is promised.
-
-**Usage read:** direct production database reads from this session are refused by its permission check, and signed reads do not show credit, so the figure is not refreshed. `--check` reads it before anything is calculated. To read it sooner (read-only):
-```
-ssh agentfleet-vps "sudo -n -u postgres psql -X -q -At -d automaton_fleet -c \"SET default_transaction_read_only=on; SET search_path=fleet; SELECT COALESCE(-sum(e.usd_microcents),0) FROM fleet_provider_credit_holds h LEFT JOIN fleet_provider_credit_events e ON e.provider='anthropic' AND e.kind='consumption' AND e.at>=h.created_at WHERE h.run_id='stage2-cap'\""
-```
-The result is in units of 1e-8 USD; 151176900 is $1.511769.
 
 Commands, only if the owner chooses to run it: `bash external-run.sh --check 6`, then `start 6`. Stop any time: `bash external-run.sh stop <reason>`, or pause in Admin HQ.
 

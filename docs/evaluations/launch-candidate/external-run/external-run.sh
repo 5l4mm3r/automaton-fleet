@@ -23,8 +23,8 @@
 set -uo pipefail
 SELF=$(readlink -f "$0")
 # ── production identities ──
-A1=01M3F50SH7PNX2E3GST13J52AS; AGENTS_PAUSED="01M3F5:true,01M4C4:true"; EXPECT_COMMIT=bedb0b0a1b3aa51e39ab184262e3c45c47b7ca81
-TOTAL_USD=11.511769; ANCHOR_HOLD=stage2-cap; RECORDED_USED=151176900
+A1=01M3F50SH7PNX2E3GST13J52AS; AGENTS_PAUSED="01M3F5:true,01M4C4:true"; EXPECT_COMMIT=c69c8322f3f23ed2a240bf8bf07005962589cfa2
+TOTAL_USD=11.511769; ANCHOR_HOLD=stage2-cap; RECORDED_USED=151176860
 # ── host bindings (a rehearsal replaces exactly this block; nothing else) ──
 N=/opt/automaton-fleet/node/bin/node; W=/opt/automaton-fleet/current
 Q() { sudo -n -u postgres psql -X -q -At -d automaton_fleet -c "SET default_transaction_read_only=on; SET search_path=fleet; $1"; }
@@ -134,7 +134,7 @@ gates() {
   [[ "$(Q "SELECT count(*) FROM fleet_provider_credit_holds WHERE status='open' AND run_id='$KEEP'")" == 1 ]] || die "the customer-reply reserve is missing"
   search_up || echo "note: the search service is not running; the agent would have no web search"
   USED=$(used); [[ "$USED" =~ ^[0-9]+$ ]] || die "actual usage cannot be read: the anchor $ANCHOR_HOLD is missing"
-  (( USED >= RECORDED_USED )) || die "the log shows $USED consumed, below the $RECORDED_USED recorded on 30 Oct: the anchor is wrong; stopped"
+  (( USED >= RECORDED_USED )) || die "the log shows $USED consumed, below the $RECORDED_USED read on 31 Oct: the anchor is wrong; stopped"
   TOTAL=$(total_units); CEIL=$(( TOTAL - USED ))
   (( CEIL >= 74000000 )) || die "what is left of the ceiling ($CEIL) is below one call's reservation (0.74 USD)"
   BAL=$(Q "SELECT fleet_provider_credit_balance('anthropic')")
