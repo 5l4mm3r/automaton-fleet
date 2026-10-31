@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# Install 608624a (v123 Treasury Watch, v124 external orders, v125 containment and handover; schema 122 -> 125; UI 0.27.0 -> 0.28.0). PREPARED 31 Oct, NOT RUN: needs the owner's explicit approval.
-#   bash ~/rlc144/install-608624a.sh --check    read-only: every gate + the preflight of the LIVE config with the CANDIDATE code
-#   bash ~/rlc144/install-608624a.sh            gates → backup → fleet-release.sh → verification
+# Install ef4b880 (v123 Treasury Watch, v124 external orders, v125 containment and handover; schema 122 -> 125; UI 0.27.0 -> 0.28.0). PREPARED 31 Oct, NOT RUN: needs the owner's explicit approval.
+#   bash ~/rlc145/install-ef4b880.sh --check    read-only: every gate + the preflight of the LIVE config with the CANDIDATE code
+#   bash ~/rlc145/install-ef4b880.sh            gates → backup → fleet-release.sh → verification
 # The migration posts nothing: existing PayPal rows become history, without events, alerts or booking. Auto-booking stays OFF; switching
 # it on, the operator read's principal, the agents, inference, sales and the spend breaker are all separate decisions, untouched here.
 # Controller, custody, operator API and dashboard restart once. Founders keep running, PAUSED. Never restores a database.
 set -uo pipefail
-R=~/rlc144; MODE=${1:-apply}
+R=~/rlc145; MODE=${1:-apply}
 SELF=$(readlink -f "${BASH_SOURCE[0]}"); ARGS=("$@")
-if [[ "${FLEET_TEELOG:-}" != "$SELF" ]]; then FLEET_TEELOG="$SELF" bash "$SELF" "${ARGS[@]}" 2>&1 | tee -a "$R/install-608624a.log"; exit "${PIPESTATUS[0]}"; fi
+if [[ "${FLEET_TEELOG:-}" != "$SELF" ]]; then FLEET_TEELOG="$SELF" bash "$SELF" "${ARGS[@]}" 2>&1 | tee -a "$R/install-ef4b880.log"; exit "${PIPESTATUS[0]}"; fi
 unset FLEET_TEELOG
 A1=01M3F50SH7PNX2E3GST13J52AS; A2=01M4C4NXT786Q4E9725N5A15KV
-C=608624a72728f8b06e94ebdbd17eb33522f84931; BUILD=c9ef2f577bc1a081e45b85fbd3e4455b9748f0a2946e6eed6902e18124a593b7
+C=ef4b880a1b5df6602c863efe5e673ac29dc5dcec; BUILD=efffa255067f1550332af4543919a6172e3fe378f299340b9c8665b51c0e010c
 LOCK=1df54e3526cb39c847d18fec14f1d4e3595557e34d94040c5b774f9b2f2a21c1; PREV=e0dc22321c0a6633ae74aadef0279074011a5b0a
 UI=0.28.0; UITGZ=$R/ui-0.28.0-9e9ebe9.tgz; UISHA=1dfdc30b3a02d7bbc4bbe790e34635ebcbb71f499721df37ce978d088fd300f0
 REL=/opt/automaton-fleet/releases/$C; N=/opt/automaton-fleet/node/bin/node
