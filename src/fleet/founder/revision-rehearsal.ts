@@ -200,6 +200,8 @@ export async function runRevisionRehearsal(o: RevisionRehearsalOptions): Promise
     await one(`fleet_admin_rail_set_status($1, 'active', 'rehearsal', $2)`, [railId, o.actor]);
     // The public site the order page is served on (its link goes into every message to the buyer).
     await one(`fleet_admin_public_site_set('https://shop.rehearsal.test', NULL, $1)`, [o.actor]);
+    // Launched, in this throwaway registry only: the outward hold (v125, on checkouts too) stays on in production until the owner opens sales.
+    await one(`fleet_admin_sales_set(true, $1)`, [o.actor]);
     const v = await asAgent("venture.create", { key: "landlord", model: "digital_product", offer: "compliance tracker", state: "selected" });
     const mbx = await asAgent("mailbox.provision", { ventureKey: "landlord", idempotencyKey: `mbx:${crypto.randomUUID()}` });
     const k = await asAgent("paypal.checkout", { venture: "landlord", amountMinor: 500, description: "Landlord compliance tracker", fulfilment: "digital_file", idempotencyKey: `co:${crypto.randomUUID()}` });
