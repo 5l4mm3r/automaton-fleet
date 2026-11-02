@@ -16,6 +16,8 @@ import { V125_SQL } from "./migrations-phase125.js";
 
 const GATE = `(p_op IN ('account.revoke','account.rotate','account.recover','account.close','account.operate','account.password_discard')`;
 export const SIGN_INS_PER_HOUR = 5;
+/** Review 2 Nov: and per day, so a looping or misled agent cannot keep an owner's account in a site's lockout indefinitely (5 an hour is 120 a day). */
+export const SIGN_INS_PER_DAY = 12;
 
 const HANDOVER = restate(V125_SQL, "fleet_admin_account_handover", [
   [`DECLARE x fleet_agent_accounts; v_id uuid;`, `DECLARE x fleet_agent_accounts; v_id uuid; v_url text := btrim(p_origin); v_origin text;`],
@@ -82,7 +84,8 @@ ${restate(V95_SQL, "bx_secret_request", [
       RETURN jsonb_build_object('ok', false, 'code', 'FLEET_OWNER_ACCOUNT');
     END IF;
     IF acc.status = 'frozen' THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_ACCOUNT_FROZEN'); END IF;
-    IF p_kind = 'password' AND (SELECT count(*) FROM fleet_browser_secret_requests q WHERE q.account_id = acc.account_id AND q.kind = 'password' AND q.created_at > now() - interval '1 hour') >= ${SIGN_INS_PER_HOUR} THEN
+    IF p_kind = 'password' AND (SELECT count(*) FROM fleet_browser_secret_requests q WHERE q.account_id = acc.account_id AND q.kind = 'password' AND q.created_at > now() - interval '1 hour') >= ${SIGN_INS_PER_HOUR}
+       OR (SELECT count(*) FROM fleet_browser_secret_requests q WHERE q.account_id = acc.account_id AND q.kind = 'password' AND q.created_at > now() - interval '1 day') >= ${SIGN_INS_PER_DAY} THEN
       RETURN jsonb_build_object('ok', false, 'code', 'FLEET_SIGNIN_LIMIT');
     END IF;
   END IF;

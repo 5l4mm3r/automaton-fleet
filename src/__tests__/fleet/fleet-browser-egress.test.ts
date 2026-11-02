@@ -134,7 +134,13 @@ describe.skipIf(!CHROME || !OPENSSL)("v126-egress proxy (real Chrome)", { timeou
     for (const [name, page] of await kinds()) {
       for (const start of [`http://allowed.test:${AH}/hop1`, `https://allowed.test:${AS}/hop1`, `http://allowed.test:${AH}/to-loopback`]) {
         await page.goto(start).catch(() => undefined);
-        expect(page.url(), `${name} ${start}`).not.toMatch(/refused\.test|127\.0\.0\.1/);
+        // The property is that the refused address is never CONTACTED and its content never shown. Chrome 153 (the pinned
+        // production build) keeps a failed navigation's target in page.url() and shows its own error page; Chrome 154 does not.
+        // So the check is on the connections and the content, at every step, not on the address bar. (In an agent session the
+        // worker also blanks a page on a refused address: fleet-browser-pg "a redirect onto an address the policy refuses".)
+        expect(refusedHits, `${name} ${start}: ${hits.join(", ")}`).toBe(0);
+        const shown = await page.evaluate(() => document.body?.innerText ?? "").catch(() => "");
+        expect(shown.trim(), `${name} ${start}`).not.toBe("refused");
       }
     }
     expect(stats().refused - before).toBeGreaterThanOrEqual(9);

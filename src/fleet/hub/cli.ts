@@ -261,6 +261,18 @@ import { OWNER_IDENTITY_CLASSES, sealAccountLogin, sealOwnerFact, sealProviderSe
 import { generateX25519, openSealed, sealTo } from "../identity/crypto.js";
 import { parseStatement } from "../treasury/bank-statement.js";
 
+/**
+ * A file of secrets, parsed without ever quoting it: V8's JSON errors echo the input ("hunter2" is not valid JSON), and an
+ * error reaches stderr — and an operator assistant's context — unredacted (review 2 Nov).
+ */
+function secretJsonFile(file: string): Record<string, unknown> {
+  const text = fs.readFileSync(file, "utf8");
+  let v: unknown;
+  try { v = JSON.parse(text); } catch { throw new Error("FLEET_BAD_REQUEST: the file is not valid JSON (its content is not shown)"); }
+  if (!v || typeof v !== "object" || Array.isArray(v)) throw new Error("FLEET_BAD_REQUEST: the file must hold one JSON object (its content is not shown)");
+  return v as Record<string, unknown>;
+}
+
 export const HUB_COMMANDS = new Set([
   "hub", "hub-render", "hub-health", "hub-withdrawals", "economy-withdrawal-policy", "hub-custody", "economy-custody-policy", "hub-identity", "owner-identity-seal", "owner-identity-class", "owner-identity-consent", "owner-identity-consent-revoke", "economy-destination-reference", "economy-entity-add", "economy-tax-profile", "economy-tax-policy", "economy-tax-true-up", "economy-tax-payment",
   "economy-provider-account-register", "economy-provider-product-assign", "economy-destination-add", "economy-destination-verify-access",
@@ -773,7 +785,7 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
       const key = await h.brokerOwnerKey();
       if (!key.ownerPub) throw new Error("FLEET_NOT_FOUND: the identity broker has not published its key (is it running?)");
       if (flag(a, "--fingerprint") !== key.fingerprint) throw new Error(`FLEET_KEY_MISMATCH: the broker key fingerprint is ${key.fingerprint}; pin it with --fingerprint`);
-      const value = JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown>;
+      const value = secretJsonFile(file);
       if (typeof value.password !== "string" || !value.password || Object.keys(value).some((k) => !["password", "totpSeed"].includes(k)) || Object.values(value).some((v) => typeof v !== "string" || !v)) {
         throw new Error('FLEET_BAD_REQUEST: the file is {"password": "...", "totpSeed": "..."} (totpSeed optional)');
       }
@@ -785,7 +797,7 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
       const key = await h.brokerOwnerKey();
       if (!key.ownerPub) throw new Error("FLEET_NOT_FOUND: the identity broker has not published its key (is it running?)");
       if (flag(a, "--fingerprint") !== key.fingerprint) throw new Error(`FLEET_KEY_MISMATCH: the broker key fingerprint is ${key.fingerprint}; pin it with --fingerprint`);
-      const value = JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown>;
+      const value = secretJsonFile(file);
       if (!value || typeof value !== "object" || Object.values(value).some((v) => typeof v !== "string" || !v)) throw new Error("FLEET_BAD_REQUEST: the file is one JSON object of non-empty strings");
       return h.providerSecretUpload(name, sealProviderSecret(Buffer.from(key.ownerPub, "base64"), name, JSON.stringify(value)), actor);
     }

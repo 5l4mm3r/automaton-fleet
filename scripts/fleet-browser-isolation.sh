@@ -14,6 +14,10 @@
 #   sudo scripts/fleet-browser-isolation.sh apply-dropin     v126-egress, on a host where apply already ran: back up the installed drop-in, install
 #        this one (one loopback address, 127.0.0.77, for the worker's egress proxy), reload, restart the unit, verify. Before a v126-egress release:
 #        the v126-egress worker refuses to start without it (its self-test reaches the proxy); an older worker is unaffected by it.
+#   sudo scripts/fleet-browser-isolation.sh egress-proof     read-only, before apply-dropin (review 2 Nov): a throwaway unit under the drop-in's exact policy, as the browser
+#        user, listens on 127.0.0.77 and connects to itself. The cgroup filter checks the SOURCE of what arrives, and a connection to 127.0.0.77 leaves from
+#        127.0.0.1 unless a route says otherwise, so the proxy might refuse its own browser. Prints what passes; apply-dropin runs it first and installs nothing
+#        on a failure. Never widen the allow list to 127.0.0.1 to make it pass.
 #   sudo scripts/fleet-browser-isolation.sh rollback-dropin  restore the drop-in saved by apply-dropin, reload, restart (only with a pre-v126-egress release)
 #   scripts/fleet-browser-isolation.sh selftest        no root: the file transforms against temporary fixtures
 #
@@ -23,7 +27,7 @@
 # on the host's public address (a service bound to every address answers on both; the exception adds no reach); the restarted worker logged
 # its Chromium self-test and started. Touches nothing else: no other unit, env file, role or rule.
 set -euo pipefail
-MODE="${1:?usage: plan | apply | apply-dropin | verify | rollback | rollback-dropin | selftest}"
+MODE="${1:?usage: plan | apply | egress-proof | apply-dropin | verify | rollback | rollback-dropin | selftest}"
 UNIT=automaton-fleet-browser
 ENVF=/etc/automaton-fleet/browser.env
 DROPIN_DIR=/etc/systemd/system/$UNIT.service.d
@@ -89,6 +93,8 @@ if [[ "$MODE" == selftest ]]; then
     && grep -q '^IPAddressDeny=127.0.0.0/8 ::1/128$' "$SRC_DROPIN" || { echo "selftest: drop-in content"; exit 1; }
   printf 'LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\nLISTEN 0 128 127.0.0.1:5432 0.0.0.0:*\nLISTEN 0 128 [::]:443 [::]:*\nLISTEN 0 128 *:80 *:*\nLISTEN 0 128 127.0.0.77:41234 0.0.0.0:*\n' > "$T/ss"
   [[ "$(wildcard_ports < "$T/ss")" == "22 443 80" ]] || { echo "selftest: wildcard listener parse"; exit 1; }
+  [[ "$(sed -n 's/^IPAddressAllow=\(..*\)$/\1/p' "$SRC_DROPIN" | tail -1)" == "$EGRESS_ADDR/32" && "$(sed -n 's/^IPAddressDeny=\(..*\)$/\1/p' "$SRC_DROPIN" | tail -1)" == "127.0.0.0/8 ::1/128" ]] \
+    || { echo "selftest: egress-proof policy extraction"; exit 1; }
   echo "SELFTEST PASSED"; exit 0
 fi
 
@@ -109,6 +115,11 @@ const tcp = (host, port) => new Promise((r) => { const s = net.connect({ host, p
 (async () => {
   const loop = []; for (const p of process.env.PROBE_PORTS.split(" ")) { loop.push(await tcp("127.0.0.1", Number(p))); loop.push(await tcp("::1", Number(p))); }
   const pub = await tcp("1.1.1.1", 443);
+  // review 2 Nov: the egress proxy reached from inside the same policy (Chromium and the proxy share the unit), with the default source address the kernel picks.
+  const egressSelf = await new Promise((r) => { const srv = net.createServer((c) => c.end("ok")).on("error", (e) => r({ ok: false, why: e.code })).listen(0, process.env.PROBE_EGRESS, () => {
+    const c = net.connect({ host: process.env.PROBE_EGRESS, port: srv.address().port, timeout: 3000 }); let got = "";
+    c.on("data", (d) => { got += d; }); const done = (ok, why) => { c.destroy(); srv.close(); r({ ok, why }); };
+    c.on("end", () => done(got === "ok", got === "ok" ? undefined : "no reply")); c.on("timeout", () => done(false, "timeout")); c.on("error", (e) => done(false, e.code)); }); });
   // v126-egress: a port open on the egress address but not on the public address would be reach the exception adds.
   const egressOnly = [];
   for (const p of (process.env.PROBE_WILD || "").split(" ").filter(Boolean)) {
@@ -120,7 +131,7 @@ const tcp = (host, port) => new Promise((r) => { const s = net.connect({ host, p
   try { const c = new pg.Client({ connectionString: process.env.PROBE_URL }); await c.connect(); const r = await c.query("SELECT fleet.bx_ping() AS r"); await c.end();
         db = { ok: true, schemaVersion: r.rows[0].r.schemaVersion, socket: String(c.host).startsWith("/") }; } catch (e) { db = { ok: false, why: String(e.code || e.message).slice(0, 80) }; }
   console.log(JSON.stringify({ loopbackOpen: loop.filter((x) => x.ok).map((x) => x.host + ":" + x.port), loopbackChecked: loop.length, publicOk: pub.ok, db,
-    publicAddress: process.env.PROBE_PUBLIC || null, wildcardChecked: (process.env.PROBE_WILD || "").split(" ").filter(Boolean).length, egressOnly }));
+    publicAddress: process.env.PROBE_PUBLIC || null, wildcardChecked: (process.env.PROBE_WILD || "").split(" ").filter(Boolean).length, egressOnly, egressSelf }));
 })();'
 }
 
@@ -130,12 +141,38 @@ do_verify() {
   echo "effective policy: allow=[${allow}] deny includes loopback: $([[ " $deny " == *" 127.0.0.0/8 "* && " $deny " == *" ::1/128 "* ]] && echo yes || echo NO)"
   [[ "$allow" == "$EGRESS_ADDR/32" && " $deny " == *" 127.0.0.0/8 "* && " $deny " == *" ::1/128 "* ]] || ok=0
   out=$(probe "$allow" "$deny"); echo "probe under that policy: $out"
-  python3 -I -c 'import json,sys; d=json.loads(sys.argv[1]); sys.exit(0 if (not d["loopbackOpen"] and d["loopbackChecked"]>0 and d["publicOk"] and d["db"]["ok"] and d["db"].get("socket") and d["publicAddress"] and not d["egressOnly"]) else 1)' "$out" || ok=0
+  python3 -I -c 'import json,sys; d=json.loads(sys.argv[1]); sys.exit(0 if (not d["loopbackOpen"] and d["loopbackChecked"]>0 and d["publicOk"] and d["db"]["ok"] and d["db"].get("socket") and d["publicAddress"] and not d["egressOnly"] and d.get("egressSelf", {}).get("ok")) else 1)' "$out" || ok=0
   since=$(systemctl show "$UNIT" -p ActiveEnterTimestamp --value)
   echo "unit: $(systemctl is-active "$UNIT") since $since"
   if journalctl -u "$UNIT" --since "$since" --no-pager -o cat 2>/dev/null | grep -q '"browser_selftest_ok"' \
      && journalctl -u "$UNIT" --since "$since" --no-pager -o cat 2>/dev/null | grep -q '"browser_worker_started"'; then echo "worker: Chromium self-test passed, worker started (registry reached)"; else echo "worker: self-test / start NOT seen"; ok=0; fi
   [[ $ok -eq 1 ]] && echo "== ISOLATION VERIFIED $(date -u +%FT%TZ)" || { echo "== ISOLATION VERIFY FAILED"; return 1; }
+}
+
+# review 2 Nov: whether the drop-in's policy lets the worker's own proxy on 127.0.0.77 be reached from inside it. Exit 0 only if it does with the default
+# source address, and loopback stays denied (the control: if 127.0.0.1 were reachable, the filter would not be in force and the proof would prove nothing).
+egress_proof() {
+  local allow deny out
+  allow=$(sed -n 's/^IPAddressAllow=\(..*\)$/\1/p' "$SRC_DROPIN" | tail -1); deny=$(sed -n 's/^IPAddressDeny=\(..*\)$/\1/p' "$SRC_DROPIN" | tail -1)
+  echo "drop-in policy under test: allow=[$allow] deny=[$deny] (route to $EGRESS_ADDR: $(ip -4 route get "$EGRESS_ADDR" | head -1))"
+  out=$(systemd-run --quiet --wait --pipe --collect -p User="$UNIT" -p Group="$UNIT" -p "IPAddressAllow=$allow" -p "IPAddressDeny=$deny" -E EG="$EGRESS_ADDR" "$NODE" -e '
+const net = require("net");
+const self = (localAddress) => new Promise((r) => { const srv = net.createServer((c) => c.end("ok")).on("error", (e) => r({ ok: false, why: e.code })).listen(0, process.env.EG, () => {
+  const c = net.connect({ host: process.env.EG, port: srv.address().port, timeout: 3000, ...(localAddress ? { localAddress } : {}) }); let got = "";
+  c.on("data", (d) => { got += d; }); const done = (ok, why) => { c.destroy(); srv.close(); r({ ok, why }); };
+  c.on("end", () => done(got === "ok", got === "ok" ? undefined : "no reply")); c.on("timeout", () => done(false, "timeout")); c.on("error", (e) => done(false, e.code)); }); });
+const control = () => new Promise((r) => { const srv = net.createServer((c) => c.end("ok")).on("error", () => r({ reached: false, why: "listen" })).listen(0, "127.0.0.1", () => {
+  const c = net.connect({ host: "127.0.0.1", port: srv.address().port, timeout: 3000 }); let got = "";
+  c.on("data", (d) => { got += d; }); const done = (why) => { c.destroy(); srv.close(); r({ reached: got === "ok", why }); };
+  c.on("end", () => done()); c.on("timeout", () => done("timeout")); c.on("error", (e) => done(e.code)); }); });
+(async () => console.log(JSON.stringify({ defaultSource: await self(), egressSource: await self(process.env.EG), loopbackControl: await control() })))();')
+  echo "proof: $out"
+  python3 -I -c 'import json,sys
+d=json.loads(sys.argv[1])
+if d["loopbackControl"]["reached"]: print("== EGRESS PROOF INVALID: 127.0.0.1 was reachable under the policy (filter not in force)"); sys.exit(1)
+if d["defaultSource"]["ok"]: print("== EGRESS PROOF PASSED: the proxy is reachable from inside the policy; loopback stays denied"); sys.exit(0)
+if d["egressSource"]["ok"]: print("== EGRESS PROOF FAILED with the default source; it passes from source 127.0.0.77. Fix (a host change, owner approval): a local route with that source, e.g. ip route replace local 127.0.0.77 dev lo table local src 127.0.0.77, made persistent; then run this again. Do not widen the allow list."); sys.exit(1)
+print("== EGRESS PROOF FAILED: the proxy is unreachable under this policy; it needs its own unit. Nothing installed."); sys.exit(1)' "$out"
 }
 
 case "$MODE" in
@@ -169,8 +206,10 @@ case "$MODE" in
     do_verify
     ;;
   verify) do_verify ;;
+  egress-proof) egress_proof ;;
   apply-dropin)
     [[ -f $DROPIN ]] || { echo "no drop-in installed: run apply first (it also moves the worker to the PostgreSQL socket)"; exit 1; }
+    egress_proof || { echo "apply-dropin: nothing installed, the worker untouched"; exit 1; }
     cp -p "$DROPIN" "$DROPIN.pre-egress-$TS"; echo "backup: $DROPIN.pre-egress-$TS"
     install -m 0644 "$SRC_DROPIN" "$DROPIN"
     systemctl daemon-reload; systemctl restart "$UNIT"
@@ -189,5 +228,5 @@ case "$MODE" in
     rm -f "$DROPIN"; systemctl daemon-reload; systemctl restart "$UNIT"
     echo "rolled back to $E / $H; policy allow=[$(systemctl show "$UNIT" -p IPAddressAllow --value)]"
     ;;
-  *) echo "usage: plan | apply | apply-dropin | verify | rollback | rollback-dropin | selftest" >&2; exit 2 ;;
+  *) echo "usage: plan | apply | egress-proof | apply-dropin | verify | rollback | rollback-dropin | selftest" >&2; exit 2 ;;
 esac

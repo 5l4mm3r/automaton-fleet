@@ -90,7 +90,20 @@ const OWNER_FILL = new Set(["username", "email"]);
 const OWNER_KEYS = new Set(["Enter", "Tab", "Escape", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "PageUp", "PageDown", "Home", "End"]);
 const PASSWORD_LIKE = /pass(word|wd|code)|\bpwd\b|new-password|current-password/i;
 /** v126: pages that change how an account is secured. A defence on unknown sites, not a guarantee. */
-const ACCOUNT_SECURITY_PATH = /pass(word|wd)|pwd|\/security(\/|\.|$)|two[-_]?factor|\/2fa(\/|\.|$)|\/mfa(\/|\.|$)|recovery|(delete|close|deactivate)[-_]?account/i;
+const ACCOUNT_SECURITY_PATH = new RegExp([
+  "pass(word|wd|key)", "pwd", "two[-_]?factor", "recovery", "(delete|close|deactivate)[-_]?account", "webauthn",
+  // Review 2 Nov: the routes that take an account over without its password — a new sign-in address, keys, tokens, apps or linked logins.
+  "(connected|linked)[-_]?(accounts?|logins?|apps?)", "(api|access|personal)[-_]?(keys?|tokens?)", "oauth", "authorized[-_]?apps",
+  ...["security", "2fa", "mfa", "e-?mails?", "keys", "ssh[-_]?keys", "tokens?", "applications", "apps", "sessions", "devices", "credentials", "integrations"]
+    .map((seg) => `\\/${seg}(\\/|\\.|$)`),
+].join("|"), "i");
+/** v126: whether an address is an account-security page (path decoded; `;params` dropped so they cannot hide a segment). */
+export function accountSecurityUrl(url: string): boolean {
+  let path: string;
+  try { path = new URL(url).pathname; } catch { return false; }
+  try { path = decodeURIComponent(path); } catch { /* keep it encoded */ }
+  return ACCOUNT_SECURITY_PATH.test(path.replace(/;[^/]*/g, ""));
+}
 /** v126: the sign-in context has no use for these, and a page's script could use them to send a value out of sight of the route. */
 const SIGN_IN_INIT = "for (const n of ['Worker', 'SharedWorker', 'RTCPeerConnection', 'webkitRTCPeerConnection', 'RTCDataChannel']) { try { delete window[n]; Object.defineProperty(window, n, { value: undefined }); } catch {} }";
 const OTP_NAMES = ["otp", "totp", "mfa", "2fa", "code", "onetimecode", "one-time-code", "one_time_code", "verification-code", "verification_code", "verificationcode", "auth-code", "auth_code", "authcode"];
@@ -187,11 +200,9 @@ export class BrowserWorker {
       const req = route.request();
       if (!(await this.hosts.allowed(req.url(), allow).catch(() => false))) return route.abort("blockedbyclient");
       if (owner) {
-        let path = "";
-        try { path = decodeURIComponent(new URL(req.url()).pathname); } catch { path = req.url(); }
         let top = false;
         try { top = req.isNavigationRequest() && req.frame().parentFrame() === null; } catch { top = false; }
-        if ((top || !["GET", "HEAD"].includes(req.method())) && ACCOUNT_SECURITY_PATH.test(path)) return route.abort("blockedbyclient");
+        if ((top || !["GET", "HEAD"].includes(req.method())) && accountSecurityUrl(req.url())) return route.abort("blockedbyclient");
       }
       return route.continue();
     });
@@ -357,6 +368,8 @@ export class BrowserWorker {
       const addresses = p.frames().map((f) => f.url()).filter((u) => /^https?:/i.test(u));
       let bad = false;
       for (const u of addresses) if (!(await this.hosts.allowed(u, { allowLoopback: this.o.allowLoopback }).catch(() => false))) bad = true;
+      // Review 2 Nov: a same-site redirect (`/login?next=/settings/security`) reaches a security page the route never saw; on an owner's account it is blanked too.
+      if (s.owner && /^https?:/i.test(p.url()) && accountSecurityUrl(p.url())) bad = true;
       if (bad) { refused = true; await p.goto("about:blank").catch(() => {}); }
     }
     return refused;

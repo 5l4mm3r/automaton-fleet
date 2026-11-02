@@ -17,3 +17,13 @@ describe("refund wording (phase V lesson)", () => {
     expect(business.slice(business.indexOf("refund_external_order"))).toContain(RULE);
   });
 });
+
+describe("browser tool tells the agent how to use an owner's account (v126 sign_in)", () => {
+  it("names the sign_in step, its isolation, and that human checks are the owner's", async () => {
+    const { FOUNDER_TOOLS, FOUNDER_V5_TOOLS, FOUNDER_V7_TOOLS, FOUNDER_V8_TOOLS, FOUNDER_V10_TOOLS } = await import("../../fleet/cognition/types.js");
+    const browser = [...FOUNDER_V10_TOOLS, ...FOUNDER_V8_TOOLS, ...FOUNDER_V7_TOOLS, ...FOUNDER_V5_TOOLS, ...FOUNDER_TOOLS].find((t) => t.name === "browser");
+    expect(browser?.description).toContain("{action: sign_in}");
+    expect(browser?.description).toContain("you never see or type its login");
+    expect(browser?.description).toContain("is the owner's: record it and wait");
+  });
+});

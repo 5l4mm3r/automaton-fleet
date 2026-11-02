@@ -138,7 +138,9 @@ export function sealProviderSecret(brokerPublicDer: Buffer, name: string, json: 
 
 /** v126: what a sealed login belongs to: it cannot be replayed onto another account or site. */
 export interface AccountLoginBinding { agentId: string; platform: string; handle: string; loginUrl: string }
-const loginAad = (b: AccountLoginBinding) => `account-login:${b.agentId}:${b.platform.toLowerCase()}:${b.handle.toLowerCase()}:${b.loginUrl.toLowerCase()}`;
+// Review 2 Nov: the fields are JSON-encoded, so no split of ':' between them can bind one login to another account ("a:b" + "c" vs "a" + "b:c").
+// No login was ever sealed under the earlier form (handover has never been switched on), so nothing needs re-sealing.
+const loginAad = (b: AccountLoginBinding) => `account-login:${JSON.stringify([b.agentId, b.platform.toLowerCase(), b.handle.toLowerCase(), b.loginUrl.toLowerCase()])}`;
 
 /** v125: the login of an account the owner made for an agent, sealed to the broker for that agent, account and site. */
 export function sealAccountLogin(brokerPublicDer: Buffer, binding: AccountLoginBinding, json: string): Buffer {

@@ -267,7 +267,16 @@ export class IdentityBroker {
         for (const r of refs) this.vault.shred(r.vaultRef); // v126: nothing half-installed stays behind
         refs.length = 0;
       }
-      const done = await this.gw.accountHandoverInstalled(u.uploadId, this.worker, error === null, error, refs);
+      let done: { ok?: unknown };
+      try {
+        done = await this.gw.accountHandoverInstalled(u.uploadId, this.worker, error === null, error, refs);
+      } catch (err) {
+        // Review 2 Nov: unrecorded entries are destroyed, never orphaned. The upload is still in the inbox and is installed afresh next time;
+        // in the rare case the record did commit, the account's sign-in fails closed until the owner hands the login over again.
+        for (const r of refs) this.vault.shred(r.vaultRef);
+        throw err;
+      }
+      if (!done.ok) for (const r of refs) this.vault.shred(r.vaultRef);
       // v126: the login just replaced is destroyed, not only retired.
       if (done.ok) for (const ref of (done as { retired?: string[] }).retired ?? []) this.vault.shred(ref);
       this.log(error ? "error" : "info", "account_handover_install", { accountId: u.accountId, ok: error === null, code: error });

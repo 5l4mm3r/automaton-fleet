@@ -32,7 +32,7 @@ export function browserUrlAllowed(raw: string, opts: { allowLoopback?: boolean }
   if (host.endsWith(".internal") || host.endsWith(".local") || host === "metadata.google.internal") return false;
   const kind = net.isIP(host);
   if (kind === 4) return !v4Private(host);
-  if (kind === 6) return !/^(fc|fd|fe8|fe9|fea|feb|ff|::ffff:|::$)/.test(host);
+  if (kind === 6) return !v6Private(host) && !/^::ffff:/.test(host);   // a mapped literal in a URL stays refused, as before
   return true;
 }
 
@@ -40,13 +40,50 @@ export function browserUrlAllowed(raw: string, opts: { allowLoopback?: boolean }
 export function addressPrivate(ip: string): boolean {
   const kind = net.isIP(ip);
   if (kind === 4) return v4Private(ip);
-  if (kind === 6) {
-    const low = ip.toLowerCase();
-    const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(low);
-    if (mapped) return v4Private(mapped[1]);
-    return low === "::1" || low === "::" || /^(fc|fd|fe8|fe9|fea|feb|ff|::ffff:|64:ff9b:)/.test(low);
-  }
+  if (kind === 6) return v6Private(ip);
   return true;
+}
+
+/** The 16 bytes of a valid IPv6 literal (compressed or not, with or without a dotted IPv4 tail), or null. */
+function v6Bytes(ip: string): number[] | null {
+  let a = ip.toLowerCase().replace(/%.*$/, "");
+  const dotted = /(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(a);
+  if (dotted) {
+    const o = dotted.slice(1).map(Number);
+    a = a.slice(0, dotted.index) + `${((o[0] << 8) | o[1]).toString(16)}:${((o[2] << 8) | o[3]).toString(16)}`;
+  }
+  const halves = a.split("::");
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(":") : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+  const fill = halves.length === 2 ? 8 - head.length - tail.length : 0;
+  if (fill < 0 || (halves.length === 1 && head.length !== 8)) return null;
+  const groups = [...head, ...Array(fill).fill("0"), ...tail].map((g) => parseInt(g, 16));
+  if (groups.length !== 8 || groups.some((g) => !Number.isInteger(g) || g < 0 || g > 0xffff)) return null;
+  return groups.flatMap((g) => [g >> 8, g & 0xff]);
+}
+
+/**
+ * v79, widened after the 2 Nov review: an IPv6 address the worker must never reach. Besides loopback, unspecified, unique-local,
+ * link-local, site-local and multicast, every form that carries or translates to an IPv4 address is refused unless it is an
+ * IPv4-mapped public one: IPv4-compatible ::/96, SIIT ::ffff:0:0:0/96, NAT64 64:ff9b::/96 and 64:ff9b:1::/48, 6to4 2002::/16,
+ * Teredo 2001::/32; and the discard (100::/64) and documentation (2001:db8::/32) ranges.
+ */
+export function v6Private(ip: string): boolean {
+  const b = v6Bytes(ip);
+  if (!b) return true;
+  const zero = (from: number, to: number) => b.slice(from, to).every((x) => x === 0);
+  if (zero(0, 10) && b[10] === 0xff && b[11] === 0xff) return v4Private(b.slice(12).join("."));   // ::ffff:a.b.c.d
+  if (zero(0, 12)) return true;                                                                   // ::, ::1, ::a.b.c.d
+  if (zero(0, 8) && b[8] === 0xff && b[9] === 0xff) return true;                                  // ::ffff:0:a.b.c.d
+  const w0 = (b[0] << 8) | b[1], w1 = (b[2] << 8) | b[3];
+  if (w0 === 0x64 && w1 === 0xff9b) return true;                                                  // NAT64 (both prefixes)
+  if (w0 === 0x2002) return true;                                                                 // 6to4
+  if (w0 === 0x2001 && (w1 === 0 || w1 === 0xdb8)) return true;                                   // Teredo, documentation
+  if (w0 === 0x100 && zero(2, 8)) return true;                                                    // discard
+  if ((b[0] & 0xfe) === 0xfc) return true;                                                        // fc00::/7
+  if (b[0] === 0xfe && (b[1] & 0x80) === 0x80) return true;                                       // fe80::/10, fec0::/10
+  return b[0] === 0xff;                                                                           // multicast
 }
 
 type Lookup = (host: string) => Promise<string[]>;

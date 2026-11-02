@@ -24,11 +24,12 @@ import { IdentityBroker } from "../../fleet/identity/broker.js";
 import { SimulatedMailProvider } from "../../fleet/identity/providers.js";
 import { initIdentityState, openIdentityState } from "../../fleet/identity/main.js";
 import { PgBrowserGateway } from "../../fleet/browser/gateway.js";
-import { BrowserWorker, secretForms } from "../../fleet/browser/worker.js";
+import { BrowserWorker, secretForms, accountSecurityUrl } from "../../fleet/browser/worker.js";
 import { browserEnvProblems } from "../../fleet/browser/main.js";
 import { browserUrlAllowed, HostResolutionPolicy, addressPrivate } from "../../fleet/browser/policy.js";
 import { totp } from "../../fleet/identity/crypto.js";
 import { auditPrivileges } from "../../fleet/postgres/privileges.js";
+import { SIGN_INS_PER_DAY } from "../../fleet/postgres/migrations-phase126.js";
 
 const PG_BIN = findPgBin();
 // R41.1: FLEET_TEST_CHROME runs the suite against a specific build (e.g. the pinned Chrome-for-Testing headless shell the
@@ -64,6 +65,22 @@ describe("browser URL policy and worker startup (unit)", () => {
     expect(await p.allowed("https://127.0.0.1:9443/", { allowLoopback: true })).toBe(true);
     for (const ip of ["127.0.0.1", "::1", "10.1.2.3", "169.254.169.254", "fd00::1", "::ffff:10.0.0.1"]) expect(addressPrivate(ip), ip).toBe(true);
     for (const ip of ["93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946"]) expect(addressPrivate(ip), ip).toBe(false);
+    // Review 2 Nov: every IPv6 form that carries or translates to IPv4, and the reserved ranges.
+    for (const ip of ["::7f00:1", "::127.0.0.1", "0:0:0:0:0:0:0:1", "::ffff:0:7f00:1", "64:ff9b::7f00:1", "64:ff9b:1::1", "2002:7f00:1::1", "2001::1", "2001:db8::1",
+      "100::1", "fec0::1", "fe80::1", "ff02::1", "::ffff:7f00:1"]) {
+      expect(addressPrivate(ip), ip).toBe(true);
+      expect(browserUrlAllowed(`https://[${ip}]/`), ip).toBe(false);
+    }
+    for (const ip of ["2001:4860:4860::8888", "2a00:1450:4009:81f::200e", "::ffff:93.184.216.34"]) expect(addressPrivate(ip), ip).toBe(false);
+    expect(browserUrlAllowed("https://[::ffff:93.184.216.34]/"), "a mapped literal in a URL").toBe(false);
+  });
+  it("review 2 Nov: account-security pages on an owner's account include the takeover routes, whatever the encoding or ;params", () => {
+    for (const u of ["https://s.test/settings/security", "https://s.test/security;x=1", "https://s.test/settings/emails", "https://s.test/account/email",
+      "https://s.test/settings/keys", "https://s.test/settings/ssh-keys", "https://s.test/settings/tokens", "https://s.test/user/api-keys", "https://s.test/settings/applications",
+      "https://s.test/oauth/authorize", "https://s.test/settings/passkeys", "https://s.test/settings/connected-accounts", "https://s.test/account/sessions",
+      "https://s.test/settings/%73ecurity", "https://s.test/account/change-password", "https://s.test/2fa", "https://s.test/account/delete-account"]) expect(accountSecurityUrl(u), u).toBe(true);
+    for (const u of ["https://s.test/dashboard", "https://s.test/listings/123", "https://s.test/messages", "https://s.test/orders?page=2", "https://s.test/products/keyboard-stand", "not a url"])
+      expect(accountSecurityUrl(u), u).toBe(false);
   });
   it("the worker refuses root, foreign credentials and a missing browser", () => {
     const base = { FLEET_BROWSER_DATABASE_URL: "postgresql://fleet_browser_login:x@127.0.0.1/db", FLEET_BROWSER_EXECUTABLE: process.execPath };
@@ -217,6 +234,8 @@ describe.skipIf(!PG_BIN || !CHROME || !OPENSSL)("v37 general browser operator wi
       const loginForm = (extra = "", action = "/atk/sink") => `<form id=f method=post action="${action}"><input id=pass name=pass type=password>${extra}<button id=go>Go</button></form>`;
       if (u.pathname === "/atk/sink") return send(page("Received", "<p>Received</p>"));
       if (u.pathname === "/atk/redirect307") { res.writeHead(307, { Location: `${PHISH}/redirected` }); return res.end(); }
+      if (u.pathname === "/atk/to-security") { res.writeHead(302, { Location: "/settings/security" }); return res.end(); }
+      if (u.pathname === "/settings/security") { res.writeHead(200, { "Content-Type": "text/html" }); return res.end("<h1>SECURITY-PAGE</h1><p>New API token: tok-SHOWN</p>"); }
       if (u.pathname === "/atk/redirect302") { res.writeHead(302, { Location: "/atk/sink" }); return res.end(); }
       if (u.pathname === "/atk/form-off") return send(page("Off", loginForm("", `${PHISH}/form`)));
       if (u.pathname === "/atk/chain") return send(page("Chain", loginForm("", "/atk/hop1")));
@@ -758,6 +777,24 @@ describe.skipIf(!PG_BIN || !CHROME || !OPENSSL)("v37 general browser operator wi
     } finally { (worker as any).hosts = new HostResolutionPolicy(); }
   });
 
+  it("review 2 Nov: on an owner's account a same-site redirect onto a security page is blanked; nothing of it reaches the agent", async () => {
+    const who = "ownersec";
+    users.set(who, { email: "s@site.test", password: "unused", verified: true });
+    const pub = Buffer.from((broker as any).o.ownerVault.publicKeyBase64(), "base64");
+    const x = (await R.q(`SELECT fleet.fleet_admin_account_handover($1, 'marketplace', 'flow.test', $2, $3, $4, $5) AS r`, [A.id, `${SITE}/login`, who,
+      sealAccountLogin(pub, { agentId: A.id, platform: "flow.test", handle: who, loginUrl: `${SITE}/login` }, JSON.stringify({ password: "unused" })), OWNER]))[0].r;
+    await broker.tick();
+    const id = (await ok(R.econ(A, "browser.open", { url: `${SITE}/out`, accountId: x.accountId }))).sessionId as string;
+    const direct = await browse(A, "browser.act", { sessionId: id, steps: [{ action: "goto", url: `${SITE}/settings/security` }] });
+    expect(JSON.stringify(direct)).not.toContain("SECURITY-PAGE");
+    const hop = await browse(A, "browser.act", { sessionId: id, steps: [{ action: "goto", url: `${SITE}/atk/to-security` }] });
+    expect(hop.result.code, JSON.stringify(hop.result)).toBe("FLEET_BROWSER_URL_BLOCKED");
+    const seen = JSON.stringify(await browse(A, "browser.observe", { sessionId: id }));
+    expect(seen).not.toContain("SECURITY-PAGE");
+    expect(seen).not.toContain("tok-SHOWN");
+    await browse(A, "browser.close", { sessionId: id });
+  }, 120_000);
+
   it("v126: too many sign-ins in an hour stop before the site locks the account out", async () => {
     const who = "ownerlimit", password = `Owner-${crypto.randomUUID()}`;
     users.set(who, { email: "o@site.test", password: "something-else", verified: true });
@@ -768,6 +805,14 @@ describe.skipIf(!PG_BIN || !CHROME || !OPENSSL)("v37 general browser operator wi
     await browse(A, "browser.observe", { sessionId: id });
     for (let i = 0; i < 5; i++) expect((await browse(A, "browser.act", { sessionId: id, steps: [{ action: "sign_in" }] })).result.code, `try ${i}`).toBe("FLEET_SIGNIN_FAILED");
     expect((await browse(A, "browser.act", { sessionId: id, steps: [{ action: "sign_in" }] })).result.code).toBe("FLEET_SIGNIN_LIMIT");
+    // Review 2 Nov: and a day's worth. The hour's five move two hours back and six more like them are recorded earlier today: still refused.
+    await R.q(`UPDATE fleet.fleet_browser_secret_requests SET created_at = now() - interval '2 hours' WHERE account_id = $1 AND kind = 'password'`, [x.accountId]);
+    expect((await browse(A, "browser.act", { sessionId: id, steps: [{ action: "sign_in" }] })).result.code, "a new hour").toBe("FLEET_SIGNIN_FAILED");
+    await R.q(`INSERT INTO fleet.fleet_browser_secret_requests (request_id, action_id, agent_id, account_id, kind, origin, worker_pub, status, created_at, expires_at)
+      SELECT gen_random_uuid(), action_id, agent_id, account_id, kind, origin, worker_pub, 'failed', now() - interval '3 hours', now() - interval '3 hours'
+        FROM fleet.fleet_browser_secret_requests WHERE account_id = $1 AND kind = 'password' ORDER BY created_at LIMIT 6`, [x.accountId]);
+    expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_browser_secret_requests WHERE account_id = $1 AND kind = 'password')`, [x.accountId]))).toBe(SIGN_INS_PER_DAY);
+    expect((await browse(A, "browser.act", { sessionId: id, steps: [{ action: "sign_in" }] })).result.code, "the day's limit").toBe("FLEET_SIGNIN_LIMIT");
     await browse(A, "browser.close", { sessionId: id });
   }, 120_000);
 
