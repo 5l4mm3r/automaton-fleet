@@ -18,6 +18,8 @@ const GATE = `(p_op IN ('account.revoke','account.rotate','account.recover','acc
 export const SIGN_INS_PER_HOUR = 5;
 /** Review 2 Nov: and per day, so a looping or misled agent cannot keep an owner's account in a site's lockout indefinitely (5 an hour is 120 a day). */
 export const SIGN_INS_PER_DAY = 12;
+/** Owner, 2 Nov: two-factor stays the owner's. A sign-in that reaches a code prompt with no stored seed waits this long for the owner's one-time code. */
+export const OWNER_CODE_MINUTES = 5;
 
 const HANDOVER = restate(V125_SQL, "fleet_admin_account_handover", [
   [`DECLARE x fleet_agent_accounts; v_id uuid;`, `DECLARE x fleet_agent_accounts; v_id uuid; v_url text := btrim(p_origin); v_origin text;`],
@@ -78,8 +80,8 @@ ${restate(V80_SQL, "bx_claim_action", [
 ${restate(V95_SQL, "bx_secret_request", [
   [`  IF p_kind LIKE 'capture:%' THEN v_capture`, `  -- v126: this does not rely on the worker. An owner's login goes only to an action that is one sign_in, a few times an hour (a site locks an account out); nothing is generated, captured or opened from a link.
   IF acc.owner_provided THEN
-    IF p_kind NOT IN ('password','username','email','totp')
-       OR (p_kind IN ('password','totp') AND NOT (jsonb_array_length(x.steps) = 1 AND x.steps -> 0 ->> 'action' = 'sign_in')) THEN
+    IF p_kind NOT IN ('password','username','email','totp','owner_code')
+       OR (p_kind IN ('password','totp','owner_code') AND NOT (jsonb_array_length(x.steps) = 1 AND x.steps -> 0 ->> 'action' = 'sign_in')) THEN
       PERFORM fleet_event('browser_credential_refused', x.agent_id, 'browser-worker', jsonb_build_object('accountId', acc.account_id, 'origin', left(p_origin, 200), 'kind', left(p_kind, 40)));
       RETURN jsonb_build_object('ok', false, 'code', 'FLEET_OWNER_ACCOUNT');
     END IF;
@@ -90,6 +92,23 @@ ${restate(V95_SQL, "bx_secret_request", [
     END IF;
   END IF;
   IF p_kind LIKE 'capture:%' THEN v_capture`],
+  // Owner, 2 Nov: the owner's one-time code. It waits for the owner (never served by the broker), for an owner account only, one at a time,
+  // and the owner is told without any secret. The code itself arrives sealed to this worker's one-time key (fleet_admin_signin_code_serve).
+  [`  IF p_kind LIKE 'capture:%' THEN v_capture := substr(p_kind, 9); v_kind := 'capture'; END IF;
+  INSERT INTO fleet_browser_secret_requests (request_id, action_id, agent_id, account_id, kind, capture_kind, origin, worker_pub, sealed_in)`,
+   `  IF p_kind = 'owner_code' THEN
+    IF NOT acc.owner_provided THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_OWNER_ACCOUNT'); END IF;
+    UPDATE fleet_browser_secret_requests SET status = 'expired', sealed = NULL WHERE account_id = acc.account_id AND kind = 'owner_code' AND status = 'pending';
+    INSERT INTO fleet_browser_secret_requests (request_id, action_id, agent_id, account_id, kind, origin, worker_pub, expires_at)
+      VALUES (v_id, x.action_id, x.agent_id, acc.account_id, 'owner_code', lower(p_origin), p_worker_pub, now() + interval '${OWNER_CODE_MINUTES} minutes');
+    PERFORM fleet_event('signin_code_requested', x.agent_id, 'browser-worker', jsonb_build_object('accountId', acc.account_id, 'platform', acc.platform, 'requestId', v_id));
+    PERFORM fleet_notify('AMBER', 'SIGNIN_CODE_NEEDED', x.agent_id, left('A sign-in on ' || acc.platform || ' needs your one-time code', 120),
+      jsonb_build_object('accountId', acc.account_id, 'platform', acc.platform, 'requestId', v_id, 'minutes', ${OWNER_CODE_MINUTES},
+        'action', 'on the VPS: economy-signin-code ' || v_id || ' and type the code on standard input (never on the command line)'), 'signin-code:' || v_id);
+    RETURN jsonb_build_object('ok', true, 'requestId', v_id);
+  END IF;
+  IF p_kind LIKE 'capture:%' THEN v_capture := substr(p_kind, 9); v_kind := 'capture'; END IF;
+  INSERT INTO fleet_browser_secret_requests (request_id, action_id, agent_id, account_id, kind, capture_kind, origin, worker_pub, sealed_in)`],
 ])}
 
 ${restate(V79_SQL, "fleet_browser_steps_valid", [
@@ -99,6 +118,35 @@ ${restate(V79_SQL, "fleet_browser_steps_valid", [
     END IF;
     IF v_a = 'set_content' AND`],
 ])}
+
+-- Owner, 2 Nov: the owner's one-time code at sign-in (two-factor stays the owner's; no reusable secret is stored).
+ALTER TABLE fleet_browser_secret_requests DROP CONSTRAINT fleet_browser_secret_requests_kind_check;
+ALTER TABLE fleet_browser_secret_requests ADD CONSTRAINT fleet_browser_secret_requests_kind_check
+  CHECK (kind IN ('password','username','email','totp','email_code','sms_code','api_key','generate_password','new_password','auth_link','capture','owner_fact','owner_card','owner_document','owner_code'));
+${restate(V79_SQL, "ix_browser_secrets_pending", [
+  [`   WHERE r.status = 'pending' AND r.expires_at > now()), '[]'::jsonb);`, `   WHERE r.status = 'pending' AND r.expires_at > now() AND r.kind <> 'owner_code'), '[]'::jsonb);`],
+])}
+-- What the owner sees to answer one: the request, its account and the worker's one-time public key (not secret). Owner role only.
+CREATE FUNCTION fleet_admin_signin_codes() RETURNS jsonb LANGUAGE sql STABLE
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+  SELECT COALESCE(jsonb_agg(jsonb_build_object('requestId', r.request_id, 'agentId', r.agent_id, 'accountId', r.account_id, 'platform', a.platform, 'handle', a.handle,
+    'origin', r.origin, 'workerPub', r.worker_pub, 'expiresAt', r.expires_at) ORDER BY r.created_at), '[]'::jsonb)
+  FROM fleet_browser_secret_requests r JOIN fleet_agent_accounts a USING (account_id)
+  WHERE r.kind = 'owner_code' AND r.status = 'pending' AND r.expires_at > now()
+$$;
+-- The owner's code, sealed (by the CLI, on the owner's side) to that worker's key: the database never holds it in the clear, and records only that it came.
+CREATE FUNCTION fleet_admin_signin_code_serve(p_request uuid, p_sealed bytea, p_actor text) RETURNS jsonb LANGUAGE plpgsql
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+DECLARE r fleet_browser_secret_requests;
+BEGIN
+  IF p_actor IS NULL OR p_actor !~ '^operator:[A-Za-z0-9._-]{1,64}$' THEN RAISE EXCEPTION 'FLEET_ACTOR_INVALID: an owner operation names its operator'; END IF;
+  IF p_sealed IS NULL OR octet_length(p_sealed) NOT BETWEEN 32 AND 4000 THEN RAISE EXCEPTION 'FLEET_BAD_REQUEST: a sealed code'; END IF;
+  UPDATE fleet_browser_secret_requests SET status = 'served', sealed = p_sealed
+   WHERE request_id = p_request AND kind = 'owner_code' AND status = 'pending' AND expires_at > now() RETURNING * INTO r;
+  IF NOT FOUND THEN RETURN jsonb_build_object('ok', false, 'code', 'FLEET_NOT_FOUND', 'reason', 'no waiting sign-in code request with that id (it may have expired)'); END IF;
+  PERFORM fleet_event('signin_code_supplied', r.agent_id, p_actor, jsonb_build_object('accountId', r.account_id, 'requestId', r.request_id));
+  RETURN jsonb_build_object('ok', true, 'requestId', r.request_id);
+END $$;
 
 -- Review 2 Nov: the references of retired owner-handed logins (newest first, bounded), so the broker can shred any a crash left in its vault.
 -- References only; read-only; works whether or not handover is switched on.

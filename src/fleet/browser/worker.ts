@@ -51,6 +51,8 @@ export interface BrowserWorkerOptions {
   hostPolicy?: HostResolutionPolicy;
   /** v126-egress: where the egress proxy listens (default: the dedicated loopback address the unit allows). */
   egressHost?: string;
+  /** Owner, 2 Nov: how long a sign-in waits for the owner's one-time code (default: the registry's 5 minutes; tests shorten it). */
+  ownerCodeWaitMs?: number;
 }
 
 interface Session {
@@ -335,7 +337,12 @@ export class BrowserWorker {
         return /promo|coupon|voucher|discount|gift|referr|invite|post|zip/i.test([i.name, i.id, i.placeholder, i.getAttribute("aria-label"), i.labels?.[0]?.textContent].join(" "));
       }));
       if (!(await password.count()) && (await looksLikeCode())) {
-        const c = await this.secret(action, lease, "totp", origin).catch(() => { throw new Error("FLEET_SIGNIN_HUMAN"); });
+        // A stored authenticator seed answers at once. Otherwise (owner, 2 Nov: two-factor stays the owner's) the owner is asked for this one code,
+        // which arrives sealed to this worker's key; it is typed into this page only and never reaches the agent, a log or the database in the clear.
+        const c = await this.secret(action, lease, "totp", origin)
+          .catch(() => this.secret(action, lease, "owner_code", origin, null, this.o.ownerCodeWaitMs ?? 5 * 60_000))
+          .catch(() => { throw new Error("FLEET_SIGNIN_HUMAN"); });
+        if (!/^[A-Za-z0-9]{4,12}$/.test(c)) throw new Error("FLEET_SIGNIN_HUMAN");
         await code.fill(c);
         await code.press("Enter");
         await page.waitForLoadState("domcontentloaded").catch(() => {});
@@ -397,11 +404,11 @@ export class BrowserWorker {
   }
 
   /** Ask the registry/broker for one credential value; resolves to the plaintext (kept only by the caller). */
-  private async secret(action: BrowserAction, lease: string, kind: string, origin: string, sealedIn: Buffer | null = null): Promise<string> {
+  private async secret(action: BrowserAction, lease: string, kind: string, origin: string, sealedIn: Buffer | null = null, waitMs = 30_000): Promise<string> {
     const req = await this.gw.secretRequest(action.actionId, lease, kind, origin, this.key.publicKeyDer.toString("base64"), sealedIn);
     if (!req.ok) throw new Error(req.code);
     const id = String(req.requestId);
-    for (let i = 0; i < 120; i++) {
+    for (let i = 0; i < Math.ceil(waitMs / 250); i++) {
       const t = await this.gw.secretTake(id, action.actionId, lease);
       if (!t.ok) throw new Error(t.code);
       if (t.status === "served") return openSealed(this.key.privateKeyDer, this.key.publicKeyDer, Buffer.from(String(t.sealedB64), "base64"), `bsecret:${id}`);

@@ -291,7 +291,7 @@ export const HUB_COMMANDS = new Set([
   "economy-treasury-watch", "economy-treasury-watch-policy", "economy-capital-backing", "economy-capital-back", "economy-spend-breaker", "economy-ai-credits", "economy-ai-credit-purchase", "economy-ai-credit-policy",
   "economy-ai-credit-confirm", "economy-ai-credit-reconcile", "economy-ai-credit-lot-cost", "economy-ai-credit-reject", "economy-ai-credit-promotional-grant", "economy-ai-credit-draw-order", "economy-ai-credit-opening",
   "economy-ai-credit-historical-preview", "economy-ai-credit-historical-cost", "economy-ai-credit-test-period-preview", "economy-ai-credit-test-period-writeoff",
-  "economy-external-orders", "economy-external-order-confirm", "economy-account-handover", "economy-launch-boundary", "economy-launch-boundary-record", "economy-public-site", "economy-seller-set", "economy-seller", "economy-sales", "economy-ai-credit-reimbursed", "economy-owner-withdrawal", "economy-owner-withdrawal-assess", "economy-offer-proof", "hub-offers", "hub-enquiries", "hub-business", "economy-channel-payout-decide", "economy-channel-payout-bank", "economy-channel-payout-transfer", "economy-outward", "economy-channel-connect", "economy-channel-disconnect", "hub-channel-api",
+  "economy-external-orders", "economy-external-order-confirm", "economy-account-handover", "economy-signin-code", "economy-launch-boundary", "economy-launch-boundary-record", "economy-public-site", "economy-seller-set", "economy-seller", "economy-sales", "economy-ai-credit-reimbursed", "economy-owner-withdrawal", "economy-owner-withdrawal-assess", "economy-offer-proof", "hub-offers", "hub-enquiries", "hub-business", "economy-channel-payout-decide", "economy-channel-payout-bank", "economy-channel-payout-transfer", "economy-outward", "economy-channel-connect", "economy-channel-disconnect", "hub-channel-api",
   "owner-identity-autonomy", "economy-account-freeze", "economy-account-unfreeze", "hub-footprint", "hub-identity-uses", "hub-custody-key", "economy-custody-credential",
   "economy-custody-credential-revoke", "economy-rail-webhook", "hub-insolvency", "hub-wallet-measure", "hub-money-states", "owner-identity-documents", "economy-provider-secret",
   "hub-provider-secrets", "hub-storefront", "economy-storefront-probe", "economy-destination-paypal", "hub-sweep-reductions", "economy-sweep-reduction",
@@ -790,6 +790,19 @@ export async function runHubCommand(cmd: string, a: string[], h: PgHubAdmin, act
         throw new Error('FLEET_BAD_REQUEST: the file is {"password": "...", "totpSeed": "..."} (totpSeed optional)');
       }
       return h.accountHandover(agentId, kind, platform, loginUrl, handle, sealAccountLogin(Buffer.from(key.ownerPub, "base64"), { agentId, platform, handle, loginUrl }, JSON.stringify(value)), actor);
+    }
+    case "economy-signin-code": {
+      // Owner, 2 Nov: two-factor stays the owner's. The one-time code is read from standard input only (never an argument, never printed), sealed here
+      // to the waiting browser worker's one-time key, and only then sent: the database holds it sealed, the agent never sees it.
+      const pending = await h.signinCodes() as Array<{ requestId: string; workerPub: string; platform: string; accountId: string; expiresAt: string }>;
+      if (p[0] === "list") return pending.map(({ workerPub: _k, ...rest }) => rest);
+      if (!p[0] && pending.length !== 1) throw new Error(`FLEET_BAD_REQUEST: ${pending.length} sign-in code requests are waiting; name one: economy-signin-code <requestId> (or: economy-signin-code list)`);
+      const id = p[0] ?? pending[0].requestId;
+      const r = pending.find((x) => x.requestId === id);
+      if (!r) throw new Error("FLEET_NOT_FOUND: no waiting sign-in code request with that id (it may have expired)");
+      const code = fs.readFileSync(0, "utf8").trim();
+      if (!/^[A-Za-z0-9]{4,12}$/.test(code)) throw new Error("FLEET_BAD_REQUEST: the code is 4 to 12 letters or digits, typed on standard input (its content is not shown)");
+      return h.signinCodeServe(id, sealTo(Buffer.from(r.workerPub, "base64"), code, `bsecret:${id}`), actor);
     }
     case "economy-provider-secret": {
       const [name, file] = positional(a, ["--fingerprint"]);

@@ -11,7 +11,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import crypto from "crypto";
 import { sealAccountLogin } from "../../fleet/identity/vaults.js";
-import { execFileSync } from "child_process";
+import { execFileSync, spawn } from "child_process";
 import fs from "fs";
 import https from "https";
 import os from "os";
@@ -826,6 +826,57 @@ describe.skipIf(!PG_BIN || !CHROME || !OPENSSL)("v37 general browser operator wi
     expect(fs.existsSync(path.join(dir, `${active[0].vault_ref.slice(7)}.bin`)), "the active login is untouched").toBe(true);
     expect(await broker.sweepRetiredHandovers(), "hourly, not every tick").toBe(0);
   }, 120_000);
+
+  it("owner 2 Nov: two-factor stays the owner's: the sign-in waits for the owner's one-time code, typed on the CLI's standard input; no seed stored, the code nowhere in the clear", async () => {
+    const who = "owner2fa", password = `Owner-${crypto.randomUUID()}`, seed = "JBSWY3DPEHPK3PXPOWNERTWO";
+    users.set(who, { email: "t@site.test", password, verified: true, totpSeed: seed, totpOn: true });   // the site knows the seed; the Fleet never does
+    const pub = Buffer.from((broker as any).o.ownerVault.publicKeyBase64(), "base64");
+    const x = (await R.q(`SELECT fleet.fleet_admin_account_handover($1, 'marketplace', 'flow.test', $2, $3, $4, $5) AS r`, [A.id, `${SITE}/login`, who,
+      sealAccountLogin(pub, { agentId: A.id, platform: "flow.test", handle: who, loginUrl: `${SITE}/login` }, JSON.stringify({ password })), OWNER]))[0].r;
+    await broker.tick();
+    expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_agent_account_credentials WHERE account_id = $1 AND kind = 'totp')`, [x.accountId]))).toBe(0);
+    const id = (await ok(R.econ(A, "browser.open", { url: `${SITE}/out`, accountId: x.accountId }))).sessionId as string;
+    await browse(A, "browser.observe", { sessionId: id });
+    const cliRun = (args: string[], input: string) => new Promise<{ code: number; out: string }>((res) => {
+      const c = spawn(process.execPath, [path.join(process.cwd(), "dist", "fleet", "postgres", "cli.js"), ...args],
+        { env: { ...process.env, FLEET_ADMIN_DATABASE_URL: R.pgc.ownerUrl, FLEET_PG_SCHEMA: "fleet" } });
+      let out = ""; c.stdout.on("data", (d) => (out += d)); c.stderr.on("data", (d) => (out += d)); c.on("close", (code) => res({ code: code ?? -1, out }));
+      c.stdin.end(input);
+    });
+    // 1. The owner answers: the sign-in completes.
+    const signing = browse(A, "browser.act", { sessionId: id, steps: [{ action: "sign_in" }] });
+    let waiting: any[] = [];
+    for (let i = 0; i < 100 && !waiting.length; i++) { waiting = await R.one<any[]>(`fleet.fleet_admin_signin_codes()`); if (!waiting.length) await new Promise((r) => setTimeout(r, 100)); }
+    expect(waiting).toHaveLength(1);
+    expect(waiting[0]).toMatchObject({ accountId: x.accountId, platform: "flow.test" });
+    const note = (await R.q(`SELECT title, detail::text AS d FROM fleet.fleet_notifications WHERE code = 'SIGNIN_CODE_NEEDED' ORDER BY created_at DESC LIMIT 1`))[0];
+    expect(note.d).toContain(waiting[0].requestId);
+    expect((await cliRun(["economy-signin-code", "list"], "")).out).not.toContain("workerPub");
+    expect((await cliRun(["economy-signin-code", waiting[0].requestId], "12\n")).out, "a malformed code is refused").toMatch(/FLEET_BAD_REQUEST/);
+    const code = totp(seed);
+    const served = await cliRun(["economy-signin-code"], `${code}\n`);
+    expect(served.code, served.out).toBe(0);
+    expect(served.out).not.toContain(code);
+    const done = await signing;
+    expect(done.status, JSON.stringify(done.result)).toBe("done");
+    const seen = JSON.stringify(await browse(A, "browser.observe", { sessionId: id }));
+    expect(seen).toContain("Dashboard");
+    // The code is nowhere in the clear: not in the agent's results, events, notifications or the request row.
+    const dump = JSON.stringify(await R.q(`SELECT (SELECT jsonb_agg(result) FROM fleet.fleet_browser_actions) a, (SELECT jsonb_agg(detail) FROM fleet.fleet_events) e,
+      (SELECT jsonb_agg(detail) FROM fleet.fleet_notifications) n, (SELECT jsonb_agg(to_jsonb(r) - 'sealed' - 'worker_pub') FROM fleet.fleet_browser_secret_requests r) r`));
+    expect(dump).not.toContain(code);
+    expect(await R.one(`(SELECT status FROM fleet.fleet_browser_secret_requests WHERE request_id = $1)`, [waiting[0].requestId])).toBe("taken");
+    expect(await R.one(`(SELECT sealed IS NULL FROM fleet.fleet_browser_secret_requests WHERE request_id = $1)`, [waiting[0].requestId])).toBe(true);
+    await browse(A, "browser.close", { sessionId: id });
+    // 2. The owner does not answer in time: the sign-in stops as a human step, and nothing is guessed.
+    (worker as any).o.ownerCodeWaitMs = 1500;
+    try {
+      const id2 = (await ok(R.econ(A, "browser.open", { url: `${SITE}/out`, accountId: x.accountId }))).sessionId as string;
+      await browse(A, "browser.observe", { sessionId: id2 });
+      expect((await browse(A, "browser.act", { sessionId: id2, steps: [{ action: "sign_in" }] })).result.code).toBe("FLEET_SIGNIN_HUMAN");
+      await browse(A, "browser.close", { sessionId: id2 });
+    } finally { (worker as any).o.ownerCodeWaitMs = undefined; }
+  }, 180_000);
 
   it("v126: too many sign-ins in an hour stop before the site locks the account out", async () => {
     const who = "ownerlimit", password = `Owner-${crypto.randomUUID()}`;

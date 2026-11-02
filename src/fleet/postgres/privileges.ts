@@ -1206,7 +1206,7 @@ export async function economySurfaceProblems(db: Queryable, schema: string): Pro
     // served by the broker; authentication-message blobs by the broker only.
     fleet_browser_sessions: new Set(["fleet_econ_browser_open", "fleet_econ_browser_close", "fleet_browser_enqueue", "bx_report_action", "fleet_admin_account_freeze", "bx_actions_lost"]),
     fleet_browser_actions: new Set(["fleet_browser_enqueue", "bx_claim_action", "bx_report_action", "bx_actions_lost"]),
-    fleet_browser_secret_requests: new Set(["bx_secret_request", "bx_secret_take", "ix_browser_secrets_pending", "ix_browser_secret_serve"]),
+    fleet_browser_secret_requests: new Set(["bx_secret_request", "bx_secret_take", "ix_browser_secrets_pending", "ix_browser_secret_serve", "fleet_admin_signin_code_serve"]),
     fleet_auth_message_blobs: new Set(["ix_auth_blob_store", "ix_browser_secrets_pending", "ix_browser_secret_serve", "fleet_admin_mail_assign",
       "fleet_mail_delete_internal"]),
     // v38: Admin authentication state — written only by the dashboard gateway functions (and the owner's enrollment).

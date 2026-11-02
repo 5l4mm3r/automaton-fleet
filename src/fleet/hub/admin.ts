@@ -358,6 +358,9 @@ export class PgHubAdmin {
   accountHandover(agentId: string, kind: string, platform: string, origin: string, handle: string, sealed: Buffer, actor: string) {
     return this.one(`SELECT fleet_admin_account_handover($1, $2, $3, $4, $5, $6, $7) AS r`, [agentId, kind, platform, origin, handle, sealed, actor]);
   }
+  /** Owner, 2 Nov: sign-ins that need the owner's one-time code (two-factor stays the owner's; no secret here, only the worker's one-time public key). */
+  signinCodes() { return this.one(`SELECT fleet_admin_signin_codes() AS r`, []); }
+  signinCodeServe(requestId: string, sealed: Buffer, actor: string) { return this.one(`SELECT fleet_admin_signin_code_serve($1::uuid, $2, $3) AS r`, [requestId, sealed, actor]); }
   externalOrders() { return this.one(`SELECT fleet_admin_external_orders_json() AS r`, []); }
   externalOrderConfirm(orderId: string, what: string, totalMinor: number | null, evidence: string, actor: string) {
     return this.one(`SELECT fleet_admin_external_order_confirm($1::uuid, $2, $3, $4, $5) AS r`, [orderId, what, totalMinor, evidence, actor]);
