@@ -100,6 +100,8 @@ export interface IdentityGatewayPort {
   providerSecretInbox?(worker: string): Promise<Array<{ uploadId: string; name: string; sealedB64: string }>>;
   accountHandoverInbox?(worker: string): Promise<Array<{ uploadId: string; accountId: string; agentId: string; sealedB64: string; platform: string; handle: string; loginUrl: string }>>;
   accountHandoverInstalled?(uploadId: string, worker: string, ok: boolean, error: string | null, refs: Array<{ kind: string; vaultRef: string }>): Promise<IxResult & { retired?: string[] }>;
+  /** Review 2 Nov: references of retired owner-handed logins, to shred any a crash left behind. */
+  accountHandoverRetired?(worker: string): Promise<string[]>;
   providerSecretInstalled?(uploadId: string, worker: string, ok: boolean, error: string | null): Promise<IxResult>;
 }
 
@@ -247,6 +249,7 @@ export class PgIdentityGateway implements IdentityGatewayPort {
   accountHandoverInstalled(uploadId: string, worker: string, ok: boolean, error: string | null, refs: Array<{ kind: string; vaultRef: string }>) {
     return this.call<IxResult & { retired?: string[] }>("ix_account_handover_installed", [uploadId, worker, ok, error, JSON.stringify(refs)]);
   }
+  accountHandoverRetired(worker: string) { return this.call<string[]>("ix_account_handover_retired", [worker]); }
   providerSecretInbox(worker: string) { return this.call<Array<{ uploadId: string; name: string; sealedB64: string }>>("ix_provider_secret_inbox", [worker]); }
   providerSecretInstalled(uploadId: string, worker: string, ok: boolean, error: string | null) {
     return this.call<IxResult>("ix_provider_secret_installed", [uploadId, worker, ok, error]);

@@ -1697,6 +1697,7 @@ export const IDENTITY_API_FUNCTIONS: readonly string[] = Object.freeze([
   "ix_browser_credential_record(uuid, text, text, text)",
   "ix_account_handover_inbox(text)",
   "ix_account_handover_installed(uuid, text, boolean, text, jsonb)",
+  "ix_account_handover_retired(text)",
   // v41: the broker's provider configuration and health, shared-mailbox ingestion and sending, provider-secret names,
   // live number quotes, cost-checked provisioning and message prices.
   "ix_comms_configure(text, jsonb)",

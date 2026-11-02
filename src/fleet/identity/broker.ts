@@ -259,8 +259,9 @@ export class IdentityBroker {
       try {
         const v = ov.openAccountLogin(Buffer.from(u.sealedB64, "base64"), { agentId: u.agentId, platform: u.platform, handle: u.handle, loginUrl: u.loginUrl });
         if (!v.password) throw new Error("FLEET_ACCOUNT_LOGIN_FIELDS");
-        refs.push({ kind: "password", vaultRef: this.vault.put({ agentId: u.agentId, accountId: u.accountId, kind: "password" }, v.password) });
-        if (v.totpSeed) refs.push({ kind: "totp", vaultRef: this.vault.put({ agentId: u.agentId, accountId: u.accountId, kind: "totp" }, v.totpSeed) });
+        // Review 2 Nov: references derived from the upload, so a crash before the record is overwritten by the next attempt, never orphaned.
+        refs.push({ kind: "password", vaultRef: this.vault.putAt(`handover:${u.uploadId}:password`, { agentId: u.agentId, accountId: u.accountId, kind: "password" }, v.password) });
+        if (v.totpSeed) refs.push({ kind: "totp", vaultRef: this.vault.putAt(`handover:${u.uploadId}:totp`, { agentId: u.agentId, accountId: u.accountId, kind: "totp" }, v.totpSeed) });
         n++;
       } catch (err) {
         error = /FLEET_[A-Z_]+/.exec(err instanceof Error ? err.message : "")?.[0] ?? "not sealed to this broker's key for that agent, account and site";
@@ -283,6 +284,22 @@ export class IdentityBroker {
     }
     return n;
   }
+
+  /**
+   * Review 2 Nov: a crash between recording a new login and shredding the one it replaced leaves the old one in the vault. At start and then
+   * hourly, every retired owner-handed login still present is shredded (shredding an absent one is a no-op). Returns how many were shredded.
+   */
+  async sweepRetiredHandovers(): Promise<number> {
+    if (!this.gw.accountHandoverRetired) return 0;
+    const now = Date.now();
+    if (this.lastRetiredSweep !== null && now - this.lastRetiredSweep < 3_600_000) return 0;
+    let n = 0;
+    for (const ref of await this.gw.accountHandoverRetired(this.worker)) if (/^avault:[0-9a-f-]{36}$/.test(ref) && this.vault.shred(ref)) n++;
+    this.lastRetiredSweep = now;
+    if (n) this.log("info", "account_handover_retired_swept", { shredded: n });
+    return n;
+  }
+  private lastRetiredSweep: number | null = null;
 
   /**
    * v51: provider secrets the owner sealed to this broker's key (dashboard or CLI onboarding): opened here, checked for the
@@ -805,6 +822,7 @@ export class IdentityBroker {
     const outcomes: string[] = [];
     await this.pass("provider_secrets", () => this.installProviderSecrets());
     await this.pass("account_handovers", () => this.installAccountHandovers());
+    await this.pass("account_handover_sweep", () => this.sweepRetiredHandovers());
     if (!this.registered) await this.pass("comms_register", () => this.registerProviders());
     if (!this.keyPublished && this.o.ownerVault) {
       const r = await this.gw.publishOwnerKey(this.worker, this.o.ownerVault.publicKeyBase64());

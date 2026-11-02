@@ -100,5 +100,16 @@ ${restate(V79_SQL, "fleet_browser_steps_valid", [
     IF v_a = 'set_content' AND`],
 ])}
 
+-- Review 2 Nov: the references of retired owner-handed logins (newest first, bounded), so the broker can shred any a crash left in its vault.
+-- References only; read-only; works whether or not handover is switched on.
+CREATE FUNCTION ix_account_handover_retired(p_worker text) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = @@SCHEMA@@, pg_temp AS $$
+BEGIN
+  IF p_worker IS NULL OR p_worker !~ '^[a-z0-9-]{3,40}$' THEN RAISE EXCEPTION 'FLEET_BAD_REQUEST: worker name'; END IF;
+  RETURN COALESCE((SELECT jsonb_agg(t.vault_ref) FROM (SELECT c.vault_ref FROM fleet_agent_account_credentials c JOIN fleet_agent_accounts a USING (account_id)
+    WHERE a.owner_provided AND c.kind IN ('password','totp') AND c.status IN ('rotated','revoked','compromised')
+    ORDER BY c.retired_at DESC NULLS LAST LIMIT 500) t), '[]'::jsonb);
+END $$;
+
 CREATE OR REPLACE FUNCTION fleet_account_handover_enabled() RETURNS boolean LANGUAGE sql STABLE AS $$ SELECT true $$;
 `;

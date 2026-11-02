@@ -795,6 +795,38 @@ describe.skipIf(!PG_BIN || !CHROME || !OPENSSL)("v37 general browser operator wi
     await browse(A, "browser.close", { sessionId: id });
   }, 120_000);
 
+  it("review 2 Nov (finding 5): a crash before the record leaves no orphan; a retired login a crash left behind is shredded by the sweep", async () => {
+    const vault = (broker as any).vault, dir = vault.dir as string;
+    const files = () => fs.readdirSync(dir).filter((f) => f.endsWith(".bin")).length;
+    const pub = Buffer.from((broker as any).o.ownerVault.publicKeyBase64(), "base64");
+    const who = "ownercrash";
+    users.set(who, { email: "c@site.test", password: "unused", verified: true });
+    const hand = async (pw: string) => (await R.q(`SELECT fleet.fleet_admin_account_handover($1, 'marketplace', 'flow.test', $2, $3, $4, $5) AS r`, [A.id, `${SITE}/login`, who,
+      sealAccountLogin(pub, { agentId: A.id, platform: "flow.test", handle: who, loginUrl: `${SITE}/login` }, JSON.stringify({ password: pw })), OWNER]))[0].r;
+    const x = await hand("first-login");
+    const [u1] = await (broker as any).gw.accountHandoverInbox((broker as any).worker);
+    // A crashed attempt: the entry was written, the record never made.
+    const crashed = vault.putAt(`handover:${u1.uploadId}:password`, { agentId: A.id, accountId: x.accountId, kind: "password" }, "first-login");
+    const before = files();
+    await broker.tick();
+    expect(files(), "the retry overwrote the crashed attempt's entry").toBe(before);
+    const live = await R.q(`SELECT vault_ref, status FROM fleet.fleet_agent_account_credentials WHERE account_id = $1`, [x.accountId]);
+    expect(live).toEqual([{ vault_ref: crashed, status: "active" }]);
+    // A new login replaces it; the old one is shredded as usual. Then a crash is simulated after the record: the old entry is put back.
+    await hand("second-login");
+    await broker.tick();
+    expect(fs.existsSync(path.join(dir, `${crashed.slice(7)}.bin`)), "replaced login shredded on install").toBe(false);
+    vault.putAt(`handover:${u1.uploadId}:password`, { agentId: A.id, accountId: x.accountId, kind: "password" }, "first-login");
+    expect(fs.existsSync(path.join(dir, `${crashed.slice(7)}.bin`))).toBe(true);
+    (broker as any).lastRetiredSweep = null;
+    expect(await broker.sweepRetiredHandovers()).toBeGreaterThanOrEqual(1);
+    expect(fs.existsSync(path.join(dir, `${crashed.slice(7)}.bin`)), "the sweep shredded the retired login").toBe(false);
+    const active = await R.q(`SELECT vault_ref FROM fleet.fleet_agent_account_credentials WHERE account_id = $1 AND status = 'active'`, [x.accountId]);
+    expect(active).toHaveLength(1);
+    expect(fs.existsSync(path.join(dir, `${active[0].vault_ref.slice(7)}.bin`)), "the active login is untouched").toBe(true);
+    expect(await broker.sweepRetiredHandovers(), "hourly, not every tick").toBe(0);
+  }, 120_000);
+
   it("v126: too many sign-ins in an hour stop before the site locks the account out", async () => {
     const who = "ownerlimit", password = `Owner-${crypto.randomUUID()}`;
     users.set(who, { email: "o@site.test", password: "something-else", verified: true });

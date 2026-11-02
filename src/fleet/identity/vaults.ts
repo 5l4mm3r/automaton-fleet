@@ -76,6 +76,17 @@ export class AgentCredentialVault {
     return ref;
   }
 
+  /**
+   * Review 2 Nov: store under a reference derived from `seed`. Storing again with the same seed overwrites the same entry, so a broker
+   * crash between storing and recording leaves nothing behind: the next attempt reuses the reference (the owner's handover uses the upload id).
+   */
+  putAt(seed: string, scope: CredentialScope, secret: string): string {
+    const h = crypto.createHash("sha256").update(`avault-seed:${seed}`).digest("hex");
+    const ref = `avault:${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-${((parseInt(h[16], 16) & 3) | 8).toString(16)}${h.slice(17, 20)}-${h.slice(20, 32)}`;
+    writePrivate(this.file(ref), this.box.seal(secret, scopeOf(scope)));
+    return ref;
+  }
+
   /** Use a secret for exactly this scope (a reference of another agent/account/kind does not open). */
   async withSecret<T>(ref: string, scope: CredentialScope, fn: (secret: string) => Promise<T>): Promise<T> {
     const blob = readPrivate(this.file(ref));
