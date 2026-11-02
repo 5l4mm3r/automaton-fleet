@@ -33,6 +33,8 @@ import { chromium, type Browser, type BrowserContext, type Page } from "playwrig
 import { generateX25519, openSealed, sealTo } from "../identity/crypto.js";
 import type { BrowserAction, BrowserGatewayPort } from "./gateway.js";
 import { HostResolutionPolicy } from "./policy.js";
+import { BROWSER_EGRESS_ADDRESS, EgressProxy } from "./egress.js";
+import net from "net";
 
 export interface BrowserWorkerOptions {
   worker?: string;
@@ -47,6 +49,8 @@ export interface BrowserWorkerOptions {
   log?: (level: string, event: string, detail?: Record<string, unknown>) => void;
   /** v79: the resolution policy (tests inject a resolver). */
   hostPolicy?: HostResolutionPolicy;
+  /** v126-egress: where the egress proxy listens (default: the dedicated loopback address the unit allows). */
+  egressHost?: string;
 }
 
 interface Session {
@@ -105,6 +109,8 @@ export function secretForms(v: string): string[] {
 export class BrowserWorker {
   private readonly worker: string;
   private browser: Browser | null = null;
+  /** v126-egress: Chromium's only way out; checks every connection against the same policy. */
+  private egress: EgressProxy | null = null;
   private readonly sessions = new Map<string, Session>();
   private readonly key = generateX25519();
   private readonly hosts: HostResolutionPolicy;
@@ -124,6 +130,8 @@ export class BrowserWorker {
    */
   async selfTest(): Promise<{ ok: true; version: string }> {
     const b = await this.ensureBrowser();
+    // v126-egress: this process (and so Chromium, in the same unit) reaches its egress proxy, which refuses a request without its credentials.
+    await this.egressReachable();
     const context = await b.newContext({ acceptDownloads: false });
     try {
       const page = await context.newPage();
@@ -137,12 +145,37 @@ export class BrowserWorker {
   }
 
   private async ensureBrowser(): Promise<Browser> {
+    if (!this.egress) {
+      const egress = new EgressProxy({ host: this.o.egressHost ?? BROWSER_EGRESS_ADDRESS, policy: { connectAddress: (h, p, o) => this.hosts.connectAddress(h, p, o) },
+        allowLoopback: this.o.allowLoopback, log: this.o.log });
+      await egress.start();
+      this.egress = egress;
+    }
     if (!this.browser || !this.browser.isConnected()) {
+      // v126-egress: every connection goes through the egress proxy, loopback included (no implicit bypass); QUIC is off, since it would not use the proxy.
       this.browser = await chromium.launch({ executablePath: this.o.executablePath, headless: true, chromiumSandbox: this.o.chromiumSandbox ?? false,
-        args: ["--disable-dev-shm-usage", "--no-first-run", "--disable-background-networking", "--disable-sync", "--metrics-recording-only", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"] });
+        proxy: { server: this.egress.url, username: this.egress.username, password: this.egress.password, bypass: "<-loopback>" },
+        args: ["--disable-dev-shm-usage", "--no-first-run", "--disable-background-networking", "--disable-sync", "--metrics-recording-only", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+          "--disable-quic"] });
     }
     return this.browser;
   }
+
+  /** v126-egress: a connection to the proxy without its credentials is answered 407: the address is reachable from this unit and the proxy is this one. */
+  private egressReachable(): Promise<void> {
+    const { host, port } = this.egress!.endpoint;
+    return new Promise((resolve, reject) => {
+      const s = net.connect({ host, port });
+      const fail = (why: string) => { s.destroy(); reject(new Error(`egress proxy unreachable at ${host}:${port}: ${why}`)); };
+      const t = setTimeout(() => fail("timeout"), 5_000);
+      s.once("connect", () => s.write("CONNECT selftest.invalid:443 HTTP/1.1\r\nHost: selftest.invalid:443\r\n\r\n"));
+      s.once("data", (d) => { clearTimeout(t); s.destroy(); /^HTTP\/1\.1 407 /.test(d.toString("latin1")) ? resolve() : reject(new Error("egress proxy answered unexpectedly")); });
+      s.once("error", (e) => { clearTimeout(t); fail((e as NodeJS.ErrnoException).code ?? "error"); });
+    });
+  }
+
+  /** v126-egress: the proxy's counts (tests, logs). */
+  egressStats(): Record<string, number> | null { return this.egress ? { ...this.egress.stats } : null; }
 
   private async newSession(owner: boolean): Promise<Session> {
     const b = await this.ensureBrowser();
@@ -664,5 +697,8 @@ export class BrowserWorker {
     for (const s of this.sessions.values()) await s.context.close().catch(() => {});
     this.sessions.clear();
     await this.browser?.close().catch(() => {});
+    this.browser = null;
+    await this.egress?.close().catch(() => {});
+    this.egress = null;
   }
 }

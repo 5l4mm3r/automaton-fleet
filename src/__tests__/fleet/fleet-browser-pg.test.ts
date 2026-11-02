@@ -786,5 +786,7 @@ describe.skipIf(!PG_BIN || !CHROME || !OPENSSL)("v37 general browser operator wi
       expect(await R.code(bx.query(`SELECT fleet.ix_browser_secrets_pending('x')`))).toBe("permission denied");
     } finally { await bx.end(); }
     expect((await auditPrivileges(R.owner, { schema: "fleet", requireIdentityRoles: true, requireBrowserRoles: true })).problems).toEqual([]);
+    // v126-egress: everything above (sign-ups, sign_in, captures) went through the egress proxy; Chromium has no other way out.
+    expect(worker.egressStats()?.allowed ?? 0).toBeGreaterThan(0);
   });
 });

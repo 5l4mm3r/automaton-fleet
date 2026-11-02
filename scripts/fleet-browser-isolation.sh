@@ -11,14 +11,19 @@
 #   sudo scripts/fleet-browser-isolation.sh verify     focused verification (read-only; a throwaway probe unit)
 #   sudo scripts/fleet-browser-isolation.sh rollback   restore browser.env and pg_hba.conf from the latest backups, remove
 #        the drop-in, reload, restart the unit
+#   sudo scripts/fleet-browser-isolation.sh apply-dropin     v126-egress, on a host where apply already ran: back up the installed drop-in, install
+#        this one (one loopback address, 127.0.0.77, for the worker's egress proxy), reload, restart the unit, verify. Before a v126-egress release:
+#        the v126-egress worker refuses to start without it (its self-test reaches the proxy); an older worker is unaffected by it.
+#   sudo scripts/fleet-browser-isolation.sh rollback-dropin  restore the drop-in saved by apply-dropin, reload, restart (only with a pre-v126-egress release)
 #   scripts/fleet-browser-isolation.sh selftest        no root: the file transforms against temporary fixtures
 #
-# verify passes only if: the unit's effective policy allows no address and denies 127.0.0.0/8 and ::1/128; a probe run
+# verify passes only if: the unit's effective policy allows exactly the egress address (127.0.0.77/32) and denies 127.0.0.0/8 and ::1/128; a probe run
 # under exactly that policy as the browser user cannot open TCP to any loopback service (v4 and v6) but can reach the
-# public internet, and reaches PostgreSQL through the socket as fleet_browser_login (bx_ping); the restarted worker logged
+# public internet, and reaches PostgreSQL through the socket as fleet_browser_login (bx_ping); no port opens on 127.0.0.77 that does not also open
+# on the host's public address (a service bound to every address answers on both; the exception adds no reach); the restarted worker logged
 # its Chromium self-test and started. Touches nothing else: no other unit, env file, role or rule.
 set -euo pipefail
-MODE="${1:?usage: plan | apply | verify | rollback | selftest}"
+MODE="${1:?usage: plan | apply | apply-dropin | verify | rollback | rollback-dropin | selftest}"
 UNIT=automaton-fleet-browser
 ENVF=/etc/automaton-fleet/browser.env
 DROPIN_DIR=/etc/systemd/system/$UNIT.service.d
@@ -29,6 +34,7 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 SRC_DROPIN=$REPO/deploy/systemd/$UNIT.service.d/20-no-loopback.conf
 TS=$(date -u +%Y%m%dT%H%M%SZ)
 PROBE_PORTS="5432 6379 8443 8787 8788 8790"
+EGRESS_ADDR=127.0.0.77
 
 # ── pure transforms (python3 -I; values never printed) ──
 url_to_socket() { # $1 env file in, $2 out; FLEET_BROWSER_DATABASE_URL host:port → unix socket; prints the database name
@@ -63,6 +69,9 @@ open(dst, "w").write("".join(lines)); print("inserted")
 PY
 }
 
+# Ports of TCP listeners bound to every address (`ss -Hltn` lines on stdin): those also answer on 127.0.0.77.
+wildcard_ports() { awk '{ a=$4; p=a; sub(/.*:/, "", p); h=a; sub(/:[0-9]+$/, "", h); if (h == "0.0.0.0" || h == "[::]" || h == "*") print p }' | awk '!seen[$0]++' | paste -sd' '; }
+
 if [[ "$MODE" == selftest ]]; then
   T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
   pw=$(printf 'a%.0s' {1..64})
@@ -76,7 +85,10 @@ if [[ "$MODE" == selftest ]]; then
   [[ "$(hba_insert "$T/hba" "$T/hba.out" automaton_fleet)" == inserted ]] || { echo "selftest: hba insert FAILED"; exit 1; }
   [[ "$(sed -n 2p "$T/hba.out")" == local*automaton_fleet*fleet_browser_login*scram-sha-256* ]] || { echo "selftest: rule not first local line"; exit 1; }
   [[ "$(hba_insert "$T/hba.out" "$T/hba.2" automaton_fleet)" == present ]] && cmp -s "$T/hba.out" "$T/hba.2" || { echo "selftest: not idempotent"; exit 1; }
-  grep -q '^IPAddressAllow=$' "$SRC_DROPIN" && grep -q '^IPAddressDeny=127.0.0.0/8 ::1/128$' "$SRC_DROPIN" || { echo "selftest: drop-in content"; exit 1; }
+  [[ "$(grep -c '^IPAddressAllow=' "$SRC_DROPIN")" == 2 ]] && grep -q '^IPAddressAllow=$' "$SRC_DROPIN" && grep -qx "IPAddressAllow=$EGRESS_ADDR/32" "$SRC_DROPIN" \
+    && grep -q '^IPAddressDeny=127.0.0.0/8 ::1/128$' "$SRC_DROPIN" || { echo "selftest: drop-in content"; exit 1; }
+  printf 'LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\nLISTEN 0 128 127.0.0.1:5432 0.0.0.0:*\nLISTEN 0 128 [::]:443 [::]:*\nLISTEN 0 128 *:80 *:*\nLISTEN 0 128 127.0.0.77:41234 0.0.0.0:*\n' > "$T/ss"
+  [[ "$(wildcard_ports < "$T/ss")" == "22 443 80" ]] || { echo "selftest: wildcard listener parse"; exit 1; }
   echo "SELFTEST PASSED"; exit 0
 fi
 
@@ -87,19 +99,28 @@ HBA=$(psql_su -c 'SHOW hba_file')
 
 # A probe under the unit's own address policy, as the browser user (a transient unit: same cgroup BPF filter).
 probe() { # $1 = effective allow, $2 = effective deny → prints one JSON line
-  local url; url=$(sed -n 's/^FLEET_BROWSER_DATABASE_URL=//p' "$ENVF")
+  local url wild pub; url=$(sed -n 's/^FLEET_BROWSER_DATABASE_URL=//p' "$ENVF")
+  wild=$(ss -Hltn | wildcard_ports); pub=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p')
   systemd-run --quiet --wait --pipe --collect -p User="$UNIT" -p Group="$UNIT" -p "IPAddressAllow=$1" -p "IPAddressDeny=$2" \
-    -p WorkingDirectory="$WD" -E PROBE_URL="$url" -E PROBE_PORTS="$PROBE_PORTS" "$NODE" -e '
+    -p WorkingDirectory="$WD" -E PROBE_URL="$url" -E PROBE_PORTS="$PROBE_PORTS" -E PROBE_WILD="$wild" -E PROBE_PUBLIC="$pub" -E PROBE_EGRESS="$EGRESS_ADDR" "$NODE" -e '
 const net = require("net"); const pg = require("pg");
 const tcp = (host, port) => new Promise((r) => { const s = net.connect({ host, port, timeout: 3000 }); const done = (ok, why) => { s.destroy(); r({ host, port, ok, why }); };
   s.on("connect", () => done(true)); s.on("timeout", () => done(false, "timeout")); s.on("error", (e) => done(false, e.code)); });
 (async () => {
   const loop = []; for (const p of process.env.PROBE_PORTS.split(" ")) { loop.push(await tcp("127.0.0.1", Number(p))); loop.push(await tcp("::1", Number(p))); }
   const pub = await tcp("1.1.1.1", 443);
+  // v126-egress: a port open on the egress address but not on the public address would be reach the exception adds.
+  const egressOnly = [];
+  for (const p of (process.env.PROBE_WILD || "").split(" ").filter(Boolean)) {
+    const e = await tcp(process.env.PROBE_EGRESS, Number(p));
+    const q = process.env.PROBE_PUBLIC ? await tcp(process.env.PROBE_PUBLIC, Number(p)) : { ok: false };
+    if (e.ok && !q.ok) egressOnly.push(p);
+  }
   let db = { ok: false };
   try { const c = new pg.Client({ connectionString: process.env.PROBE_URL }); await c.connect(); const r = await c.query("SELECT fleet.bx_ping() AS r"); await c.end();
         db = { ok: true, schemaVersion: r.rows[0].r.schemaVersion, socket: String(c.host).startsWith("/") }; } catch (e) { db = { ok: false, why: String(e.code || e.message).slice(0, 80) }; }
-  console.log(JSON.stringify({ loopbackOpen: loop.filter((x) => x.ok).map((x) => x.host + ":" + x.port), loopbackChecked: loop.length, publicOk: pub.ok, db }));
+  console.log(JSON.stringify({ loopbackOpen: loop.filter((x) => x.ok).map((x) => x.host + ":" + x.port), loopbackChecked: loop.length, publicOk: pub.ok, db,
+    publicAddress: process.env.PROBE_PUBLIC || null, wildcardChecked: (process.env.PROBE_WILD || "").split(" ").filter(Boolean).length, egressOnly }));
 })();'
 }
 
@@ -107,9 +128,9 @@ do_verify() {
   local allow deny since out ok=1
   allow=$(systemctl show "$UNIT" -p IPAddressAllow --value); deny=$(systemctl show "$UNIT" -p IPAddressDeny --value)
   echo "effective policy: allow=[${allow}] deny includes loopback: $([[ " $deny " == *" 127.0.0.0/8 "* && " $deny " == *" ::1/128 "* ]] && echo yes || echo NO)"
-  [[ -z "$allow" && " $deny " == *" 127.0.0.0/8 "* && " $deny " == *" ::1/128 "* ]] || ok=0
+  [[ "$allow" == "$EGRESS_ADDR/32" && " $deny " == *" 127.0.0.0/8 "* && " $deny " == *" ::1/128 "* ]] || ok=0
   out=$(probe "$allow" "$deny"); echo "probe under that policy: $out"
-  python3 -I -c 'import json,sys; d=json.loads(sys.argv[1]); sys.exit(0 if (not d["loopbackOpen"] and d["loopbackChecked"]>0 and d["publicOk"] and d["db"]["ok"] and d["db"].get("socket")) else 1)' "$out" || ok=0
+  python3 -I -c 'import json,sys; d=json.loads(sys.argv[1]); sys.exit(0 if (not d["loopbackOpen"] and d["loopbackChecked"]>0 and d["publicOk"] and d["db"]["ok"] and d["db"].get("socket") and d["publicAddress"] and not d["egressOnly"]) else 1)' "$out" || ok=0
   since=$(systemctl show "$UNIT" -p ActiveEnterTimestamp --value)
   echo "unit: $(systemctl is-active "$UNIT") since $since"
   if journalctl -u "$UNIT" --since "$since" --no-pager -o cat 2>/dev/null | grep -q '"browser_selftest_ok"' \
@@ -148,6 +169,19 @@ case "$MODE" in
     do_verify
     ;;
   verify) do_verify ;;
+  apply-dropin)
+    [[ -f $DROPIN ]] || { echo "no drop-in installed: run apply first (it also moves the worker to the PostgreSQL socket)"; exit 1; }
+    cp -p "$DROPIN" "$DROPIN.pre-egress-$TS"; echo "backup: $DROPIN.pre-egress-$TS"
+    install -m 0644 "$SRC_DROPIN" "$DROPIN"
+    systemctl daemon-reload; systemctl restart "$UNIT"
+    for _ in $(seq 1 60); do journalctl -u "$UNIT" --since "$(systemctl show "$UNIT" -p ActiveEnterTimestamp --value)" -o cat --no-pager 2>/dev/null | grep -q '"browser_worker_started"' && break; sleep 2; done
+    do_verify
+    ;;
+  rollback-dropin)
+    B=$(ls -1t "$DROPIN".pre-egress-* 2>/dev/null | head -1); [[ -n "$B" ]] || { echo "no drop-in backup found"; exit 1; }
+    install -m 0644 "$B" "$DROPIN"; systemctl daemon-reload; systemctl restart "$UNIT"
+    echo "drop-in restored from $B; policy allow=[$(systemctl show "$UNIT" -p IPAddressAllow --value)]"
+    ;;
   rollback)
     E=$(ls -1t "$ENVF".pre-isolation-* 2>/dev/null | head -1); H=$(ls -1t "$HBA".pre-isolation-* 2>/dev/null | head -1)
     [[ -n "$E" && -n "$H" ]] || { echo "no backups found"; exit 1; }
@@ -155,5 +189,5 @@ case "$MODE" in
     rm -f "$DROPIN"; systemctl daemon-reload; systemctl restart "$UNIT"
     echo "rolled back to $E / $H; policy allow=[$(systemctl show "$UNIT" -p IPAddressAllow --value)]"
     ;;
-  *) echo "usage: plan | apply | verify | rollback | selftest" >&2; exit 2 ;;
+  *) echo "usage: plan | apply | apply-dropin | verify | rollback | rollback-dropin | selftest" >&2; exit 2 ;;
 esac

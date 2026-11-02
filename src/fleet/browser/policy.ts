@@ -59,7 +59,12 @@ const RESOLVE_TTL_MS = 30_000;
  */
 export class HostResolutionPolicy {
   private readonly cache = new Map<string, { ok: boolean; at: number }>();
-  constructor(private readonly lookup: Lookup = systemLookup, private readonly now: () => number = Date.now) {}
+  /**
+   * `testPublic` is for tests only: loopback addresses a test site listens on, treated as public so that the refusal of every other
+   * address goes through the real check. Production passes nothing.
+   */
+  constructor(private readonly lookup: Lookup = systemLookup, private readonly now: () => number = Date.now, private readonly testPublic: ReadonlySet<string> = new Set()) {}
+  private refused(ip: string): boolean { return !this.testPublic.has(ip) && addressPrivate(ip); }
   async allowed(raw: string, opts: { allowLoopback?: boolean } = {}): Promise<boolean> {
     if (!browserUrlAllowed(raw, opts)) return false;
     if (opts.allowLoopback) return true;
@@ -73,10 +78,28 @@ export class HostResolutionPolicy {
     let ok = false;
     try {
       const addrs = await this.lookup(host);
-      ok = addrs.length > 0 && addrs.every((a) => !addressPrivate(a));
+      ok = addrs.length > 0 && addrs.every((a) => !this.refused(a));
     } catch { ok = false; }
     if (this.cache.size > 2000) this.cache.clear();
     this.cache.set(host, { ok, at: this.now() });
     return ok;
+  }
+
+  /**
+   * v126-egress: the one address a connection to host:port may go to, or null. The egress proxy connects to exactly the address returned: there is no
+   * second lookup, so a name cannot answer differently between the check and the connection. Same rules as `allowed`: the URL rules, then every
+   * address the name resolves to must be public. `allowLoopback` (tests) admits loopback addresses only, never another private range.
+   */
+  async connectAddress(host: string, port: number, opts: { allowLoopback?: boolean } = {}): Promise<string | null> {
+    const h = host.replace(/^\[|\]$/g, "").toLowerCase();
+    if (!h || !Number.isInteger(port) || port < 1 || port > 65535) return null;
+    const literal = net.isIP(h) === 6 ? `[${h}]` : h;
+    if (!browserUrlAllowed(`https://${literal}:${port}/`, opts)) return null;
+    const admit = (a: string) => !this.refused(a) || (Boolean(opts.allowLoopback) && (a === "::1" || /^127\./.test(a)));
+    if (net.isIP(h)) return admit(h) ? h : null;
+    let addrs: string[];
+    try { addrs = await this.lookup(h); } catch { return null; }
+    if (!addrs.length || !addrs.every(admit)) return null;
+    return addrs[0];
   }
 }
