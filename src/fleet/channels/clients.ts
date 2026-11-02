@@ -123,6 +123,11 @@ export class EtsyClient {
     const headers = body instanceof URLSearchParams ? this.headers({ "Content-Type": "application/x-www-form-urlencoded" }) : this.headers();
     return json(await this.http(`${ETSY_API}${p}`, { method, headers, ...(body ? { body } : {}) }), `${method} ${p.split("?")[0]}`);
   }
+  /** v127: Etsy's seller category tree (GET /v3/application/seller-taxonomy/nodes; read-only, needs only the app key). */
+  async taxonomy(): Promise<EtsyTaxonomyNode[]> {
+    const r = await this.call("GET", "/v3/application/seller-taxonomy/nodes") as { results?: unknown };
+    return Array.isArray(r.results) ? (r.results as EtsyTaxonomyNode[]) : [];
+  }
   /** The account behind the token: Etsy user id and shop id. */
   async whoami(): Promise<{ account: string; shopId: string | null }> {
     const me = await this.call("GET", "/v3/application/users/me") as { user_id?: unknown; shop_id?: unknown };
@@ -199,4 +204,30 @@ export class PinterestClient {
     const id = String(r.id ?? "");
     return { id, url: `https://www.pinterest.com/pin/${id}/` };
   }
+}
+
+/** v127: one node of Etsy's seller taxonomy as the API returns it (children nested). */
+export interface EtsyTaxonomyNode { id?: unknown; name?: unknown; level?: unknown; children?: unknown }
+export const TAXONOMY_RESULTS = 25;
+/**
+ * v127: the categories whose path matches every word of the query (case-insensitive), deepest first, at most 25 — each with its
+ * id and its full path ("Paper & Party Supplies > Paper > Calendars & Planners"), so the agent chooses with the path in view.
+ */
+export function searchTaxonomy(roots: EtsyTaxonomyNode[], query: string, limit = TAXONOMY_RESULTS): Array<{ id: number; path: string; level: number }> {
+  const words = query.toLowerCase().split(/[^\p{L}\p{N}&]+/u).filter((w) => w.length > 1);
+  if (!words.length) return [];
+  const out: Array<{ id: number; path: string; level: number }> = [];
+  const walk = (nodes: unknown, trail: string[], depth: number) => {
+    if (!Array.isArray(nodes) || depth > 12) return;
+    for (const n of nodes as EtsyTaxonomyNode[]) {
+      const id = Number(n.id), name = typeof n.name === "string" ? n.name.slice(0, 120) : "";
+      if (!Number.isSafeInteger(id) || id <= 0 || !name) continue;
+      const path = [...trail, name];
+      const hay = path.join(" > ").toLowerCase();
+      if (words.every((w) => hay.includes(w))) out.push({ id, path: path.join(" > "), level: path.length });
+      walk(n.children, path, depth + 1);
+    }
+  };
+  walk(roots, [], 0);
+  return out.sort((a, b) => b.level - a.level || a.path.localeCompare(b.path)).slice(0, limit);
 }

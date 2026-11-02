@@ -52,6 +52,9 @@ function fakeProviders() {
       if (m && init.method === "POST" && m[3] === "images") return ok({ listing_image_id: 1 });
       if (m && init.method === "POST" && m[3] === "files") return ok({ listing_file_id: 2 });
       if (m && init.method === "PATCH") { const l = state.listings.get(m[2]!)!; Object.assign(l, body); return ok({ listing_id: Number(m[2]), state: l.state, url: `https://www.etsy.com/listing/${m[2]}` }); }
+      if (u.pathname === "/v3/application/seller-taxonomy/nodes") return ok({ count: 1, results: [{ id: 1, name: "Paper & Party Supplies", level: 1, children: [
+        { id: 2, name: "Paper", level: 2, children: [{ id: 2078, name: "Calendars & Planners", level: 3, children: [] }, { id: 2079, name: "Stationery", level: 3, children: [] }] }] },
+        { id: 3, name: "Books, Movies & Music", level: 1, children: [{ id: 4, name: "Planners Guides", level: 2, children: [] }] }] });
       if (/\/receipts$/.test(u.pathname)) return ok({ results: state.receipts });
       if (/\/ledger-entries$/.test(u.pathname)) return ok({ results: state.ledger });
     }
@@ -247,6 +250,26 @@ describe.skipIf(!PG_BIN)("v80 scoped releases, discovery and the official-API ch
     await worker.tick();
     expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_channel_payouts WHERE channel_id = $1)`, [etsyChannel]))).toBe(1);
     expect(Number(await R.one(`(SELECT count(*) FROM fleet.fleet_channel_sales WHERE channel_id = $1)`, [etsyChannel]))).toBe(1);
+  });
+
+  it("v127: the agent looks up an Etsy category — read-only, still only under a release naming it; the answer is the matching paths with ids, never the tree", async () => {
+    const presence = async () => Number(await R.one(`(SELECT count(*) FROM fleet.fleet_presence_items WHERE channel_id = $1)`, [etsyChannel]));
+    const before = await presence();
+    const look = (query: unknown) => R.econ(F, "channel.api", { channelId: etsyChannel, op: "etsy.taxonomy.nodes", args: { query }, idempotencyKey: idem() });
+    expect((await look("planners")).reason).toMatch(/does not cover etsy.taxonomy.nodes/);
+    expect(await owner(`SELECT fleet.fleet_admin_outward_release($1, $2::jsonb, 'proof: one Etsy draft', $3) AS r`,
+      [F.id, JSON.stringify({ actions: ["channel_api"], channels: [etsyChannel], apiOps: ["etsy.taxonomy.nodes", "etsy.listing.create"], expiresHours: 24 }), OWNER])).toMatchObject({ ok: true });
+    for (const bad of ["", "x", "y".repeat(61), 5]) expect((await look(bad)).ok, String(bad)).toBe(false);
+    const q = await ok(look("  calendars planners "));
+    expect(q.job.status).toBe("queued");
+    await worker.tick();
+    const job = (await ok(R.econ(F, "channel.api_jobs", { channelId: etsyChannel }))).jobs.find((j: any) => j.jobId === q.job.jobId);
+    expect(job).toMatchObject({ status: "done" });
+    expect(JSON.stringify(job)).toContain("Paper & Party Supplies > Paper > Calendars & Planners");
+    expect(JSON.stringify(job)).toContain("2078");
+    expect(JSON.stringify(job)).not.toContain("Stationery");
+    expect(fake.calls.filter((x) => x.url.endsWith("/seller-taxonomy/nodes")).every((x) => x.method === "GET" && x.apiKey)).toBe(true);
+    expect(await presence()).toBe(before); // a lookup publishes nothing
   });
 
   it("a connection that reaches another account, or carries other scopes, is failed and runs nothing; Pinterest needs a business account", async () => {

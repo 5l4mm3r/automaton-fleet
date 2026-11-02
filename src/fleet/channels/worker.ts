@@ -9,7 +9,7 @@
  * Money never moves here; tokens never leave this process.
  */
 import crypto from "crypto";
-import { ChannelApiError, EtsyClient, PinterestClient, freshToken, type ChannelHttp, type TokenStore } from "./clients.js";
+import { ChannelApiError, EtsyClient, PinterestClient, freshToken, type ChannelHttp, type TokenStore, searchTaxonomy } from "./clients.js";
 import { PROVIDER_SCOPES } from "../postgres/migrations-phase80.js";
 import type { ChannelConnection, ChannelGatewayPort, ChannelJob } from "./gateway.js";
 import { IndexNowPinger } from "../service/indexnow.js";
@@ -99,6 +99,12 @@ export class ChannelWorker {
             const id = job.op === "etsy.listing.image" ? await e.image(shop, listing, String(job.blobName), String(job.blobType), blob)
               : await e.file(shop, listing, String(job.blobName), String(job.blobType), blob);
             await this.gw.report(job.jobId, lease, true, { listingId: listing, uploaded: id }, listing, null, null);
+            return;
+          }
+          case "etsy.taxonomy.nodes": {
+            // v127: read-only; the result carries the matching categories only (bounded), never the whole tree.
+            const nodes = searchTaxonomy(await e.taxonomy(), String(p.query ?? ""));
+            await this.gw.report(job.jobId, lease, true, { query: String(p.query ?? "").slice(0, 60), nodes }, null, null, null);
             return;
           }
           case "etsy.listing.activate": case "etsy.listing.deactivate": {
