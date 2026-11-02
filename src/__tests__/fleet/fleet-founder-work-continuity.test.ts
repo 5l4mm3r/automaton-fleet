@@ -32,7 +32,7 @@ const CAPS = { ok: true, origin: "reseed_founder", manifestId: "founder-v2", man
 const c = (name: string, args: Record<string, unknown> = {}): ToolCall => ({ id: `${name}-${Math.random().toString(36).slice(2, 8)}`, name, arguments: args });
 const hex32 = (n: number) => n.toString(16).padStart(32, "0");
 
-type Step = { calls: ToolCall[]; content?: string };
+type Step = { calls: ToolCall[]; content?: string; cut?: boolean };
 /** `script(turn, step, packet)` scripts the model. `world` is the controller's state the test changes. */
 function rig(script: (turn: number, step: number, packet: string) => Step, o: { maxSteps?: number; root?: string; runtime?: string; stopSignal?: AbortSignal; toolbox?: (tb: FounderToolbox) => void } = {}) {
   const root = o.root ?? fs.mkdtempSync(path.join(os.tmpdir(), "wc-"));
@@ -81,6 +81,7 @@ function rig(script: (turn: number, step: number, packet: string) => Step, o: { 
       // 1j simulates a process killed mid-call with a promise that never settles: the call must never return. (It used to be
       // answered at once with no toolCalls, so the abandoned turn failed later as an unhandled rejection.)
       const s = typeof (out as { then?: unknown } | undefined)?.then === "function" ? await (out as unknown as Promise<Step>) : out;
+      if (s.cut) return { content: "", toolCalls: [], usage: { inputTokens: 1, outputTokens: 4_000 }, chargedCents: 1, requestId: `r${turn}-${step}`, outputLimit: { maxTokens: 4_000, cutToolCalls: 1 } };
       return { content: s.content ?? "", toolCalls: s.calls, usage: { inputTokens: 1, outputTokens: 1 }, chargedCents: 1, requestId: `r${turn}-${step}` };
     },
   };
@@ -103,6 +104,21 @@ function rig(script: (turn: number, step: number, packet: string) => Step, o: { 
   return { mind, world, packets, outputsSeen, imagesSeen, root, d, infers: () => infers, turns: () => turn };
 }
 const beats = async (r: ReturnType<typeof rig>, n: number) => { for (let i = 0; i < n; i++) await r.mind.turn(`heartbeat ${i}`); };
+
+/** 2026-11-02 (pilot phase F): Agent-1's packet pressure on 2 Nov — 16 undated facts, the owner's task and four pending
+ *  dependencies — under which every packet fitted only at the last level. */
+function agentOneScale(r: ReturnType<typeof rig>): void {
+  fs.writeFileSync(path.join(r.d.m, "facts.json"), JSON.stringify(Object.fromEntries(Array.from({ length: 16 }, (_, i) =>
+    [`ledger_check_old_${String(i).padStart(2, "0")}`, `STALE-FACT-${i} ` + "September ledger check: keep every turn to a bare sleep. ".repeat(7)]))));
+  r.world.ownerTasks = [{ id: "4dc928ba-0000-4000-8000-000000000000", at: new Date().toISOString(), title: "Pilot F: fulfil the test order",
+    body: "Pilot phase F: a test order for your chosen venture. " + "Treat it as a real first customer's order; put everything in deliverables/pilot-f/. ".repeat(17) }];
+  r.world.ownerTasksDigest = hex32(42);
+  r.world.requests = Array.from({ length: 4 }, (_, i) => ({ requestId: `dep-${i}`, kind: "non_delegable_credential", status: "pending", action: "Publishing the listing on a marketplace through its API gateway " + "once the owner-held shop is connected. ".repeat(3),
+    title: `Owner-held account ${i} ` + "for the venture, connected to the gateway. ".repeat(6), blocksAction: true, createdAt: new Date().toISOString() }));
+  for (let i = 0; i < 80; i++) fs.writeFileSync(path.join(r.d.w, "product", `big${i}.txt`), `RESULT-MARK-${i} ` + "x".repeat(5_000));
+}
+const fitLevels = (r: ReturnType<typeof rig>) => fs.readFileSync(path.join(r.d.s, "mind-log.jsonl"), "utf8").split("\n").filter(Boolean)
+  .map((l) => JSON.parse(l) as { packetFit?: number }).filter((x) => x.packetFit).map((x) => x.packetFit);
 
 describe("work continuity (owner acceptance, 2026-10-18)", () => {
   it("1a. a cut-off turn's actual results, plan and calls not yet run reach the next turn — after a restart too — and a finished turn consumes them", async () => {
@@ -194,6 +210,131 @@ describe("work continuity (owner acceptance, 2026-10-18)", () => {
     expect(p3).toContain("FLEET_REVIEW_AUTOMATED_FAILED");
     expect(p3).toMatch(/RESULT-MARK-(4[0-9]|[5-7][0-9])\b/);                         // an actual result of turn 2
     expect(fs.existsSync(path.join(r.d.s, CARRY_FILE))).toBe(false);                 // the finished turn consumed it
+  });
+
+  // 2026-11-02 (pilot phase F, Agent-1): with a memory as full as Agent-1's (16 undated facts, 6.5 KB) every packet fitted
+  // only at the last level, where the carried record got 600 characters: the trimming blanked every result and dropped every
+  // successful call, so only two stale refusals were carried — under "continue from where it stopped instead of
+  // re-orienting" — for ten turns in a row, while the undated facts stayed whole. Same scripted model as 1d.
+  it("1d-full. with a memory as full as Agent-1's, a turn stopped at its size limit still carries its results; undated facts give way first, the newest fact stays", async () => {
+    const big = (from: number) => Array.from({ length: 5 }, (_, i) => c("read_file", { path: `product/big${from + i}.txt` }));
+    const r = rig((t, s) => {
+      if (t === 1 && s === 1) return { content: "Plan: build the customer's workbook, then write the reply and the corrections.",
+        calls: [c("remember_fact", { key: "zz_work_progress", value: "PROGRESS-MARK: inspected the product; reply and corrections still to write." })] };
+      if (t === 1) return { calls: big((s - 2) * 5) };
+      return { calls: [c("sleep", { reason: "continued from the carried record" })] };
+    });
+    // Agent-1's memory on 2 Nov: 16 facts written before the facts ledger existed (no observedAt), about 400 characters each.
+    fs.writeFileSync(path.join(r.d.m, "facts.json"), JSON.stringify(Object.fromEntries(Array.from({ length: 16 }, (_, i) =>
+      [`ledger_check_old_${String(i).padStart(2, "0")}`, `STALE-FACT-${i} ` + "September ledger check: keep every turn to a bare sleep. ".repeat(7)]))));
+    // The pilot's owner task (shown in every working turn) and four pending dependencies: with them the packet fits only at the last level, as Agent-1's did.
+    r.world.ownerTasks = [{ id: "4dc928ba-0000-4000-8000-000000000000", at: new Date().toISOString(), title: "Pilot F: fulfil the test order",
+      body: "Pilot phase F: a test order for your chosen venture. " + "Treat it as a real first customer's order; put everything in deliverables/pilot-f/. ".repeat(17) }];
+    r.world.ownerTasksDigest = hex32(42);
+    r.world.requests = Array.from({ length: 4 }, (_, i) => ({ requestId: `dep-${i}`, kind: "non_delegable_credential", status: "pending", action: "Publishing the listing on a marketplace through its API gateway " + "once the owner-held shop is connected. ".repeat(3),
+      title: `Owner-held account ${i} ` + "for the venture, connected to the gateway. ".repeat(6), blocksAction: true, createdAt: new Date().toISOString() }));
+    for (let i = 0; i < 80; i++) fs.writeFileSync(path.join(r.d.w, "product", `big${i}.txt`), `RESULT-MARK-${i} ` + "x".repeat(5_000));
+    const t1 = await r.mind.turn("hb");
+    expect(t1.steps).toBeLessThan(FOUNDER_STEPS_PER_TURN);                           // stopped by size
+    await r.mind.turn("hb 2");
+    const fit = fs.readFileSync(path.join(r.d.s, "mind-log.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).filter((x) => x.packetFit).map((x) => x.packetFit);
+    expect(fit.at(-1)).toBe(6);                                                       // the production condition: the last fit level
+    const p2 = r.packets[1];
+    if (process.env.SHOW_CARRY) console.log(p2.slice(p2.indexOf("Your previous turn"), p2.indexOf("Your previous turn") + 900));
+    expect(p2).toContain("CONTINUE YOUR UNFINISHED WORK");
+    expect(p2).toMatch(/RESULT-MARK-([0-9]|[1-3][0-9])\b/);                          // an actual result of turn 1 reaches turn 2
+    expect(p2).toContain("PROGRESS-MARK");                                           // the newest (dated) fact is kept
+    expect(p2.length).toBeLessThanOrEqual(15_000 + 600);                             // still one bounded packet (header + JSON)
+  });
+
+  // 2026-11-02 (pilot phase F): Agent-1's only goal waited on an account, so every packet carried "Every open goal is blocked …
+  // improve or extend the product … do it now" beside the owner's open task. The owner task is the next move instead.
+  it("1d-task. with every goal blocked and an owner task open, the next move is the owner's task, not the push to improve the product", async () => {
+    const { HIBERNATE_LINE } = await import("../../fleet/founder/decisions.js");
+    const blocked = (withTask: boolean) => {
+      const r = rig(() => ({ calls: [c("sleep", { reason: "read" })] }));
+      r.world.requests = [{ requestId: "645c7cfa-0000-4000-8000-000000000000", kind: "non_delegable_credential", status: "pending",
+        action: "Publishing the listing via the gateway", goalRef: "g1", title: "Owner-held shop", ageS: 60 }];
+      if (withTask) {
+        r.world.ownerTasks = [{ id: "4dc928ba-0000-4000-8000-000000000000", at: new Date().toISOString(), title: "Pilot F: fulfil the test order",
+          body: "A test order: reply to the customer, correct your listing, write the delivery note." }];
+        r.world.ownerTasksDigest = hex32(43);
+      }
+      return r;
+    };
+    const control = blocked(false);
+    await control.mind.turn("hb");
+    expect(control.packets[0]).toContain(JSON.stringify(HIBERNATE_LINE).slice(1, 60));  // the goal really is blocked
+    const r = blocked(true);
+    await r.mind.turn("hb");
+    expect(r.packets[0]).toContain("Your next move: your owner's open task (above) is unblocked work.");
+    expect(r.packets[0]).not.toContain(JSON.stringify(HIBERNATE_LINE).slice(1, 60));
+    expect(r.packets[0]).toContain("Owner task 4dc928ba");                           // the task itself is still shown in full
+  });
+
+  // 2026-11-02 (pilot phase F, repair): the output-limit note was given only inside the turn it happened in; the next turns,
+  // started afresh, kept writing oversized replies.
+  it("1d-cut. cut-off replies are carried across turn boundaries, at Agent-1's packet pressure, until the work finishes", async () => {
+    const big = (from: number) => Array.from({ length: 5 }, (_, i) => c("read_file", { path: `product/big${from + i}.txt` }));
+    const r = rig((t, s) => {
+      if (t === 1 && (s === 1 || s === 2)) return { calls: [], cut: true };          // two replies cut off at the limit
+      if (t === 1) return { calls: big((s - 3) * 5) };
+      if (t === 2) return { calls: big(40 + (s - 1) * 5) };                          // turn 2: no cut-off of its own
+      return { calls: [c("sleep", { reason: "done" })] };
+    });
+    agentOneScale(r);
+    await r.mind.turn("hb");
+    await r.mind.turn("hb 2");
+    await r.mind.turn("hb 3");
+    expect(fitLevels(r).slice(1)).toEqual([6, 6]);                                  // the production condition
+    for (const p of [r.packets[1], r.packets[2]]) {
+      expect(p).toContain("Output limit: 2 of your replies in this unfinished work reached the output limit (4000 tokens)");
+      expect(p).toContain("Write in smaller pieces");
+    }
+    expect(fs.existsSync(path.join(r.d.s, CARRY_FILE))).toBe(false);                 // a finished turn ends it
+    await r.mind.turn("hb 4");
+    expect(r.packets[3] ?? "").not.toContain("Output limit:");
+  });
+
+  // 2026-11-02 (pilot phase F, repair): two stale errors — a tool error whose cause was gone and a refusal never repeated —
+  // were carried for nine turns, exempt from trimming, ahead of the work done.
+  it("1d-stale. resolved and old refusals leave the carried record, tool errors are not refusals, and refusals cannot crowd out results", async () => {
+    const big = (from: number) => Array.from({ length: 5 }, (_, i) => c("read_file", { path: `product/big${from + i}.txt` }));
+    const offers = Array.from({ length: 5 }, (_, i) => c("offer", { op: "publish", args: { offerId: `o${i}` } }));
+    const r = rig((t, s) => {
+      if (t === 1 && s === 1) return { calls: [c("list_files", { path: "deliverables/pilot-f" }), ...offers.slice(0, 3)] };
+      if (t === 1 && s === 2) return { calls: offers.slice(3) };
+      if (t === 2 && s === 1) return { calls: [c("list_files", { path: "deliverables/pilot-f" })] };
+      if (t <= 6) return { calls: big(((t * 7 + s) * 5) % 75) };
+      return { calls: [c("sleep", { reason: "done" })] };
+    });
+    agentOneScale(r);
+    for (let i = 0; i < 5; i++) { r.world.refuse[`offer.publish:o${i}`] = "FLEET_BAD_REQUEST"; r.world.refuseReason[`offer.publish:o${i}`] = `REASON-${i} ` + "offerId must be an id. ".repeat(25); }
+    await r.mind.turn("hb");                                                         // turn 1: tool error + five refusals, then size stop
+    fs.mkdirSync(path.join(r.d.w, "deliverables", "pilot-f"), { recursive: true });
+    for (let t = 2; t <= 6; t++) await r.mind.turn(`hb ${t}`);
+    const [p2, p3] = [r.packets[1], r.packets[2]];
+    expect(fitLevels(r).slice(1, 3)).toEqual([6, 6]);
+    // A tool error is not carried as a refusal; refusals are bounded (newest kept) and the turn's results still fit.
+    const refusedLine = (p: string) => p.split("\\n").find((l) => l.startsWith("Refused by the platform")) ?? "";
+    const refused2 = refusedLine(p2);
+    expect(refused2).not.toContain("list_files");                                    // the missing directory was a tool error
+    expect(refused2.length).toBeGreaterThan(0);
+    expect(refused2.length).toBeLessThanOrEqual(1_000);
+    expect(p2).toMatch(/RESULT-MARK-\d+/);
+    expect(refusedLine(p3)).toMatch(/REASON-4/);                                    // still shown the next turn (1d's condition)
+    // Three cut-off turns after it, a refusal never repeated leaves the record.
+    expect(refusedLine(r.packets[5])).toBe("");
+    expect(r.packets[5]).not.toMatch(/REASON-\d/);
+    // A refusal whose identical call has since succeeded is dropped at once (the loop guard blocks blind repeats; a changed
+    // world can let the same call through).
+    const { saveCarry } = await import("../../fleet/founder/continuity.js");
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "wc-res-"));
+    const call = c("offer", { op: "publish", args: { offerId: "o7" } });
+    const first = saveCarry(root, null, { turn: 1, steps: 1, notRun: [], plan: "p", calls: [{ call, ok: false, refused: "FLEET_SALES_CLOSED", output: "REFUSED FLEET_SALES_CLOSED" }] });
+    expect(first.refusals?.map((x) => x.code)).toEqual(["FLEET_SALES_CLOSED"]);
+    const second = saveCarry(root, first, { turn: 2, steps: 1, notRun: [], plan: "p", calls: [{ call: { ...call, id: "again" }, ok: true, output: "published" }] });
+    expect(second.refusals ?? []).toEqual([]);
   });
 
   // 2026-10-21 (launch check): the owner's mail arrived during Agent-1's turn, after its packet was built; "since your last

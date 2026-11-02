@@ -49,7 +49,7 @@ import { TaskClassificationError, classifyTask, isEscalationReason, isRoutineCla
 import { economyLine, parseBrief, type EconomyBrief } from "./economy.js";
 import { OWED_RECHECK_MAX_MS, OWED_RECHECK_MS, newestBuyerMessage, obligationLines, owedDeliveryLine, owedRevisionLine, obligationSignal, parseObligations, refusalReason, type CustomerObligation } from "./obligations.js";
 import { officeState } from "./exec-sandbox.js";
-import { CARRY_MAX_CHARS, compact, PROGRESS_FILE, REPEATING_STEPS, REPEATING_STOP, ProgressMemory, REPEAT_NOTE_AT, callSig, carryLinesWithin, clearCarry, isExternal, isWriteTool, loadCarry, noticeLines, ownerTaskLines, ownerTaskSignal, repeatNote, saveCarry, savePacket, wakeBrief } from "./continuity.js";
+import { CARRY_MAX_CHARS, compact, PROGRESS_FILE, REPEATING_STEPS, REPEATING_STOP, ProgressMemory, REPEAT_NOTE_AT, callSig, carryLinesWithin, clearCarry, ownerTaskMoveLine, isExternal, isWriteTool, loadCarry, noticeLines, ownerTaskLines, ownerTaskSignal, repeatNote, saveCarry, savePacket, wakeBrief } from "./continuity.js";
 
 export interface MindPorts {
   cognitionStatus(): Promise<Record<string, unknown>>;
@@ -147,6 +147,8 @@ const CONTINUITY_FILE = "mind-continuity.json";
 const MAX_PACKET_CHARS = 15_000;
 /** 2026-10-18: reduction levels a task is rebuilt at before a turn is refused as "packet too large" (composeTask). */
 const PACKET_FIT_LEVELS = 6;
+/** The carried record's floor inside a packet at any fit level: below it the results of a cut-off turn are all lost. */
+export const CARRY_MIN_CHARS = 3_000;
 const MAX_ROUTINE_MATERIAL = 12_000;
 const COGNITION_TOOLS = new Set(["routine_task", "escalate_question", "independent_review"]);
 
@@ -443,6 +445,18 @@ export function slimWakePacket(p: TaskPacket): TaskPacket {
  * every reduction level although dropping evidence entries and facts would have made it fit — the founder could not think.
  * Only "packet too large" is trimmable; any other packet problem (secret-shaped text, a forbidden key) still refuses at once.
  */
+/**
+ * The remembered fact to give way first when a packet must shrink. Facts with no recorded time (written before the facts
+ * ledger) go first, last key first as before; a dated fact only once none is undated, the earliest observed first. So the
+ * founder's newest notes outlast its oldest ones, and an all-undated memory shrinks exactly as it always did.
+ */
+export function oldestFactIndex(k: ReadonlyArray<{ observedAt?: string }>): number {
+  for (let i = k.length - 1; i >= 0; i--) if (!k[i].observedAt) return i;
+  let best = 0;
+  for (let i = 1; i < k.length; i++) if ((k[i].observedAt ?? "") < (k[best].observedAt ?? "")) best = i;
+  return best;
+}
+
 export function renderBoundedPacket(p: TaskPacket, maxChars = MAX_PACKET_CHARS, o: { keepKnowledge?: boolean } = {}): string {
   const tryRender = (): string | null => {
     const problems = taskPacketProblems(p);
@@ -457,7 +471,9 @@ export function renderBoundedPacket(p: TaskPacket, maxChars = MAX_PACKET_CHARS, 
     () => p.previousResults.length > 1 && (p.previousResults.shift(), true),
     () => p.evidence.length > 4 && (p.evidence.shift(), true),
     // 2026-10-18: the founder's remembered facts go last, and not at all while the task can still be shortened (composeTask).
-    () => !o.keepKnowledge && p.knowledge.length > 0 && (p.knowledge.pop(), true),
+    // 2026-11-02 (pilot phase F): undated facts first (last key first, as before), then the earliest observed. It used to drop
+    // the alphabetically last key whatever its age, which can be the founder's newest progress note.
+    () => !o.keepKnowledge && p.knowledge.length > 0 && (p.knowledge.splice(oldestFactIndex(p.knowledge), 1), true),
   ];
   for (const step of shrink) {
     while ((text === null || text.length > maxChars) && step()) text = tryRender();
@@ -886,7 +902,10 @@ export class FounderMind {
       observation.slice(0, lvl >= 6 ? 300 : MAX_CONTENT),
       prev ? `Your previous turn (${prev.at}) ended with: ${(prev.outcome || "(no closing note)").slice(0, lvl >= 4 ? 400 : 1_200)}${prev.tools.length && lvl < 5 ? ` [tools used: ${prev.tools.join(", ")}]` : ""}`
            : "No closing note from a previous turn is recorded: rely on your goals, facts and notes below.",
-      ...(carried && !owner ? carryLinesWithin(carried, [CARRY_MAX_CHARS, 3_000, 1_500, 1_500, 1_200, 900, 600][Math.min(lvl, 6)]) : []),
+      // 2026-11-02 (pilot phase F): never below CARRY_MIN_CHARS. At 600 characters the trimming blanked every result and dropped
+      // every successful call, so the next turn was told to continue from a record holding only stale refusals; the packet
+      // makes room by letting the oldest remembered facts give way instead (renderBoundedPacket; recall_facts keeps them all).
+      ...(carried && !owner ? carryLinesWithin(carried, Math.max(CARRY_MIN_CHARS, [CARRY_MAX_CHARS, 3_000, 1_500, 1_500, 1_200, 900, 600][Math.min(lvl, 6)])) : []),
       ...tasks,
       ...(lvl >= 2 ? notices.lines.slice(0, 1) : notices.lines),
       ...(upgrade ? [upgrade] : []),
@@ -939,6 +958,8 @@ export class FounderMind {
     const move = bare ? null
       : owedDeliveries.length ? owedDeliveryLine(owedDeliveries.map((o) => o.id))
       : owedOrders.length ? owedRevisionLine(owedOrders.map((o) => o.id))
+      // 2026-11-02 (pilot phase F): an open owner task is unblocked work, after a paid customer's order and before the idle push.
+      : tasks.length ? ownerTaskMoveLine(tasks.length)
       : challenge ? `${ASSESS_LINE}\n${kindMove}`
       : nudge ? (declared ? `${hibernationRecheck(prev?.outcome ?? "", prev?.wakeOn ?? null, prev?.reviewAt ?? null)}\n${kindMove}`
         : `${ASSESS_LINE} (You have now rested ${rests} time(s) in this state without declaring hibernation.)\n${kindMove}`)
@@ -1040,6 +1061,9 @@ export class FounderMind {
     let stopCode: string | undefined;
     let repeating = 0;
     let cutOffs = 0;
+    // 2026-11-02 (pilot phase F): every cut-off reply of this turn (not reset by a good one) and the limit, for the carried record.
+    let cutTotal = 0;
+    let cutTokens: number | undefined;
     // Run 6 (2026-10-24): a paid order created 2–3 s after the turn's packet was built stayed unseen for the whole turn (15
     // steps, 6.5 minutes of research). Between steps — every tool of the step finished and recorded, nothing in flight — the
     // controller's attention is read again (free; at most every 10 s); a delivery or revision owed that the turn did not
@@ -1093,7 +1117,7 @@ export class FounderMind {
           // previous wake declaration, stall count and seen notices; and the events cursor stays where it was, so what
           // this turn was shown but could not act on is shown again.
           if (W) {
-            saveCarry(this.o.stateDir, carried, { turn: this.turns, steps: result.steps, calls: records, notRun, plan: outcome, stopCode: code });
+            saveCarry(this.o.stateDir, carried, { turn: this.turns, steps: result.steps, calls: records, notRun, plan: outcome, stopCode: code, cutOffs: cutTotal, outputLimitTokens: cutTokens });
             progressMem!.save();
           }
           this.saveContinuity(outcome || `(turn stopped: ${code})`, result.toolCalls, null, capabilities ?? prev?.capabilities ?? null, null,
@@ -1180,7 +1204,7 @@ export class FounderMind {
       // calls so far — so a process killed mid-turn (SIGKILL, OOM, host loss) leaves what it already did for its restart.
       // Rewritten whole each step (never appended twice); replaced or cleared when the turn ends. External effects are
       // protected on the controller (durable operations, v95); this record is the founder's own memory of them.
-      if (W && !owner) saveCarry(this.o.stateDir, carried, { turn: this.turns, steps: result.steps, calls: records, notRun, plan: outcome, stopCode: "FLEET_RUNTIME_INTERRUPTED" });
+      if (W && !owner) saveCarry(this.o.stateDir, carried, { turn: this.turns, steps: result.steps, calls: records, notRun, plan: outcome, stopCode: "FLEET_RUNTIME_INTERRUPTED", cutOffs: cutTotal, outputLimitTokens: cutTokens });
       this.logDecision({ turn: this.turns, routed: true, step, packet: packetKind, requestId: r.requestId, taskClass: cls.taskClass, expectedTier: cls.tier, route: r.route ?? null,
         content: (r.content ?? "").slice(0, 500), tools: toolLog(r.toolCalls, outcomes), chargedCents: r.chargedCents });
       // 2026-10-19: only a sleep that was accepted ends the turn (one refused because a buyer waits leaves the turn running).
@@ -1193,6 +1217,8 @@ export class FounderMind {
       // and continues in smaller pieces — at most OUTPUT_LIMIT_CONTINUES times in a row, then the turn ends cut off (its
       // record carried). Never retried at a higher limit.
       if (r.outputLimit && r.toolCalls.length === 0) {
+        cutTotal++;
+        cutTokens = r.outputLimit.maxTokens;
         if (++cutOffs <= OUTPUT_LIMIT_CONTINUES && step + 1 < maxSteps) {
           messages.push({ role: "user", content: outputLimitNote(r.outputLimit) });
           continue;
@@ -1222,7 +1248,7 @@ export class FounderMind {
     // 2026-10-18 (work continuity): a cut-off turn leaves its working record for the next turn (and a restart); a finished
     // working turn has consumed it. The progress memory survives restarts.
     if (W) {
-      if (cutOff) saveCarry(this.o.stateDir, carried, { turn: this.turns, steps: result.steps, calls: records, notRun, plan: planText, sizeStop, ...(stopCode ? { stopCode } : {}) });
+      if (cutOff) saveCarry(this.o.stateDir, carried, { turn: this.turns, steps: result.steps, calls: records, notRun, plan: planText, sizeStop, ...(stopCode ? { stopCode } : {}), cutOffs: cutTotal, outputLimitTokens: cutTokens });
       else if (!owner) clearCarry(this.o.stateDir);
       if (progressMem!.endTurn()) result.progress = true;
       progressMem!.save();
