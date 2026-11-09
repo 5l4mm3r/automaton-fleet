@@ -25,6 +25,7 @@ import { getForbiddenCommandMatch } from "../../agent/policy-rules/command-safet
 import { fullToolSpec, imageHeaderProblem, type ChatImage, type ToolCall } from "../cognition/types.js";
 import { runSandboxed } from "./exec-sandbox.js";
 import { parseWork, type CustomerObligation } from "./obligations.js";
+import { missingRequired, type RequiredFile } from "./runway.js";
 import crypto from "crypto";
 import { QA_INSPECTOR_PY, QA_INSPECTOR_SHA256, QA_INSPECTOR_VERSION, parseInspectorReport, type QaInspectorReport } from "./qa/inspector.js";
 import type { LoopGuard } from "./loop-guard.js";
@@ -994,6 +995,20 @@ export class FounderToolbox {
       + "delivered by it. Deliver the change first (wallet deliver with resendReason), or say what is happening; a sentence about the earlier delivery may say so "
       + "(\"the original was sent earlier; the revision is in progress\")";
   }
+  /**
+   * 2026-11-09 (SHEET-1): the files the owner's open task names (set by the mind each turn). A sleep while one is missing is
+   * answered once per turn with what is missing; a second sleep in the same turn stops (the founder may be genuinely blocked:
+   * this is a reminder, never a trap).
+   */
+  private required: RequiredFile[] = [];
+  private requiredRoot = "";
+  private requiredReminded = false;
+  noteRequiredFiles(list: RequiredFile[], workspaceDir: string): void {
+    this.required = list;
+    this.requiredRoot = workspaceDir;
+    this.requiredReminded = false;
+  }
+
   /** The unanswered buyer requests this turn has not answered (or tried to answer and been refused). */
   owedAnswers(): CustomerObligation[] {
     return (this.obligations ?? []).filter((o) => o.state === "unanswered" && !this.answered.has(o.id) && !this.answerRefused.has(o.id));
@@ -2069,6 +2084,12 @@ export class FounderToolbox {
               + "The request stays on your record until it is resolved.");
           }
           if (typeof a.reviewAt === "string" && a.reviewAt.trim() && !Number.isFinite(Date.parse(a.reviewAt))) return refuse("FLEET_BAD_REQUEST", "reviewAt is an ISO-8601 date/time");
+          const missing = this.required.length && !this.requiredReminded ? missingRequired(this.requiredRoot, this.required) : [];
+          if (missing.length) {
+            this.requiredReminded = true;
+            return refuse("FLEET_TASK_INCOMPLETE", `your owner's task is not complete: required file${missing.length > 1 ? "s" : ""} still missing — ${missing.join(", ")}. `
+              + "Write them before you stop. If something you cannot do yourself blocks one, say so in your sleep reason and sleep again: a second sleep this turn stops.");
+          }
           if ((typeof a.wakeOn === "string" && a.wakeOn.trim()) || (typeof a.reviewAt === "string" && a.reviewAt.trim())) {
             return { name: call.name, ok: true, output: `hibernating${typeof a.wakeOn === "string" && a.wakeOn.trim() ? `; wake on: ${a.wakeOn.trim().slice(0, 300)}` : ""}${typeof a.reviewAt === "string" && a.reviewAt.trim() ? `; review at ${new Date(Date.parse(a.reviewAt)).toISOString()}` : ""}` };
           }

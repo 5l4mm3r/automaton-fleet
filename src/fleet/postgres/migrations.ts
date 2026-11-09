@@ -133,10 +133,11 @@ import { V124_SQL } from "./migrations-phase124.js";
 import { V125_SQL } from "./migrations-phase125.js";
 import { V126_SQL } from "./migrations-phase126.js";
 import { V127_SQL } from "./migrations-phase127.js";
+import { V128_SQL } from "./migrations-phase128.js";
 import { V122_SQL } from "./migrations-phase122.js";
 import { V40_SQL } from "./migrations-phase40.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 127;
+export const FLEET_PG_SCHEMA_VERSION = 128;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
 /** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
 export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
@@ -1359,6 +1360,7 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 125, name: "operator_containment", sql: V125_SQL },
   { version: 126, name: "owner_account_handover", sql: V126_SQL },
   { version: 127, name: "etsy_taxonomy_lookup", sql: V127_SQL },
+  { version: 128, name: "agent_runway", sql: V128_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */

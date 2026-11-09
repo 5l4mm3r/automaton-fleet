@@ -335,7 +335,7 @@ export class FleetApiClient implements FleetBackend {
    */
   async infer(messages: unknown[], waitMs = 150_000, route?: Record<string, unknown>, doctrine?: string, opts: { conversationTurn?: string | null } = {}) {
     return this.call<{ content: string; toolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }>; usage: { inputTokens: number; outputTokens: number }; usageSource: string; chargedCents: number; requestId: string; route?: { tier: string; model: string; taskClass: string; scope: string };
-      outputLimit?: { maxTokens: number; cutToolCalls: number } }>(
+      outputLimit?: { maxTokens: number; cutToolCalls: number }; chargedMicrocents?: number; reserve?: { usdMicro: number; minorMicro: number } }>(
       // v22: the task's routing request (a request only: FleetController decides). Omitted = the legacy request body.
       // R41.1: the founder doctrine this runtime implements (routed calls only; absent = founder-v4).
       // v62: a call inside an owner conversation turn names it (FleetController decides who pays; absent = the founder).

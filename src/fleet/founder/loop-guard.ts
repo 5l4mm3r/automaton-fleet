@@ -205,6 +205,9 @@ export class LoopGuard {
 
   /** Record what happened. */
   after(call: ToolCall, out: ToolOutcome, changedState?: boolean): void {
+    // 2026-11-09: the once-a-turn "required file missing" answer to a sleep is a reminder, not a failure: the identical sleep
+    // after it must run (it is how a founder that is genuinely blocked stops), so it is never remembered as a failed call.
+    if (out.refused === "FLEET_TASK_INCOMPLETE") return;
     const key = callKey(call);
     const prev = this.seen.get(key);
     // 2026-10-18: the toolbox says whether the call changed state — any successful call that is not a read, including

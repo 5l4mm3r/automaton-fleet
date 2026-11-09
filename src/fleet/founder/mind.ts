@@ -49,6 +49,7 @@ import { TaskClassificationError, classifyTask, isEscalationReason, isRoutineCla
 import { economyLine, parseBrief, type EconomyBrief } from "./economy.js";
 import { OWED_RECHECK_MAX_MS, OWED_RECHECK_MS, newestBuyerMessage, obligationLines, owedDeliveryLine, owedRevisionLine, obligationSignal, parseObligations, refusalReason, type CustomerObligation } from "./obligations.js";
 import { officeState } from "./exec-sandbox.js";
+import { finishLine, missingRequired, parseRunway, requiredFilesLine, requiredFilesOf, runwayView, COST_WINDOW, type CallCost } from "./runway.js";
 import { CARRY_MAX_CHARS, compact, PROGRESS_FILE, REPEATING_STEPS, REPEATING_STOP, ProgressMemory, REPEAT_NOTE_AT, callSig, carryLinesWithin, clearCarry, ownerTaskMoveLine, isExternal, isWriteTool, loadCarry, noticeLines, ownerTaskLines, ownerTaskSignal, repeatNote, saveCarry, savePacket, wakeBrief } from "./continuity.js";
 
 export interface MindPorts {
@@ -57,7 +58,9 @@ export interface MindPorts {
   infer(messages: unknown[], waitMs?: number, route?: Record<string, unknown>, doctrine?: string, opts?: { conversationTurn?: string | null }): Promise<{ content: string; toolCalls: ToolCall[]; usage: { inputTokens: number; outputTokens: number }; chargedCents: number; requestId: string; thinking?: ThinkingBlock[]; blockOrder?: string[];
     /** Routed path only: what FleetController decided for this call. */ route?: { tier: string; model: string; taskClass: string; scope: string };
     /** The reply was cut off at the output limit: its tool calls (cutToolCalls) were dropped by FleetController, never executed. */
-    outputLimit?: { maxTokens: number; cutToolCalls: number } }>;
+    outputLimit?: { maxTokens: number; cutToolCalls: number };
+    /** v128 routed path: the call's actual charge and its worst-case reservation (the runway line). */
+    chargedMicrocents?: number; reserve?: { usdMicro: number; minorMicro: number } }>;
   /** R23 routed mode: the founder's own economic position for the task packet (exact software output: T0). */
   ledger?(): Promise<unknown>;
   /** F2-A: this founder's own external dependencies (kind, the unavailable action, status; T0). Absent = not offered by this controller. */
@@ -589,6 +592,9 @@ export class FounderMind {
     fs.renameSync(`${f}.tmp`, f);
   }
 
+  /** 2026-11-09 (SHEET-1): the recent calls' reservations and charges, for the runway line (in memory; a restart starts afresh). */
+  private callCosts: CallCost[] = [];
+
   private logDecision(entry: Record<string, unknown>): void {
     fs.appendFileSync(path.join(this.o.stateDir, LOG_FILE), JSON.stringify({ at: new Date().toISOString(), ...entry }) + "\n", { mode: 0o600 });
   }
@@ -993,7 +999,15 @@ export class FounderMind {
     const blockedLine = blockedCalls.length ? `Already tried ${MAX_FAILED_ATTEMPTS}+ times without success — do not repeat these unchanged (change the approach or record the blocker): `
       + blockedCalls.map((b) => `${b.label} → ${b.refused}: ${b.reason}`).join(" | ") : null;
     const procLine = W && owedOrders.length ? procedureLine(R.workspaceDir) : null;
-    const essential = [...(!prev ? [BOOTSTRAP_LINE] : []), ...obligationLines(obligations ?? []), ...(procLine ? [procLine] : []), ...(blockedLine ? [blockedLine] : []), ...(sale ? [sale] : []), ...(happened ? [happened] : []), ...(move ? [move] : []), ...(!bare ? [stateLine(econ)] : [])];
+    // 2026-11-09 (SHEET-1: the delivery note was never written — the calls were refused with $0.76 of the cap free and nothing
+    // had said the end was near): the owner task's required files (written / MISSING) and the founder's runway; close to the
+    // end, "finish now", naming what is still missing. Information only: no check changes.
+    const required = W && !owner ? requiredFilesOf(status.attention) : [];
+    this.o.toolbox.noteRequiredFiles(required, R.workspaceDir);
+    const reqLine = requiredFilesLine(R.workspaceDir, required);
+    const rv = owner ? null : runwayView(parseRunway(status.runway), this.callCosts, Date.now());
+    const runLines = [...(reqLine ? [reqLine] : []), ...(rv?.line ? [rv.line] : []), ...(rv?.finishNow ? [finishLine(rv, missingRequired(R.workspaceDir, required))] : [])];
+    const essential = [...(!prev ? [BOOTSTRAP_LINE] : []), ...obligationLines(obligations ?? []), ...(procLine ? [procLine] : []), ...(blockedLine ? [blockedLine] : []), ...(sale ? [sale] : []), ...(happened ? [happened] : []), ...(move ? [move] : []), ...runLines, ...(!bare ? [stateLine(econ)] : [])];
     const extra = [...essential,
       ...(!bare && survival ? [survivalLine(survival)] : []), ...(own ? [own] : []), ...(brief ? [economyLine(brief)] : []),
       ...(!bare && (journal.length || jix?.lessons.length) ? [`Field journal: ${journal.length} entr${journal.length === 1 ? "y" : "ies"}${jix?.archived ? ` (+${jix.archived} archived)` : ""}`
@@ -1071,6 +1085,8 @@ export class FounderMind {
     // the next turn's packet is built afresh with the new work as its objective. An owner conversation is not interrupted.
     const owedAtStart = new Set((obligations ?? []).filter((o) => o.deliveryOwed || o.revisionOwed).map((o) => o.id));
     let attentionReadAt = Date.now();
+    // 2026-11-09: told to finish now once per turn (in its packet, or between steps when the runway runs short mid-turn).
+    let finishNoted = rv?.finishNow === true;
     for (let step = 0; step < maxSteps; step++) {
       // 2026-10-22: the process is stopping: end the turn between steps; its record is carried like a cut-off turn's.
       if (step > 0 && this.o.stopSignal?.aborted) {
@@ -1080,7 +1096,17 @@ export class FounderMind {
       }
       if (step > 0 && !owner && Date.now() - attentionReadAt >= NEW_WORK_CHECK_MS) {
         attentionReadAt = Date.now();
-        const fresh = parseObligations((await this.o.ports.cognitionStatus().catch(() => null) as Record<string, unknown> | null)?.attention);
+        const st = await this.o.ports.cognitionStatus().catch(() => null) as Record<string, unknown> | null;
+        const fresh = parseObligations(st?.attention);
+        if (!finishNoted && st) {
+          const v = runwayView(parseRunway(st.runway), this.callCosts, Date.now());
+          const lastTool = [...messages].reverse().find((m) => m.role === "tool");
+          if (v.finishNow && lastTool && typeof lastTool.content === "string") {
+            finishNoted = true;
+            lastTool.content += `\n[platform] ${finishLine(v, missingRequired(R.workspaceDir, required))}`;
+            this.logDecision({ turn: this.turns, routed: true, step, finishNow: { steps: v.steps, binding: v.binding, minutesLeft: v.minutesLeft } });
+          }
+        }
         const arrived = (fresh ?? []).filter((o) => (o.deliveryOwed || o.revisionOwed) && !owedAtStart.has(o.id));
         if (arrived.length) {
           stopCode = "FLEET_NEW_PRIORITY";
@@ -1132,6 +1158,10 @@ export class FounderMind {
       this.noteCall();
       result.steps++;
       result.chargedCents += r.chargedCents;
+      if (r.reserve && typeof r.chargedMicrocents === "number" && r.reserve.minorMicro > 0) {
+        this.callCosts.push({ reserveUsdMicro: r.reserve.usdMicro, reserveMinorMicro: r.reserve.minorMicro, chargedMinorMicro: r.chargedMicrocents });
+        if (this.callCosts.length > COST_WINDOW) this.callCosts.shift();
+      }
       const tier = (r.route?.tier === "T3" ? "T3" : "T2") as "T2" | "T3";
       this.routing.steps[tier]++;
       if (r.route) this.routing.lastRoute = r.route;

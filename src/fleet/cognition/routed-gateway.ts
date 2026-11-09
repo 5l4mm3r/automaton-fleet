@@ -144,7 +144,9 @@ export async function inferRouted(
   body: Record<string, unknown>,
   opts: { deadlineMs?: number; now?: () => number } = {},
 ): Promise<{ content: string; toolCalls: unknown[]; usage: ChatResult["usage"]; usageSource: string; chargedCents: number; chargedMicrocents: number; requestId: string;
-  route: { tier: string; model: string; taskClass: string; scope: string; source: string; promptCache: string }; thinking?: ThinkingBlock[]; blockOrder?: string[] }> {
+  route: { tier: string; model: string; taskClass: string; scope: string; source: string; promptCache: string }; thinking?: ThinkingBlock[]; blockOrder?: string[];
+  /** v128: what this call reserved before it ran (its worst case): provider USD µ¢ and the agent's accounting µ¢. */
+  reserve: { usdMicro: number; minorMicro: number } }> {
   const now = opts.now ?? Date.now;
   let messages = validateMessages(body.messages);
   const caps = await ports.capabilities(agentId, token);
@@ -291,6 +293,8 @@ export async function inferRouted(
   return {
     content: result.content, toolCalls: result.toolCalls, usage: result.usage, usageSource: String(rec.usageSource ?? result.usageSource),
     chargedCents: Number(rec.chargedCents ?? 0), chargedMicrocents: Number(rec.chargedMicrocents ?? 0), requestId,
+    // v128 (SHEET-1): the reservation, so the founder's runtime can tell how many more calls its runway admits.
+    reserve: { usdMicro: Math.max(1, Math.ceil(estimateMicro / 1_000_000)) * 1_000_000, minorMicro: Math.max(1, Number(auth.estimateCents ?? Math.ceil(estimateMicro / 1_000_000))) * 1_000_000 },
     route: { tier: decision.tier, model: candidate.model, taskClass: decision.taskClass, scope: decision.scope, source: decision.source, promptCache: cache.mode },
     ...(cutOff ? { outputLimit: { maxTokens, cutToolCalls: result.cutToolCalls ?? 0 } } : {}),
     ...(result.thinking?.length ? { thinking: result.thinking, ...(result.blockOrder ? { blockOrder: result.blockOrder } : {}) } : {}),
