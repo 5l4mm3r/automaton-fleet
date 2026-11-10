@@ -30,6 +30,8 @@ export const FINISH_MINUTES = 10;
 export const SHOW_STEPS = 60;
 /** Calls the average is taken over (the most recent). */
 export const COST_WINDOW = 20;
+/** The most recent calls whose cost share is also taken (the dearer of the two counts). */
+export const RECENT_CALLS = 5;
 
 const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : typeof v === "string" && /^-?\d+$/.test(v) ? Number(v) : null);
 
@@ -69,10 +71,14 @@ export function runwayView(rw: Runway | null, calls: readonly CallCost[], nowMs:
   const none: RunwayView = { steps: null, binding: null, minutesLeft: null, finishNow: false, line: null };
   if (!rw) return none;
   const recent = calls.slice(-COST_WINDOW);
-  const last = recent[recent.length - 1];
+  // 2026-11-10 (ACC-1: shown ~5 steps, 2 ran): a step's reservation and its cost both grow as a turn's conversation grows, so
+  // the count takes the largest recent reservation and the dearer of the whole window's and the last RECENT_CALLS' cost share.
+  const shareOf = (xs: readonly CallCost[]) => { const r = xs.reduce((a, c) => a + c.reserveMinorMicro, 0); return r > 0 ? xs.reduce((a, c) => a + c.chargedMinorMicro, 0) / r : null; };
+  const big = recent.reduce<CallCost | undefined>((a, c) => (!a || c.reserveUsdMicro > a.reserveUsdMicro ? c : a), undefined);
+  const last = big && recent.length ? { ...big, reserveMinorMicro: Math.max(...recent.map((c) => c.reserveMinorMicro)) } : undefined;
   // The share of its reservation a call actually costs (accounting units on both sides), applied to each limit's own unit.
-  const resSum = recent.reduce((a, c) => a + c.reserveMinorMicro, 0);
-  const share = resSum > 0 ? recent.reduce((a, c) => a + c.chargedMinorMicro, 0) / resSum : null;
+  const s20 = shareOf(recent), s5 = shareOf(recent.slice(-RECENT_CALLS));
+  const share = s20 === null ? s5 : s5 === null ? s20 : Math.max(s20, s5);
   const limits: Array<{ name: RunwayView["binding"]; steps: number | null }> = [];
   if (last) {
     const avgUsd = share === null ? null : share * last.reserveUsdMicro;
