@@ -1,0 +1,160 @@
+Secrets vs OS identities
+  [PASS] automaton-agent cannot read /etc/automaton-fleet/admin.env
+  [PASS] automaton-agent cannot read /etc/automaton-fleet/service.env
+  [PASS] automaton-agent cannot read /etc/automaton-fleet/tls/fleet.key
+  [PASS] automaton-fleet-service cannot read /etc/automaton-fleet/admin.env
+  [PASS] automaton-fleet-service cannot read /etc/automaton-fleet/service.env
+  [PASS] automaton-fleet-service cannot read /etc/automaton-fleet/tls/fleet.key
+  [PASS] automaton-fleet-witness cannot read /etc/automaton-fleet/admin.env
+  [PASS] automaton-fleet-witness cannot read /etc/automaton-fleet/service.env
+  [PASS] automaton-fleet-witness cannot read /etc/automaton-fleet/tls/fleet.key
+  [PASS] automaton-fleet-operator-api cannot read /etc/automaton-fleet/admin.env
+  [PASS] automaton-fleet-operator-api cannot read /etc/automaton-fleet/service.env
+  [PASS] automaton-fleet-operator-api cannot read /etc/automaton-fleet/tls/fleet.key
+  [PASS] automaton-fleet-witness is in no other group
+Operator API isolation (schema v8)
+  [PASS] automaton-fleet-operator-api is in no other group
+  [PASS] /etc/automaton-fleet/operator.env is root:automaton-fleet-operator-api 640 (single link)
+  [PASS] automaton-agent cannot read /etc/automaton-fleet/operator.env
+  [PASS] automaton-fleet-service cannot read /etc/automaton-fleet/operator.env
+  [PASS] automaton-fleet-witness cannot read /etc/automaton-fleet/operator.env
+  [PASS] ubuntu cannot read /etc/automaton-fleet/operator.env
+  [PASS] /etc/automaton-fleet/operator.env holds only the operator credential
+  [PASS] Operator API port 8788 is loopback-only
+  [PASS] host clock is NTP-synchronized
+  [PASS] systemd-timesyncd synchronized marker present
+Custody executor isolation (Phase E, schema v10; inert)
+  [PASS] automaton-fleet-custody is in no other group
+  [PASS] automaton-fleet-custody cannot read /etc/automaton-fleet/admin.env
+  [PASS] automaton-fleet-custody cannot read /etc/automaton-fleet/service.env
+  [PASS] automaton-fleet-custody cannot read /etc/automaton-fleet/operator.env
+  [PASS] automaton-fleet-custody cannot read /etc/automaton-fleet/tls/fleet.key
+  [PASS] /etc/automaton-fleet/custody.env is root:automaton-fleet-custody 640 (single link)
+  [PASS] automaton-agent cannot read /etc/automaton-fleet/custody.env
+  [PASS] automaton-fleet-service cannot read /etc/automaton-fleet/custody.env
+  [PASS] automaton-fleet-witness cannot read /etc/automaton-fleet/custody.env
+  [PASS] automaton-fleet-operator-api cannot read /etc/automaton-fleet/custody.env
+  [PASS] automaton-fleet-chatgpt-adapter cannot read /etc/automaton-fleet/custody.env
+  [PASS] automaton-fleet-chatgpt-tunnel cannot read /etc/automaton-fleet/custody.env
+  [PASS] ubuntu cannot read /etc/automaton-fleet/custody.env
+  [PASS] /etc/automaton-fleet/custody.env holds only the custody DB login (no custody credential)
+  [PASS] automaton-fleet-custody holds no TCP listener
+  [PASS] custody executor is running (inert)
+Genesis founder runtimes (Phase F.1)
+  [PASS] founder template: DynamicUser=yes
+  [PASS] founder template: User=fnd-%i
+  [PASS] founder template: IPAddressDeny=any
+  [PASS] founder template: IPAddressAllow=localhost
+  [PASS] founder template: NoNewPrivileges=true
+  [PASS] founder template: ProtectSystem=strict
+  [PASS] founder template: StateDirectoryMode=0700
+  [PASS] founder template: Environment=FLEET_CAPABILITY_MANIFEST=founder-v2
+  [PASS] founder template: Environment=FLEET_FOUNDER_AGENT_LOOP=controller
+  [PASS] founder template: SystemCallFilter=@sandbox
+  [PASS] founder template hides fleet secrets
+  [PASS] founder runtime units active: 1 (living founders: 1)
+  [PASS] founder template: outages are retried, refusals never restart
+  [PASS] founder 3J52AS pinned to its registered release b949b1c
+  [PASS] founder state holds no wallet or private-key file (keyless custody)
+  [PASS] no founder runtime upgrade left open
+  [PASS] founder upgrade backups are root-only
+  [PASS] maintenance guard: guard file root-owned, not group/world-writable
+  [PASS] maintenance guard: guard file identical to /home/ubuntu/automaton-fleet-build/deploy/needrestart/50-automaton-fleet-founders.conf (0e9d9d0e3bb1b421…)
+  [PASS] maintenance guard: needrestart will not restart automaton-fleet-founder@01M3F50SH7PNX2E3GST13J52AS.service (override 0)
+  [PASS] maintenance guard: guard does not cover automaton-fleet.service (narrow)
+  [PASS] maintenance guard: guard does not cover automaton-fleet-operator-api.service (narrow)
+  [PASS] maintenance guard: guard does not cover automaton-fleet-fetcher.service (narrow)
+  [PASS] maintenance guard: guard does not cover automaton-fleet-custody.service (narrow)
+  [PASS] maintenance guard: guard does not cover unattended-upgrades.service (narrow)
+  [PASS] maintenance guard: guard does not cover ssh.service (narrow)
+  [PASS] maintenance guard: guard does not cover systemd-logind.service (narrow)
+  [PASS] maintenance guard: unattended upgrades enabled (APT::Periodic::Unattended-Upgrade 1)
+  [PASS] maintenance guard: security origin allowed
+  [PASS] maintenance guard: apt-daily-upgrade.timer enabled
+  [PASS] maintenance guard: needrestart apt hook present (outdated code is still detected and reported)
+  [PASS] maintenance guard: unattended-upgrades does not reboot automatically (Automatic-Reboot=unset)
+  [PASS] founder state directories: 1
+Inference-provider credential isolation (pre-Genesis hardening L8)
+  [PASS] automaton-fleet-witness hides /etc/automaton-fleet/cognition.key
+  [PASS] automaton-fleet-custody hides /etc/automaton-fleet/cognition.key
+  [PASS] automaton-fleet-founder@ hides /etc/automaton-fleet/cognition.key
+  [PASS] automaton-fleet-operator-api hides /etc/automaton-fleet/cognition.key
+  [PASS] automaton-fleet-chatgpt-tunnel hides /etc/automaton-fleet/cognition.key
+  [PASS] automaton-fleet-chatgpt-adapter hides /etc/automaton-fleet/cognition.key
+  [PASS] controller: no core dumps (LimitCORE=0)
+  [PASS] /etc/automaton-fleet/cognition.key is 600 automaton-fleet-service (content not read)
+  [PASS] automaton-agent cannot read /etc/automaton-fleet/cognition.key
+  [PASS] automaton-fleet-witness cannot read /etc/automaton-fleet/cognition.key
+  [PASS] automaton-fleet-operator-api cannot read /etc/automaton-fleet/cognition.key
+  [PASS] automaton-fleet-chatgpt-adapter cannot read /etc/automaton-fleet/cognition.key
+  [PASS] automaton-fleet-chatgpt-tunnel cannot read /etc/automaton-fleet/cognition.key
+  [PASS] automaton-fleet-custody cannot read /etc/automaton-fleet/cognition.key
+  [PASS] ubuntu cannot read /etc/automaton-fleet/cognition.key
+Research fetcher isolation (Pre-Genesis step 4)
+  [PASS] automaton-fleet-fetcher is in no other group
+  [PASS] fetcher unit: User=automaton-fleet-fetcher
+  [PASS] fetcher unit: NoNewPrivileges=true
+  [PASS] fetcher unit: ProtectSystem=strict
+  [PASS] fetcher unit: ProtectHome=yes
+  [PASS] fetcher unit: CapabilityBoundingSet=
+  [PASS] fetcher unit: RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+  [PASS] fetcher unit: kernel egress denies loopback/private/link-local/CGNAT
+  [PASS] fetcher unit: this host's own addresses denied (2 address(es))
+  [PASS] fetcher knows the same host addresses the kernel denies
+  [PASS] fetcher unit hides fleet secrets, PostgreSQL and founder state
+  [PASS] fetcher unit loads no environment file or credential
+  [PASS] fetcher socket: controller group only, 0660
+  [PASS] fetcher socket on disk: 660 automaton-fleet-fetcher:automaton-fleet-service
+  [PASS] automaton-fleet-fetcher cannot read /etc/automaton-fleet/service.env
+  [PASS] automaton-fleet-fetcher cannot read /etc/automaton-fleet/admin.env
+  [PASS] automaton-fleet-fetcher cannot read /etc/automaton-fleet/operator.env
+  [PASS] automaton-fleet-fetcher cannot read /etc/automaton-fleet/custody.env
+  [PASS] automaton-fleet-fetcher cannot read /etc/automaton-fleet/cognition.key
+  [PASS] automaton-fleet-fetcher cannot read /etc/automaton-fleet/tls/fleet.key
+  [PASS] automaton-fleet-fetcher cannot read /var/lib/postgresql/16/main
+  [PASS] fetcher answers the controller and refuses a loopback literal
+  [PASS] founder template hides the fetcher socket
+  [PASS] fetcher process environment holds no credential-like variables
+  [PASS] automaton-fleet-fetcher holds no TCP listener
+ChatGPT adapter isolation (Phase C)
+  [PASS] automaton-fleet-chatgpt-adapter is in no other group
+  [PASS] automaton-fleet-chatgpt-tunnel is in no other group
+  [PASS] /etc/automaton-fleet/chatgpt-adapter.json is root:automaton-fleet-chatgpt-adapter 640 1
+  [PASS] /etc/automaton-fleet/chatgpt-tunnel/adapter-token is root:root 600 1
+  [PASS] /etc/automaton-fleet/chatgpt-tunnel is root:root 700
+  [PASS] /etc/automaton-fleet/chatgpt-tunnel/openai-api-key is root:root 600 1
+  [PASS] /var/lib/automaton-fleet-chatgpt-adapter/bridge-chatgpt.key is automaton-fleet-chatgpt-adapter:automaton-fleet-chatgpt-adapter 600 1
+  [PASS] /run/automaton-fleet-chatgpt/adapter.sock is automaton-fleet-chatgpt-adapter:automaton-fleet-chatgpt-tunnel 660
+  [PASS] automaton-agent cannot connect to /run/automaton-fleet-chatgpt/adapter.sock
+  [PASS] automaton-fleet-service cannot connect to /run/automaton-fleet-chatgpt/adapter.sock
+  [PASS] automaton-fleet-witness cannot connect to /run/automaton-fleet-chatgpt/adapter.sock
+  [PASS] automaton-fleet-operator-api cannot connect to /run/automaton-fleet-chatgpt/adapter.sock
+  [PASS] ubuntu cannot connect to /run/automaton-fleet-chatgpt/adapter.sock
+  [PASS] automaton-fleet-chatgpt-tunnel cannot read /var/lib/automaton-fleet-chatgpt-adapter/bridge-chatgpt.key
+  [PASS] automaton-fleet-chatgpt-tunnel cannot read /etc/automaton-fleet/chatgpt-adapter.json
+  [PASS] automaton-fleet-chatgpt-adapter cannot read /etc/automaton-fleet/chatgpt-tunnel/adapter-token
+  [PASS] automaton-fleet-chatgpt-adapter cannot read /etc/automaton-fleet/chatgpt-tunnel/openai-api-key
+  [PASS] automaton-fleet-chatgpt-adapter cannot read /etc/automaton-fleet/operator.env
+  [PASS] automaton-fleet-chatgpt-tunnel cannot read /etc/automaton-fleet/operator.env
+  [PASS] automaton-fleet-chatgpt-adapter cannot read /etc/automaton-fleet/admin.env
+  [PASS] automaton-fleet-chatgpt-tunnel cannot read /etc/automaton-fleet/admin.env
+  [PASS] automaton-fleet-chatgpt-adapter cannot read /etc/automaton-fleet/service.env
+  [PASS] automaton-fleet-chatgpt-tunnel cannot read /etc/automaton-fleet/service.env
+  [PASS] automaton-fleet-chatgpt-adapter holds no TCP listener
+  [PASS] automaton-fleet-chatgpt-tunnel holds no TCP listener
+TLS material (LoadCredential sources)
+  [PASS] /etc/automaton-fleet/tls is root:automaton-fleet-admin 750
+  [PASS] /etc/automaton-fleet/tls/fleet.key is root:root 600
+  [PASS] /etc/automaton-fleet/tls/fleet.crt is root:root 644
+  [PASS] remote drop-in maps exactly tls.key and tls.crt
+  [PASS] runtime.env leaves FLEET_TLS_KEY_FILE unset
+  [PASS] repository .env.fleet holds no controller secrets
+Service identity
+  [PASS] automaton-fleet.service active
+  [PASS] service process runs as automaton-fleet-service
+  [PASS] no database credential in the service environment
+Network exposure
+  [PASS] port 5432 loopback-only (or closed)
+  [PASS] port 6379 loopback-only (or closed)
+  [PASS] port 8787 loopback-only (or closed)
+  [PASS] remote HTTPS listener enabled by runtime.env

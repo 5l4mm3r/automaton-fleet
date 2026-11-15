@@ -70,12 +70,60 @@ export const TOOL_CAPABILITIES: Readonly<Record<string, CapabilityClass>> = Obje
   cancel_goal: "planning",
   complete_task: "planning",
   list_goals: "planning",
-  request_owner_decision: "planning",
-  withdraw_owner_request: "planning",
+  // 2026-10-23: a tool's full documentation (local models get compact tool lists).
+  tool_help: "planning",
+  record_external_dependency: "planning",
+  reply_to_owner: "planning",
+  withdraw_external_dependency: "planning",
+  open_decision: "planning",
+  // F2 (schema v28+): the founder's own economic records and Fleet capital (no new authority: existing classes)
+  opportunity: "planning",
+  venture: "planning",
+  wallet: "ledger.read",
+  fleet_capital: "spend.request",
+  economic_knowledge: "knowledge.read",
+  // v42: team projects (recruit existing agents by internal contract) — the agent's own commercial planning; funding
+  // goes through FleetController's custody checks (no new authority: the planning class).
+  project: "planning",
+  // v52: the Gumroad storefront through its gateway — the venture's own commercial work (the dispatch binds every job to
+  // the caller's venture; the gateway holds the token).
+  storefront: "planning",
+  // v76 (founder-v7): the agent's offers, its customers and the review of its deliverables — its own commercial work under
+  // the planning class FOUNDER_V7_TOOLS advertises (the database dispatch enforces every op; independent_review is one
+  // charged model call over the agent's own workspace files).
+  offer: "planning",
+  customers: "planning",
+  deliverable: "planning",
+  independent_review: "planning",
+  // v79 (founder-v8): the business operator's own records (database dispatch enforces every op) and looking at its own
+  // workspace images (read-only; charged as input tokens of the agent's own step).
+  business: "planning",
+  view_image: "planning",
+  // v85 (founder-v10): checking and requesting its own capabilities (database dispatch); search through the Fleet's
+  // provider gateway (research class, like web_fetch); image generation through the gateway (its own commercial work, cost
+  // recorded against the agent; no new authority).
+  capabilities: "planning",
+  // v89: a customer's repository through the code gateway and the isolated build environment (database dispatch; the
+  // customer's consent and the app installation are enforced there).
+  code: "planning",
+  web_search: "research.web",
+  generate_image: "planning",
+  // R41.1 (owner, 2026-10-08): the v34–v37 economy tools the controller has always advertised under "planning" were
+  // never classified here, so every call was refused. Classified within their existing authority — the database
+  // dispatch (api_economy) enforces every op; mail/SMS stay dormant (FLEET_CAPABILITY_NOT_CONFIGURED blocks only that
+  // action); browser actions run only in the isolated browser worker with broker-sealed credentials.
+  fleet_services: "planning",
+  identity: "planning",
+  browser: "planning",
+  resolve_decision: "planning",
+  review_decision: "planning",
   get_plan: "planning",
   orchestrator_status: "planning",
   // private memory
   remember_fact: "memory.private",
+  // R41.1 (founder-v5): the founder's own field journal and the Survival Field Guide (seed knowledge; runtime-local).
+  field_journal: "memory.private",
+  field_guide: "knowledge.read",
   remember_facts: "memory.private",
   retract_fact: "memory.private",
   recall_facts: "memory.private",

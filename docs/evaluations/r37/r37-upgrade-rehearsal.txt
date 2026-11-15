@@ -1,0 +1,13 @@
+== upgrade rehearsal 94f09a7 (schema 41 -> 42), rollback to 29cde7d, start 2026-10-07T11:22:06Z
+throwaway copy restored: schema 41, ledger head 540 1d3e56f717f130e4758f…, logins: fleet_agent_login fleet_dashboard_login fleet_operator_login fleet_service_login 
+{"ok":true,"latencyMs":2,"schemaVersion":42,"countersConsistent":true}
+1. copy migrated to 42; candidate 94f09a7 approved in the THROWAWAY registry; ledger head unchanged
+2. current release 29cde7d on schema 42: REFUSED (schema version 42 != 41) — rollback must restore the database (class B)
+3a. candidate controller ready on schema 42: {"ok":true,"checks":{"database":true,"agentApi":true,"runtimeRelease":true,"reaper":true,"sandboxTermination":true,"privileges":true}}
+3b. candidate Operator API ready on schema 42 (readyz 200)
+3c. candidate dashboard ready on schema 42: login 200, preview 200, read without session 401, call without session 401
+3d. v42 projects read (the dashboard 'projects' op): {"projects":0,"summary":{"note":"Internal payments move value between agents; they are never Fleet revenue.","active":0,"planning":0,"cancelled":0,"completed":0,"escrowMinor":0,"agentsCollaborating":0,"internalPaymentsMinor":0,"plannedTimeSavedHours":0}}
+3e. ledger verify ok, head unchanged, no reservation or birth while the candidate services ran
+4. rollback restore: schema 41, ledger head identical
+5. current release 29cde7d: controller ready, dashboard ready on the restored schema 41; ledger head identical
+== UPGRADE REHEARSAL PASSED 2026-10-07T11:22:23Z — production untouched (PIDs 418376  410474  534627 , schema 41)

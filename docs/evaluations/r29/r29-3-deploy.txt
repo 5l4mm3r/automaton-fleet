@@ -1,0 +1,77 @@
+founder before: pid 318932 restarts 0 pin-sha 6fbbca154fb76524 facts bed022a8099eb296f6e70f7954c05cbcd148689184d86369b557a44afb9952e9
+pins before: FLEET_RUNTIME_COMMIT=6764d78b68ea3d97ea78a91ce1a15fbc2a5adad8 FLEET_RUNTIME_BUILD_ID=cdbcffb9ea9b368b8eed9b633c126a8baf2a9c5a9b11b47eb9acd54b35894d11  current releases/6764d78b68ea3d97ea78a91ce1a15fbc2a5adad8
+pins: FLEET_RUNTIME_COMMIT=b949b1c7f156ac73ac12c31cbc3eeb958413169e FLEET_RUNTIME_BUILD_ID=2b9584d5f73b87552e8d672feb2b90b1ef10419c00c603e7f46f084739e10da2 FLEET_RUNTIME_LOCKFILE_SHA256=eee9dc2f24b389bd00f8d5d617391ce34d04c612bc8f7fca201bb9f7c1a3a811  (pre-r29 sha 43ea315e055cefa2)
+Verified build 2b9584d5f73b87552e8d672feb2b90b1ef10419c00c603e7f46f084739e10da2 staged at /home/ubuntu/.cache/automaton-fleet/stage/b949b1c7f156ac73ac12c31cbc3eeb958413169e
+Installed release b949b1c7f156ac73ac12c31cbc3eeb958413169e (build 2b9584d5f73b87552e8d672feb2b90b1ef10419c00c603e7f46f084739e10da2). Restart the service to pick it up: systemctl restart automaton-fleet
+inflight: 0
+OUTAGE START 2026-10-02T10:34:44Z
+dump /home/ubuntu/automaton_fleet-v25-pre-v31-20261002T103444Z.dump 3105069 B mode 600 owner ubuntu sha e0ce25a00b8917e30a2aab024bec524a3b0c6b2e2a8a02a3813d64e50b6bc94b
+dump readable: 91 tables with data, 608 functions
+dump sha verified
+ledger head at cutover: 536 8205ccdb13ec0a6731354bf8acd96aba18394b4223c207b4a6b408c89d1397f6 journals 499
+migrate-check: {"currentVersion":25,"resultingVersion":31,"wouldApply":[26,27,28,29,30,31],"requiredVersion":31,"rolledBack":true}
+Applied migrations: 26, 27, 28, 29, 30, 31
+{"ok":true,"latencyMs":3,"schemaVersion":31,"countersConsistent":true}
+migrated 2026-10-02T10:34:49Z: schema 31
+audit PASS
+approved
+RUNTIME IDENTITY: VERIFIED
+OUTAGE END 2026-10-02T10:34:56Z
+readyz 200
+controller cwd /opt/automaton-fleet/releases/b949b1c7f156ac73ac12c31cbc3eeb958413169e
+founder after: pid 318932 restarts 0 pin-sha 6fbbca154fb76524 facts bed022a8099eb296f6e70f7954c05cbcd148689184d86369b557a44afb9952e9
+automaton-fleet: active
+automaton-fleet-operator-api: active
+automaton-fleet-custody: active
+automaton-fleet-fetcher.socket: active
+automaton-fleet-chatgpt-adapter.socket: active
+automaton-fleet-chatgpt-tunnel: active
+automaton-fleet-founder@01M3F50SH7PNX2E3GST13J52AS.service: active
+  [WARN] economy                            WARN AGENT_NO_ROUTE_FORWARD {"agents":1}
+  [WARN] sandbox termination                not supported by the Conway API; dead agents' sandboxes may keep running
+  [WARN] wallet custody                     agent wallets are controller-supervised (freeze, spend requests) but keys are still generated and held by each agent runtime
+DEPLOYMENT:        OK
+SAFE FOR DRY RUN:           YES
+SAFE FOR REAL REPLICATION:  NO (3 blockers)
+SAFE FOR REAL PAYMENTS:     NO (2 blockers)
+  [PASS] no stuck reservation           0 expired-unreaped, 0 uncertain provisioning
+SAFE FOR DRY RUN:           YES
+SAFE FOR REAL REPLICATION:  NO (3 blockers)
+SAFE FOR REAL PAYMENTS:     NO (2 blockers)
+  [PASS] port 6379 loopback-only (or closed)
+  [PASS] port 8787 loopback-only (or closed)
+  [PASS] remote HTTPS listener enabled by runtime.env
+  "journals": 499,
+  "unbalanced": 0
+}
+hub-health ok=true LEDGER_VERIFY:INFO SETTLEMENT_JOURNALS:INFO ENVELOPE_LEDGER:INFO DEPENDENCIES_ACTION_SCOPED:INFO AGENT_NO_ROUTE_FORWARD:WARN RAILS_NOT_LIVE_PINNED:INFO
+{
+  "at": "2026-10-02T10:35:08.319852+00:00",
+  "ok": true,
+  "findings": [
+    {
+      "code": "LEDGER_VERIFY",
+      "detail": {
+        "ok": true,
+        "headHash": "8205ccdb13ec0a6731354bf8acd96aba18394b4223c207b4a6b408c89d1397f6",
+        "journals": 499,
+        "unbalanced": 0
+      },
+      "severity": "INFO"
+    },
+    {
+      "code": "SETTLEMENT_JOURNALS",
+      "detail": {
+        "mismatched": 0
+      },
+      "severity": "INFO"
+    },
+    {
+      "code": "TREASURY",
+      "detail": {
+        "unallocatedMinor": 0,
+        "operatingPoolMinor": 0
+      },
+      "severity": "INFO
+flags: REAL_REPLICATION_ENABLED=false REAL_PAYMENTS_ENABLED=false OWNER_SWEEP_ENABLED=false FLEET_DRY_RUN_CHILD=false 
+== R29-3 end 2026-10-02T10:35:08Z

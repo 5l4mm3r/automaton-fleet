@@ -30,6 +30,7 @@ import { backupFounderState, categorize, diffFounderState, snapshotFounderState,
 import { runUpgradeRehearsal } from "../../fleet/founder/upgrade-rehearsal.js";
 import { findPgBin, startEphemeralPg, type EphemeralPg } from "./fixtures/ephemeral-pg.js";
 import { wipeRegistry } from "./fixtures/wipe.js";
+import { FLEET_PG_SCHEMA_VERSION } from "../../fleet/postgres/migrations.js";
 
 const PG_BIN = findPgBin();
 const OWNER = "operator:owner";
@@ -183,6 +184,8 @@ describe.skipIf(!PG_BIN)("schema v23 runtime-upgrade registry guarantees (Postgr
     svc = new PgFleetStore({ connectionString: pgc.serviceUrl });
     ledger = new PgLedgerAdmin({ connectionString: pgc.ownerUrl });
     genesis = new PgGenesisAdmin({ connectionString: pgc.ownerUrl });
+    // v112: this suite exercises the cloud-era cognition paths (the owner's explicit choice; new registries are local_only).
+    await genesis.inferenceProfileSet("cloud_allowed", "test: cloud-era cognition paths", "operator:owner");
   }, 180_000);
 
   afterAll(async () => {
@@ -197,12 +200,12 @@ describe.skipIf(!PG_BIN)("schema v23 runtime-upgrade registry guarantees (Postgr
 
   it("migrates to v23 with a clean privilege audit; a founder's registered runtime is its Genesis attestation until an upgrade", async () => {
     const a = await setup();
-    expect((await q(`SELECT max(version)::int AS v FROM fleet.fleet_schema_migrations`))[0].v).toBe(25);
+    expect((await q(`SELECT max(version)::int AS v FROM fleet.fleet_schema_migrations`))[0].v).toBe(FLEET_PG_SCHEMA_VERSION);
     expect((await store.auditPrivileges()).problems).toEqual([]);
     expect(await genesis.founderRuntimeCurrent(a)).toMatchObject({ ...FROM, source: "genesis" });
     expect(await genesis.founderRuntimeCurrent("01ZZZZZZZZZZZZZZZZZZZZZZZZ")).toBeNull();
     const ctx = await genesis.founderRuntimeContext(a);
-    expect(ctx).toMatchObject({ agent: { status: "active", origin: "genesis_founder", role: "root", runtimeCommit: FROM.commit }, approved: TO, inFlight: false, schemaVersion: 25 });
+    expect(ctx).toMatchObject({ agent: { status: "active", origin: "genesis_founder", role: "root", runtimeCommit: FROM.commit }, approved: TO, inFlight: false, schemaVersion: FLEET_PG_SCHEMA_VERSION });
     // The lifecycle is owner-only: the service and agent roles can run none of it, nor read the history.
     for (const f of ["fleet_founder_runtime_upgrade_prepare($1, '{}', '{}', '{}', 'x')", "fleet_founder_runtime_current($1)", "fleet_founder_ledger_fingerprint($1)"]) {
       await expect(svcRaw.query(`SELECT fleet.${f}`, [a])).rejects.toThrow(/permission denied/);
@@ -424,7 +427,9 @@ const repoDir = process.cwd();
 /** The release Founder 1 is pinned to in production; extracted from git so the rehearsal runs its REAL runtime code. */
 const PREVIOUS = (() => {
   try {
-    return execFileSync("git", ["-C", repoDir, "rev-parse", "--verify", "--quiet", "eea1932^{commit}"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    // R41.1: FLEET_UPGRADE_FROM rehearses from another installed release (e.g. 136c4bd, the release Agent 2 runs).
+    const from = /^[0-9a-f]{7,40}$/.test(process.env.FLEET_UPGRADE_FROM ?? "") ? process.env.FLEET_UPGRADE_FROM! : "eea1932";
+    return execFileSync("git", ["-C", repoDir, "rev-parse", "--verify", "--quiet", `${from}^{commit}`], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
   } catch {
     return "";
   }
@@ -460,14 +465,17 @@ describe.skipIf(!PG_BIN || !PREVIOUS)("runtime-upgrade rehearsal with real found
     if (root) fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it("the previous release really is older runtime code: no routed mode, no loop guard, no upgrade lifecycle", () => {
+  // (Specific to eea1932; skipped when FLEET_UPGRADE_FROM names a newer previous release.)
+  it.skipIf(!!process.env.FLEET_UPGRADE_FROM)("the previous release really is older runtime code: no routed mode, no loop guard, no upgrade lifecycle", () => {
     const old = path.join(releases, PREVIOUS);
     expect(fs.existsSync(path.join(old, "src/fleet/founder/upgrade.ts"))).toBe(false);
     expect(fs.existsSync(path.join(old, "src/fleet/founder/loop-guard.ts"))).toBe(false);
     expect(fs.readFileSync(path.join(old, "src/fleet/founder/mind.ts"), "utf8")).not.toMatch(/routedTurn|TASK PACKET/);
     expect(from.commit).not.toBe(to.commit);
     expect(from.buildId).not.toBe(to.buildId);
-    expect(from.lockfileSha256).toBe(to.lockfileSha256);
+    // Each release is pinned to its OWN lockfile (v37 added playwright-core, so they may differ); the upgrade verifies each.
+    expect(from.lockfileSha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(to.lockfileSha256).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it("upgrade, rollback, re-upgrade and routed cognition preserve the same founder: identity, memory, workspace, books", async () => {
@@ -484,7 +492,7 @@ describe.skipIf(!PG_BIN || !PREVIOUS)("runtime-upgrade rehearsal with real found
     try {
       const r = await runUpgradeRehearsal({
         registry: { ownerUrl: reg.ownerUrl, serviceUrl: reg.serviceUrl, agentUrl: reg.agentUrl }, host, from, to, actor: OWNER,
-        backupRoot: path.join(root, "backups"), pinEnvFile: (id) => host.pinEnvFile(id), timeoutMs: 90_000, healthTimeoutMs: 45_000, pollMs: 250,
+        backupRoot: path.join(root, "backups"), pinEnvFile: (id) => host.pinEnvFile(id), timeoutMs: 90_000, healthTimeoutMs: 45_000, pollMs: 250, releasesDir: releases,
       });
       expect(r.checks.filter((c) => !c.ok)).toEqual([]);
       expect(r.pass).toBe(true);
@@ -497,11 +505,15 @@ describe.skipIf(!PG_BIN || !PREVIOUS)("runtime-upgrade rehearsal with real found
         "upgrade: state was byte-identical when the target runtime started; afterwards no memory or workspace file was lost",
         "rollback: the same founder is back on the previous pinned runtime, healthy, with nothing lost",
         "upgrade again after the rollback: verified, same founder",
-        "routed: one question escalated as a Critical Decision Packet (reason code, parent call), then control returned to T2",
-        "routed: consequential actions are linked to the cognition that produced them — a small spend at T2, a major spend only from a T3 step",
+        "routed: one question escalated as a Critical Decision Packet in a fresh context (reason code, parent call), then the founder's own work continued",
+        "routed: consequential actions are linked to the cognition that produced them — a small and a major spend, both from the founder's critical-tier steps",
         "routed: cache only on evidenced reuse — T2 prefix written once inside the tool loop and read back; T1, the T3 question, the T3 action step and a turn's first step write nothing",
-        "routed: a bare wake-up after a sleep-only turn uses the slim packet — still T2, one message, smaller than the full packet of the same state, no cache write without evidenced reuse",
+        "work continuity: a hibernating founder makes no model call while nothing changes (three thinking slots), and a Fleet Control notice wakes it",
         "routed: provider protocol holds through real founder loops — signed thinking never crosses a model boundary, nothing is edited mid-loop",
+        // 2026-10-12: the upgraded runtime attests founder-v6 (charter v6 + the v5 tools), proven by name and count.
+        "R41.1 / v6: the upgraded founder is served its attested doctrine (founder-v6: charter v6 + the v5 tools) and its tools run end to end — field guide read, field journal written, hibernation declared with a wake condition",
+        "rollback after v5 use: the previous runtime runs healthy on the v5-written state — journal, marked goals and memory kept byte for byte, nothing restored over them",
+        "upgrade again after the v5 rollback: verified, same founder, the journal written before the rollback is still there",
         "clean teardown",
       ]));
       // The receipts carry digests and counts only.
@@ -509,7 +521,10 @@ describe.skipIf(!PG_BIN || !PREVIOUS)("runtime-upgrade rehearsal with real found
       expect(r.receipts.upgrade!.steps.map((s) => s.step)).toEqual(["preflight", "quiesce", "stop", "snapshot", "prepare", "backup", "recheck", "commit", "pin", "prestart", "start", "prove", "compare", "verify"]);
       expect(r.receipts.failedStart!.steps.filter((s) => !s.ok).map((s) => s.step)).toEqual(["prove"]);
       expect(r.receipts.failedStart!.steps.map((s) => s.step).slice(-6)).toEqual(["rollback:stop", "rollback:registry", "rollback:pin", "rollback:start", "rollback:prove", "rollback:verify"]);
-      expect(r.routed.map((x) => x.tier)).toEqual(expect.arrayContaining(["T1", "T2", "T3"]));
+      // 2026-10-20 (owner): the founder's own work on the critical tier; a routine chore still at T1; no standard-tier step.
+      expect(r.routed.map((x) => x.tier)).toEqual(expect.arrayContaining(["T1", "T3"]));
+      expect(r.routed.filter((x) => x.taskClass === "founder_work").every((x) => x.tier === "T3")).toBe(true);
+      expect(r.routed.some((x) => x.tier === "T2")).toBe(false);
     } finally {
       reg.stop();
     }

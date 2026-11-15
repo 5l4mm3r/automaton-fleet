@@ -126,6 +126,9 @@ if [[ -f "$FT" ]]; then
     grep -qx "$prop" "$FT" && ok "founder template: $prop" || bad "founder template lacks $prop"
   done
   grep -q -- "-/etc/automaton-fleet/custody.env" "$FT" && grep -q -- "-/etc/automaton-fleet/admin.env" "$FT" && ok "founder template hides fleet secrets" || bad "founder template does not hide fleet secrets"
+  # 2026-10-19: the office renderer in the exec sandbox — its syscalls re-allowed, the private /tmp it needs still set.
+  grep -qx "SystemCallFilter=mbind set_mempolicy get_mempolicy chown fchown fchownat lchown" "$FT" && grep -qx "PrivateTmp=yes" "$FT" && grep -qx "ProcSubset=pid" "$FT" \
+    && ok "founder template: office renderer syscalls, private /tmp, ProcSubset=pid" || bad "founder template lacks the office renderer's syscalls or private /tmp"
   active="$(systemctl list-units --all --plain --no-legend 'automaton-fleet-founder@*' 2>/dev/null | awk '$3 != "inactive" {print $1}' | wc -l)"
   living="$(runuser -u postgres -- psql -X -At -d "${FLEET_DB_NAME:-automaton_fleet}" -c "SELECT count(*) FROM fleet.fleet_agents WHERE origin IN ('genesis_founder','reseed_founder') AND status IN ('active','unresponsive')" 2>/dev/null || echo "?")"
   [[ "$active" == "$living" ]] && ok "founder runtime units active: $active (living founders: $living)" || bad "founder runtime units active: $active, living founders: $living"
@@ -145,6 +148,12 @@ if [[ -f "$FT" ]]; then
       bad "founder ${fid: -6} not pinned to its registered release ${fcommit:0:7} (WorkingDirectory=$wd, pin=${pc:-none}, env=${envf:-?})"
     fi
   done < <(runuser -u postgres -- psql -X -At -F '|' -d "${FLEET_DB_NAME:-automaton_fleet}" -c "SELECT agent_id, runtime_commit FROM fleet.fleet_agents WHERE origin IN ('genesis_founder','reseed_founder') AND status IN ('active','unresponsive') ORDER BY agent_id" 2>/dev/null)
+  # v32: founders are keyless — no wallet key file anywhere in a founder's private state (custody is the Treasury's).
+  FS=/var/lib/private/automaton-founders
+  if [[ -d "$FS" ]]; then
+    keys="$(find "$FS" -xdev \( -name 'wallet.json' -o -name '*.key' -o -name '*.pem' -o -name 'mnemonic*' -o -name '*keystore*' \) -type f 2>/dev/null | wc -l)"
+    [[ "$keys" == "0" ]] && ok "founder state holds no wallet or private-key file (keyless custody)" || bad "founder state holds $keys wallet/private-key file(s): founders must be keyless"
+  fi
   # R23: no living-founder runtime upgrade is left half done (prepared, or committed but not verified or rolled back),
   # and the pre-upgrade state backups are root-only.
   openup="$(runuser -u postgres -- psql -X -At -d "${FLEET_DB_NAME:-automaton_fleet}" -c "SELECT count(*) FROM fleet.fleet_founder_runtime_upgrades WHERE status IN ('prepared','committed')" 2>/dev/null || echo "?")"
@@ -329,12 +338,17 @@ fi
 
 echo "Network exposure"
 listeners="$(ss -Hltn 2>/dev/null)"
-for port in 5432 6379 8787; do
+# R36: 8443 (FleetController behind the edge, PROXY protocol), 8790 (dashboard) and 9443 (edge admin TLS) are internal.
+for port in 5432 6379 8787 8443 8790 9443; do
   public="$(awk -v p=":$port" '$4 ~ p"$" && $4 !~ /^(127\.0\.0\.1|\[::1\]):/' <<<"$listeners")"
   [[ -z "$public" ]] && ok "port $port loopback-only (or closed)" || bad "port $port listens publicly: $public"
 done
 if grep -q '^FLEET_REMOTE_LISTEN_ENABLED=true' "$ETC/runtime.env" 2>/dev/null; then
   ok "remote HTTPS listener enabled by runtime.env"
+  if grep -q '^FLEET_PUBLIC_PROXY_PROTOCOL=true' "$ETC/runtime.env" 2>/dev/null; then
+    systemctl is-active --quiet automaton-fleet-edge.service && ok "public :443 served by the TLS edge (PROXY protocol to the loopback controller)" \
+      || bad "FLEET_PUBLIC_PROXY_PROTOCOL=true but automaton-fleet-edge.service is not active"
+  fi
 else
   ok "remote exposure disabled (FLEET_REMOTE_LISTEN_ENABLED is not true)"
 fi

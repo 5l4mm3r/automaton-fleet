@@ -265,7 +265,8 @@ export class FleetApiClient implements FleetBackend {
     const me = await this.self();
     if (!me) return { ok: false, code: "FLEET_NOT_REGISTERED", reason: "Fleet credential rejected (enroll with fleet:admin)." };
     if (me.dead) return { ok: false, code: "FLEET_AGENT_DEAD", reason: `Agent ${agentId} is ${me.agent.status}.` };
-    if (me.agent.role !== role || (me.agent.walletAddress ?? "").toLowerCase() !== walletAddress.toLowerCase()) {
+    const mine = [me.agent.walletAddress, me.agent.runtimeWalletAddress].filter((x): x is string => !!x).map((x) => x.toLowerCase());
+    if (me.agent.role !== role || !mine.includes(walletAddress.toLowerCase())) {
       return { ok: false, code: "FLEET_IDENTITY_MISMATCH", reason: "Fleet credential does not match this automaton's wallet/role." };
     }
     return { ok: true, agent: me.agent, created: false };
@@ -305,12 +306,14 @@ export class FleetApiClient implements FleetBackend {
   }
 
   /**
-   * Schema v10: submit a structured spend order against this agent's own ledger
-   * allocation, to an owner-enrolled destination id. The controller decides
-   * (reserved / awaiting_owner / rejected); nothing is executed by this call.
+   * Schema v10/v27: commit this agent's OWN capital through a structured order, to a registered destination id (a payee, or since
+   * v29 a vendor the founder registered itself and FleetController verified).
+   * The controller checks custody only (reserved, or rejected with a precise custody category; never an owner
+   * route); nothing is executed by this call.
    */
-  async spendOrder(r: { idempotencyKey: string; amountCents: number; category: "expense" | "fee" | "asset_acquisition" | "conway_credits"; destinationId: string; purpose: string; recoverableCents?: number }) {
-    return this.call<{ ok: boolean; code: string | null; order: Record<string, unknown> | null; replay: boolean; executed: false }>("POST", "/v1/spend/request", r);
+  async spendOrder(r: { idempotencyKey: string; amountCents: number; category: "expense" | "fee" | "asset_acquisition" | "conway_credits"; destinationId: string; purpose: string; recoverableCents?: number; after?: string }) {
+    return this.call<{ ok: boolean; code: string | null; custody?: string | null; order: Record<string, unknown> | null; replay: boolean; executed: false;
+      operation?: Record<string, unknown> | null; note?: string | null }>("POST", "/v1/spend/request", r);
   }
 
   async cancelSpendOrder(orderId: string) {
@@ -327,10 +330,13 @@ export class FleetApiClient implements FleetBackend {
    * `waitMs` must exceed the controller's inference deadline (cognition status `founderWaitMs`), so a reply the
    * controller records and charges is always delivered (L2). Bounded to 5 s–330 s.
    */
-  async infer(messages: unknown[], waitMs = 150_000, route?: Record<string, unknown>) {
+  async infer(messages: unknown[], waitMs = 150_000, route?: Record<string, unknown>, doctrine?: string, opts: { conversationTurn?: string | null } = {}) {
     return this.call<{ content: string; toolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }>; usage: { inputTokens: number; outputTokens: number }; usageSource: string; chargedCents: number; requestId: string; route?: { tier: string; model: string; taskClass: string; scope: string } }>(
       // v22: the task's routing request (a request only: FleetController decides). Omitted = the legacy request body.
-      "POST", "/v1/cognition/infer", route ? { messages, route } : { messages }, false, Math.min(330_000, Math.max(5_000, waitMs)),
+      // R41.1: the founder doctrine this runtime implements (routed calls only; absent = founder-v4).
+      // v62: a call inside an owner conversation turn names it (FleetController decides who pays; absent = the founder).
+      "POST", "/v1/cognition/infer", route ? { messages, route, ...(doctrine ? { doctrine } : {}), ...(opts.conversationTurn ? { conversationTurn: opts.conversationTurn } : {}) } : { messages },
+      false, Math.min(330_000, Math.max(5_000, waitMs)),
     );
   }
 
@@ -355,8 +361,8 @@ export class FleetApiClient implements FleetBackend {
     return this.call<Record<string, unknown>>("POST", "/v1/experiments/list", { limit });
   }
 
-  /** Schema v25 (F1-LIVE-01): ask the owner for a decision or action only the owner can take (a request; grants nothing). */
-  async ownerRequestCreate(r: { idempotencyKey: string; category: string; goalRef: string | null; title: string; detail: string; blocking: boolean }) {
+  /** Schema v26 (F2-A): record ONE action that needs a human/legal identity or a constitutional change (blocks only that action). */
+  async ownerRequestCreate(r: { idempotencyKey: string; kind: string; action: string; goalRef: string | null; title: string; detail: string; after?: string }) {
     return this.call<Record<string, unknown>>("POST", "/v1/owner-requests/create", r);
   }
 
@@ -364,9 +370,37 @@ export class FleetApiClient implements FleetBackend {
     return this.call<Record<string, unknown>>("POST", "/v1/owner-requests/withdraw", { requestId });
   }
 
-  /** This founder's own owner requests: status, age, staleness and the owner's answer. */
+  /** This founder's own external dependencies: kind, the unavailable action, status and any recorded answer. */
   async ownerRequests() {
     return this.call<Record<string, unknown>>("POST", "/v1/owner-requests/list", {});
+  }
+
+  /**
+   * Schema v28+ (F2): one of this founder's own economic operations (opportunity.*, venture.*, decision.*, knowledge.*,
+   * wallet, performance, brief, rail.require, vendor.*, capital.*, envelope.*). The database authorizes and validates.
+   */
+  async economy(op: string, args: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+    try {
+      try {
+        return await this.call<Record<string, unknown>>("POST", "/v1/economy", { op, args });
+      } catch (err) {
+        // v58: a file-sized body is accepted only for a session the controller has already seen accepted; the first such
+        // call of a fresh session proves it with a small read, then is sent once more.
+        if (!(err instanceof ApiError && err.status === 413) || op === "brief") throw err;
+        await this.call<Record<string, unknown>>("POST", "/v1/economy", { op: "brief", args: {} });
+        return await this.call<Record<string, unknown>>("POST", "/v1/economy", { op, args });
+      }
+    } catch (err) {
+      // A business refusal (HTTP 200, ok:false) is DATA the founder acts on — keep its code and reason. Authentication,
+      // transport and availability failures still raise.
+      if (err instanceof ApiError && err.status === 200) return { ok: false, code: err.code, reason: err.message === err.code ? undefined : err.message };
+      throw err;
+    }
+  }
+
+  /** F2: the compact economic brief for a full task packet (figures only). */
+  async economyBrief() {
+    return (await this.economy("brief", {})).brief;
   }
 
   /** Schema v18: research the public web through FleetController's isolated fetcher (the result is UNTRUSTED data). */
@@ -383,13 +417,19 @@ export class FleetApiClient implements FleetBackend {
     return (await this.call<{ capabilities: Record<string, unknown> }>("GET", "/v1/capabilities")).capabilities;
   }
 
-  /** Propose institutional knowledge (the owner decides whether it is promoted). */
+  /** Propose institutional knowledge (curated promotion; it never blocks the founder — F2 economic knowledge is shared automatically when ledger-backed). */
   async proposeKnowledge(p: { category: string; title: string; content: string }) {
     return this.call<{ proposalId: string; status: string }>("POST", "/v1/knowledge/propose", p);
   }
 
-  async knowledge(after = 0) {
-    return (await this.call<{ entries: Array<Record<string, unknown>> }>("POST", "/v1/knowledge/list", { after })).entries;
+  async knowledge(after = 0, search?: { query: string; category?: string; limit?: number }) {
+    // v68: the current lessons, plus (from a v68 controller) the retired ones with their replacement — so a copied lesson
+    // that was corrected is visible as such. An older controller returns entries only.
+    // v111: with a search, the most relevant of all current lessons (`searched` present); an older controller ignores it.
+    const r = await this.call<{ entries: Array<Record<string, unknown>>; retired?: Array<Record<string, unknown>>; note?: string; searched?: number; matched?: number }>(
+      "POST", "/v1/knowledge/list", { after, ...(search ? { query: search.query, ...(search.category ? { category: search.category } : {}), ...(search.limit ? { limit: search.limit } : {}) } : {}) });
+    if (typeof r.searched === "number") return { entries: r.entries, retired: r.retired ?? [], note: r.note, searched: r.searched, matched: r.matched, query: search?.query };
+    return r.retired !== undefined ? { entries: r.entries, retired: r.retired, ...(r.note ? { note: r.note } : {}) } : r.entries;
   }
 
   /** Request one Organisation Identity fact for a named workflow; released only after owner approval. */

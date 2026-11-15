@@ -71,8 +71,8 @@ runtime commit `4d6a0befb97ee64e4ebc6daffe4baa64d6a4b790`, schema v8, cap 2, DEV
 | `pnpm test` | `vitest run` (43) | Whole suite | dev | R (ephemeral PG) | **no** | Never exits because of a pre-existing hang in `src/__tests__/context-hardening.test.ts` ("buildContextMessages token budget"). CLAUDE.md "Testing policy" says not to run it |
 | `pnpm test:ci` | `vitest run --reporter=verbose` (69) | Whole suite, verbose output | dev | R | **no** | Same hang as `test` |
 | `pnpm test:coverage` | `vitest run --coverage` (45) | Coverage with v8. Thresholds in vitest.config.ts: statements 60, branches 50, functions 55, lines 60 | dev | R | **no** | Same hang |
-| `pnpm test:security` | `vitest run -t 'security\|injection\|policy'` (46) | Tests selected by name | dev | R | dev only | — |
-| `pnpm test:financial` | `vitest run -t 'financial\|spend\|treasury'` (47) | Tests selected by name | dev | R | dev only | — |
+| `pnpm test:security` | `node scripts/test-suite.mjs 'security\|injection\|policy'` (46) | Files holding a matching test name, each run whole | dev | R | dev only | — |
+| `pnpm test:financial` | `node scripts/test-suite.mjs 'financial\|spend\|treasury'` (47) | Files holding a matching test name, each run whole | dev | R | dev only | — |
 | `pnpm test:fleet` | `vitest run src/__tests__/fleet` (48) | All Fleet tests (26 files). PG tests start an ephemeral cluster (`src/__tests__/fleet/fixtures/ephemeral-pg.ts`, `PG_BIN`) | dev | W (temp PG, temp dirs) | dev only | Pre-existing: in `fleet-phase2`, "migrations are idempotent and safe to run concurrently" can fail with `tuple concurrently updated`, and the wipe fixture can deadlock |
 | `pnpm test:deploy` | `vitest run src/__tests__/fleet/fleet-phase4.test.ts` (61) | Phase 4 deployment and secret-file tests | dev | temp | dev only | — |
 | `pnpm test:phase5` | `…/fleet-phase5.test.ts` (62) | Lifecycle, treasury, schema v5 | dev | temp PG | dev only | — |

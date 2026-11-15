@@ -1,0 +1,71 @@
+# Automaton Fleet storefront gateway — schema v52 (Gumroad G3; docs/design/gumroad-revenue-integration.md §§3, 6, 7).
+#
+# NOT INSTALLED by default (owner-approved host step: scripts/fleet-gumroad-setup.sh). Runs dist/fleet/storefront/main.js
+# from the pinned release as its own system user (automaton-fleet-gumroad, in no other group), with no inbound port. It
+# holds the Gumroad token (its own vault, 0700/0600, written only by `oauth-exchange` on stdin), runs agents' storefront
+# jobs through a deny-by-default operation allowlist and reads sales and payouts back (memo only). Database:
+# fleet_provider_login (gx_* only), from gumroad.env. It refuses to start with any of the four safety switches on.
+#
+# Network: api.gumroad.com and S3 part-upload hosts over HTTPS (the client's allowlist decides). Loopback (PostgreSQL)
+# allowed; private, link-local, CGNAT and metadata ranges denied.
+
+[Unit]
+Description=Automaton Fleet storefront gateway (Gumroad; receive-only; no listener)
+Wants=postgresql.service
+After=postgresql.service automaton-fleet.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=automaton-fleet-gumroad
+Group=automaton-fleet-gumroad
+SupplementaryGroups=
+WorkingDirectory=/opt/automaton-fleet/current
+ExecStart=/opt/automaton-fleet/node/bin/node dist/fleet/storefront/main.js
+EnvironmentFile=/etc/automaton-fleet/gumroad.env
+Environment=NODE_ENV=production
+Environment=FLEET_STOREFRONT_EXPECTED_USER=automaton-fleet-gumroad
+Environment=FLEET_STOREFRONT_VAULT_DIR=/var/lib/automaton-fleet-gumroad/vault
+Environment=HOME=/var/lib/automaton-fleet-gumroad
+StateDirectory=automaton-fleet-gumroad automaton-fleet-gumroad/vault
+StateDirectoryMode=0700
+UMask=0077
+MemoryMax=512M
+TasksMax=64
+
+Restart=on-failure
+RestartSec=15s
+TimeoutStopSec=20s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=automaton-fleet-gumroad
+
+IPAddressAllow=localhost
+IPAddressDeny=0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 169.254.0.0/16 172.16.0.0/12 192.0.0.0/24 192.168.0.0/16 198.18.0.0/15 224.0.0.0/4 240.0.0.0/4
+IPAddressDeny=fc00::/7 fe80::/10 ff00::/8
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+LockPersonality=yes
+MemoryDenyWriteExecute=no
+RemoveIPC=yes
+SystemCallArchitectures=native
+InaccessiblePaths=-/etc/automaton-fleet/admin.env -/etc/automaton-fleet/service.env -/etc/automaton-fleet/operator.env -/etc/automaton-fleet/custody.env -/etc/automaton-fleet/identity.env -/etc/automaton-fleet/browser.env -/etc/automaton-fleet/tls -/etc/automaton-fleet/cognition.key
+InaccessiblePaths=-/home -/var/lib/automaton-fleet -/var/lib/automaton-fleet-custody -/var/lib/automaton-fleet-identity -/var/lib/automaton-fleet-browser -/var/lib/automaton-fleet-witness -/var/lib/private/automaton-founders -/var/log/automaton-fleet -/run/credentials
+
+[Install]
+WantedBy=multi-user.target

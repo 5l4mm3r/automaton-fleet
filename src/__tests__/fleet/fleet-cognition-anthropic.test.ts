@@ -134,7 +134,7 @@ describe("Anthropic protocol mapping and strict parsing (unit)", () => {
     const key = path.join(dir, "key");
     fs.writeFileSync(key, `${KEY}\n`, { mode: 0o600 });
     const uid = process.getuid!();
-    const env = { FLEET_COGNITION_PROVIDER: "anthropic", FLEET_COGNITION_MODEL: MODEL, FLEET_COGNITION_API_KEY_FILE: key };
+    const env = { FLEET_INFERENCE_PROFILE: "cloud_allowed", FLEET_COGNITION_PROVIDER: "anthropic", FLEET_COGNITION_MODEL: MODEL, FLEET_COGNITION_API_KEY_FILE: key };
     const cfg = loadCognitionProvider(env, uid);
     expect(cfg.provider?.id).toBe("anthropic");
     expect((cfg.provider as AnthropicProvider).settings).toEqual({ apiVersion: "2023-06-01", beta: null, thinking: null, effort: null, promptCache: "off" });
@@ -147,9 +147,10 @@ describe("Anthropic protocol mapping and strict parsing (unit)", () => {
         return (e as Error).message;
       }
     };
+    expect(err(() => loadCognitionProvider({ ...env, FLEET_INFERENCE_PROFILE: undefined }, uid))).toMatch(/inference profile is local_only/);
     expect(err(() => loadCognitionProvider({ ...env, FLEET_COGNITION_MAX_TOKENS_PARAM: "max_completion_tokens" }, uid))).toMatch(/does not apply to anthropic/);
-    expect(err(() => loadCognitionProvider({ FLEET_COGNITION_PROVIDER: "anthropic", FLEET_COGNITION_MODEL: MODEL }, uid))).toMatch(/requires/);
-    expect(err(() => loadCognitionProvider({ FLEET_COGNITION_PROVIDER: "openai_compatible", FLEET_COGNITION_BASE_URL: "https://x.example/v1", FLEET_COGNITION_MODEL: "m", FLEET_COGNITION_API_KEY_FILE: key, FLEET_COGNITION_THINKING: "adaptive" }, uid))).toMatch(/anthropic provider only/);
+    expect(err(() => loadCognitionProvider({ FLEET_INFERENCE_PROFILE: "cloud_allowed", FLEET_COGNITION_PROVIDER: "anthropic", FLEET_COGNITION_MODEL: MODEL }, uid))).toMatch(/requires/);
+    expect(err(() => loadCognitionProvider({ FLEET_INFERENCE_PROFILE: "cloud_allowed", FLEET_COGNITION_PROVIDER: "openai_compatible", FLEET_COGNITION_BASE_URL: "https://x.example/v1", FLEET_COGNITION_MODEL: "m", FLEET_COGNITION_API_KEY_FILE: key, FLEET_COGNITION_THINKING: "adaptive" }, uid))).toMatch(/anthropic provider only/);
     expect(err(() => loadCognitionProvider({ ...env, FLEET_COGNITION_THINKING: "enabled:10" }, uid))).toMatch(/adaptive or enabled/);
     fs.rmSync(dir, { recursive: true, force: true });
   });

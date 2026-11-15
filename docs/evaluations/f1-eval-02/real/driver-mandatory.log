@@ -1,0 +1,25 @@
+B-trunk: start (remaining 3.0000 USD)
+B-trunk: 7 calls, 0.35958 USD; total 0.35958 USD
+C-trunk: start (remaining 2.6404 USD)
+C-trunk: 4 calls, 0.18467 USD; total 0.54425 USD
+D-B-1: start (remaining 2.4557 USD)
+D-B-1: 4 calls, 0.20582 USD; total 0.75008 USD
+D-C-1: start (remaining 2.2499 USD)
+D-C-1: 4 calls, 0.10061 USD; total 0.85069 USD
+D-A-1: start (remaining 2.1493 USD)
+D-A-1: 4 calls, 0.15348 USD; total 1.00417 USD
+E-trunk: start (remaining 1.9958 USD)
+E-trunk: 4 calls, 0.21420 USD; total 1.21836 USD
+F-trunk: start (remaining 1.7816 USD)
+F-trunk: 3 calls, 0.19559 USD; total 1.41396 USD
+G-trunk: start (remaining 1.5860 USD)
+G-trunk: 4 calls, 0.24156 USD; total 1.65552 USD
+G-G0-1: start (remaining 1.3445 USD)
+G-G0-1: 4 calls, 0.14278 USD; total 1.79830 USD
+H-B-1: start (remaining 1.2017 USD)
+H-B-1: 3 calls, 0.22256 USD; total 2.02086 USD
+H-C-1: start (remaining 0.9791 USD)
+H-C-1: 3 calls, 0.09617 USD; total 2.11703 USD
+H-A-1: start (remaining 0.8830 USD)
+H-A-1: 4 calls, 0.21861 USD; total 2.33564 USD
+{"ran":["B-trunk","C-trunk","D-B-1","D-C-1","D-A-1","E-trunk","F-trunk","G-trunk","G-G0-1","H-B-1","H-C-1","H-A-1"],"stoppedAt":null,"reason":null}

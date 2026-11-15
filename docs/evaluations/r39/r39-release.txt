@@ -1,0 +1,21 @@
+== RELEASE 7f65cd1 (schema 43 -> 44, UI 0.8.3) start 2026-10-07T18:56:56Z
+== rollout cutover 7f65cd1 (schema 43 -> 44) from db3ce41 start 2026-10-07T18:56:56Z
+also cycled with the controller: automaton-fleet-dashboard.service automaton-fleet-identity.service
+Verified build dcbea07f69d74f225109cef0b9b74bd7cc2508d4f4da0edd483dfd9d02d6886e staged at /home/ubuntu/.cache/automaton-fleet/stage/7f65cd1a4824c443b1fd2d4365e0d955e6492c26
+Installed release 7f65cd1a4824c443b1fd2d4365e0d955e6492c26 (build dcbea07f69d74f225109cef0b9b74bd7cc2508d4f4da0edd483dfd9d02d6886e). Restart the service to pick it up: systemctl restart automaton-fleet
+OUTAGE START 2026-10-07T18:57:40Z
+pre-migration dump /home/ubuntu/automaton_fleet-v43-pre-v44-20261007T185740Z.dump sha 76d0dcf7462c083e
+migrate-check: {"currentVersion":43,"resultingVersion":44,"wouldApply":[44],"requiredVersion":44,"rolledBack":true}
+reconciliation: OK (/home/ubuntu/rollout-7f65cd1-cutover-reconcile.json)
+OUTAGE END 2026-10-07T18:57:59Z
+DEPLOYMENT:        OK
+SAFE FOR DRY RUN:           YES
+SAFE FOR REAL REPLICATION:  NO (3 blockers)
+SAFE FOR REAL PAYMENTS:     NO (1 blocker)
+rollback point: /etc/automaton-fleet/runtime.env.pre-7f65cd1; releases/db3ce41; dump /home/ubuntu/automaton_fleet-v43-pre-v44-20261007T185740Z.dump
+== ROLLOUT 7f65cd1 DEPLOYED 2026-10-07T18:58:05Z: schema 44, readyz 200
+== UI deploy 0.8.3 from ui-0.8.3-7f65cd1.tgz (sha 159714d9635066a7) replacing /opt/automaton-fleet/ui/0.3.0+hq-preview-0.8.2, 2026-10-07T18:58:05Z
+unpacked 105 files to /opt/automaton-fleet/ui/0.8.3
+dashboard pid 585601 -> 586218; root 6bd66a78fbe84cac
+== UI DEPLOY 0.8.3 DONE 2026-10-07T18:58:10Z
+== RELEASE 7f65cd1 DEPLOYED 2026-10-07T18:58:10Z: schema 44, root UI 0.8.3 (production_deployed recorded)

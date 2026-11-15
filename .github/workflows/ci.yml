@@ -14,6 +14,13 @@ jobs:
       - uses: pnpm/action-setup@v4
       - run: pnpm install --frozen-lockfile
       - run: pnpm run typecheck
+      # Release prerequisites the suite depends on (a clean checkout has neither):
+      # the compiled runtime tree (founder runtime/upgrade suites read dist/), and the Admin UI's own dependencies
+      # (the Command Centre / Virtual HQ unit suites import them).
+      - name: Build the runtime tree (dist/)
+        run: pnpm exec tsc
+      - name: Install the Admin UI dependencies
+        run: npm ci --prefix codex-dashboard
       - name: Run tests
         timeout-minutes: 10
         run: |

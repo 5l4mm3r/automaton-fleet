@@ -33,10 +33,98 @@ import { V22_SQL } from "./migrations-phase22.js";
 import { V23_SQL } from "./migrations-phase23.js";
 import { V24_SQL } from "./migrations-phase24.js";
 import { V25_SQL } from "./migrations-phase25.js";
+import { V26_SQL } from "./migrations-phase26.js";
+import { V27_SQL } from "./migrations-phase27.js";
+import { V28_SQL } from "./migrations-phase28.js";
+import { V29_SQL } from "./migrations-phase29.js";
+import { V30_SQL } from "./migrations-phase30.js";
+import { V31_SQL } from "./migrations-phase31.js";
+import { V32_SQL } from "./migrations-phase32.js";
+import { V33_SQL } from "./migrations-phase33.js";
+import { V34_SQL } from "./migrations-phase34.js";
+import { V35_SQL } from "./migrations-phase35.js";
+import { V36_SQL } from "./migrations-phase36.js";
+import { V37_SQL } from "./migrations-phase37.js";
+import { V38_SQL } from "./migrations-phase38.js";
+import { V39_SQL } from "./migrations-phase39.js";
+import { V41_SQL } from "./migrations-phase41.js";
+import { V42_SQL } from "./migrations-phase42.js";
+import { V43_SQL } from "./migrations-phase43.js";
+import { V44_SQL } from "./migrations-phase44.js";
+import { V45_SQL } from "./migrations-phase45.js";
+import { V46_SQL } from "./migrations-phase46.js";
+import { V47_SQL } from "./migrations-phase47.js";
+import { V48_SQL } from "./migrations-phase48.js";
+import { V49_SQL } from "./migrations-phase49.js";
+import { V50_SQL } from "./migrations-phase50.js";
+import { V51_SQL } from "./migrations-phase51.js";
+import { V52_SQL } from "./migrations-phase52.js";
+import { V53_SQL } from "./migrations-phase53.js";
+import { V54_SQL } from "./migrations-phase54.js";
+import { V55_SQL } from "./migrations-phase55.js";
+import { V56_SQL } from "./migrations-phase56.js";
+import { V57_SQL } from "./migrations-phase57.js";
+import { V58_SQL } from "./migrations-phase58.js";
+import { V59_SQL } from "./migrations-phase59.js";
+import { V60_SQL } from "./migrations-phase60.js";
+import { V61_SQL } from "./migrations-phase61.js";
+import { V62_SQL } from "./migrations-phase62.js";
+import { V63_SQL } from "./migrations-phase63.js";
+import { V64_SQL } from "./migrations-phase64.js";
+import { V65_SQL } from "./migrations-phase65.js";
+import { V66_SQL } from "./migrations-phase66.js";
+import { V67_SQL } from "./migrations-phase67.js";
+import { V68_SQL } from "./migrations-phase68.js";
+import { V69_SQL } from "./migrations-phase69.js";
+import { V70_SQL } from "./migrations-phase70.js";
+import { V71_SQL } from "./migrations-phase71.js";
+import { V72_SQL } from "./migrations-phase72.js";
+import { V73_SQL } from "./migrations-phase73.js";
+import { V74_SQL } from "./migrations-phase74.js";
+import { V75_SQL } from "./migrations-phase75.js";
+import { V76_SQL } from "./migrations-phase76.js";
+import { V77_SQL } from "./migrations-phase77.js";
+import { V78_SQL } from "./migrations-phase78.js";
+import { V79_SQL } from "./migrations-phase79.js";
+import { V80_SQL } from "./migrations-phase80.js";
+import { V81_SQL } from "./migrations-phase81.js";
+import { V82_SQL } from "./migrations-phase82.js";
+import { V83_SQL, PUSH_API_FUNCTIONS_V83 } from "./migrations-phase83.js";
+import { V84_SQL } from "./migrations-phase84.js";
+import { V85_SQL } from "./migrations-phase85.js";
+import { V86_SQL, BANKFEED_API_FUNCTIONS_V86 } from "./migrations-phase86.js";
+import { V87_SQL, MEDIA_API_FUNCTIONS_V87 } from "./migrations-phase87.js";
+import { V88_SQL } from "./migrations-phase88.js";
+import { V89_SQL, CODE_API_FUNCTIONS_V89, BUILD_API_FUNCTIONS_V89 } from "./migrations-phase89.js";
+import { V90_SQL } from "./migrations-phase90.js";
+import { V91_SQL } from "./migrations-phase91.js";
+import { V92_SQL } from "./migrations-phase92.js";
+import { V93_SQL } from "./migrations-phase93.js";
+import { V94_SQL } from "./migrations-phase94.js";
+import { BROWSER_FUNCTIONS_V95, CODE_FUNCTIONS_V95, IDENTITY_FUNCTIONS_V95, V95_SQL } from "./migrations-phase95.js";
+import { V96_SQL } from "./migrations-phase96.js";
+import { V97_SQL } from "./migrations-phase97.js";
+import { V98_SQL } from "./migrations-phase98.js";
+import { V99_SQL } from "./migrations-phase99.js";
+import { V100_SQL } from "./migrations-phase100.js";
+import { V101_SQL } from "./migrations-phase101.js";
+import { V102_SQL } from "./migrations-phase102.js";
+import { V103_SQL } from "./migrations-phase103.js";
+import { V104_SQL } from "./migrations-phase104.js";
+import { V105_SQL } from "./migrations-phase105.js";
+import { V106_SQL } from "./migrations-phase106.js";
+import { V107_SQL } from "./migrations-phase107.js";
+import { V108_SQL } from "./migrations-phase108.js";
+import { V109_SQL } from "./migrations-phase109.js";
+import { V110_SQL } from "./migrations-phase110.js";
+import { V111_SQL } from "./migrations-phase111.js";
+import { V112_SQL } from "./migrations-phase112.js";
+import { V40_SQL } from "./migrations-phase40.js";
 
-export const FLEET_PG_SCHEMA_VERSION = 25;
+export const FLEET_PG_SCHEMA_VERSION = 112;
 export const FLEET_PG_HARD_MAX_AGENTS = 50;
-const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
+/** Serialises migrations AND the role re-grants that follow them (FLEET-KI-1: concurrent REVOKE/GRANT raced). */
+export const MIGRATION_LOCK_KEY = 0x464c4545; // "FLEE"
 
 export interface PgMigration {
   version: number;
@@ -1154,6 +1242,93 @@ export const PG_MIGRATIONS: readonly PgMigration[] = Object.freeze([
   { version: 23, name: "founder_runtime_upgrade_cache_policy", sql: V23_SQL },
   { version: 24, name: "opportunity_experiment_pipeline_inert", sql: V24_SQL },
   { version: 25, name: "owner_request_liveness", sql: V25_SQL },
+  { version: 26, name: "f2a_action_scoped_dependencies_survival_observation", sql: V26_SQL },
+  { version: 27, name: "f2a_own_capital_custody_circuit_breaker", sql: V27_SQL },
+  { version: 28, name: "f2_economy_opportunities_decisions_ventures_knowledge", sql: V28_SQL },
+  { version: 29, name: "f2_money_core_tax_rails_vendors_settlement_wallet", sql: V29_SQL },
+  { version: 30, name: "f2_capital_engine_sweeps_cognition_depth_hub", sql: V30_SQL },
+  { version: 31, name: "f2_launch_admin_withdrawal_risk_r24_custody_contextual_depth", sql: V31_SQL },
+  { version: 32, name: "custody_signer_keyless_custody_bound_instructions", sql: V32_SQL },
+  { version: 33, name: "no_synthetic_tax_legal_entity_optional", sql: V33_SQL },
+  { version: 34, name: "agent_operational_identity_owner_identity_broker", sql: V34_SQL },
+  { version: 35, name: "fleet_economy_engine_replication_missions_estates_notifications", sql: V35_SQL },
+  { version: 36, name: "business_mail_sms_admin_reveal_owner_vault_upload", sql: V36_SQL },
+  { version: 37, name: "general_browser_operator_credential_execution", sql: V37_SQL },
+  { version: 38, name: "admin_dashboard_auth_gateway", sql: V38_SQL },
+  { version: 39, name: "replication_accounting_fleet_generated_wealth", sql: V39_SQL },
+  { version: 40, name: "birth_provisioning", sql: V40_SQL },
+  { version: 41, name: "comms_dormant_shared_mailbox_cost_aware_numbers", sql: V41_SQL },
+  { version: 42, name: "multi_agent_project_teams", sql: V42_SQL },
+  { version: 43, name: "owner_sign_in_resilience_notification_housekeeping", sql: V43_SQL },
+  { version: 44, name: "fleet_command_event_routing", sql: V44_SQL },
+  { version: 45, name: "disposable_notifications_clearable_fleet_command", sql: V45_SQL },
+  { version: 46, name: "truthful_rail_readiness_receive_only_settlement_guards", sql: V46_SQL },
+  { version: 47, name: "provider_records_cash_basis_settlement", sql: V47_SQL },
+  { version: 48, name: "paypal_treasury_custody_activation_card_clearing", sql: V48_SQL },
+  { version: 49, name: "identity_autonomy_card_holds_footprint_sealed_custody_credentials", sql: V49_SQL },
+  { version: 50, name: "insolvency_sweep_reductions_knowledge_library_pii_scrub", sql: V50_SQL },
+  { version: 51, name: "exhaustion_death_card_reservations_paypal_availability_documents_knowledge_r2", sql: V51_SQL },
+  { version: 52, name: "gumroad_storefront_gateway_receipt_evidence", sql: V52_SQL },
+  { version: 53, name: "weekly_card_statement_owner_receiving_test", sql: V53_SQL },
+  { version: 54, name: "card_rule_paypal_first_card_requests", sql: V54_SQL },
+  { version: 55, name: "owner_survival_protection_switch", sql: V55_SQL },
+  { version: 56, name: "customer_orders_delivery_connectors", sql: V56_SQL },
+  { version: 57, name: "paypal_clawback_reconciliation_card_sweep_destination", sql: V57_SQL },
+  { version: 58, name: "principal_caps_card_credit_fulfilment_honesty", sql: V58_SQL },
+  { version: 59, name: "brokered_paypal_refunds", sql: V59_SQL },
+  { version: 60, name: "agent_labels", sql: V60_SQL },
+  { version: 61, name: "owner_receiving_test", sql: V61_SQL },
+  { version: 62, name: "conversations_and_names", sql: V62_SQL },
+  { version: 63, name: "mail_housekeeping", sql: V63_SQL },
+  { version: 64, name: "autonomous_spending_review", sql: V64_SQL },
+  { version: 65, name: "owner_decisions_completion", sql: V65_SQL },
+  { version: 66, name: "capital_backing", sql: V66_SQL },
+  { version: 67, name: "business_foundation_and_wake", sql: V67_SQL },
+  { version: 68, name: "lesson_supersession_and_event_feed", sql: V68_SQL },
+  { version: 69, name: "ai_credit_reimbursable", sql: V69_SQL },
+  { version: 70, name: "ai_credit_funding_sources", sql: V70_SQL },
+  { version: 71, name: "ai_credit_auto_detection", sql: V71_SQL },
+  { version: 72, name: "ai_credit_acquisition_cost", sql: V72_SQL },
+  { version: 73, name: "ai_credit_historical_cost", sql: V73_SQL },
+  { version: 74, name: "ai_credit_test_period_writeoff", sql: V74_SQL },
+  { version: 75, name: "virtual_agent_presence", sql: V75_SQL },
+  { version: 76, name: "market_fulfilment", sql: V76_SQL },
+  { version: 77, name: "treasury_integrity", sql: V77_SQL },
+  { version: 78, name: "seller_storefronts", sql: V78_SQL },
+  { version: 79, name: "business_operator", sql: V79_SQL },
+  { version: 80, name: "acquisition_channels", sql: V80_SQL },
+  { version: 81, name: "launch_dashboard", sql: V81_SQL },
+  { version: 82, name: "recovery_consent_helpers", sql: V82_SQL },
+  { version: 83, name: "phone_push", sql: V83_SQL },
+  { version: 84, name: "unresolved_alerts", sql: V84_SQL },
+  { version: 85, name: "agent_capabilities", sql: V85_SQL },
+  { version: 86, name: "money_locations", sql: V86_SQL },
+  { version: 87, name: "paid_media_and_capability_coverage", sql: V87_SQL },
+  { version: 88, name: "money_that_left_is_on_the_books", sql: V88_SQL },
+  { version: 89, name: "software_maintenance_prerequisites", sql: V89_SQL },
+  { version: 90, name: "cards_reversals_limits_unit_economics", sql: V90_SQL },
+  { version: 91, name: "bank_deposit_backs_capital", sql: V91_SQL },
+  { version: 92, name: "alarm_drill", sql: V92_SQL },
+  { version: 93, name: "card_display_label", sql: V93_SQL },
+  { version: 94, name: "current_decisions_and_notices", sql: V94_SQL },
+  { version: 95, name: "durable_operations", sql: V95_SQL },
+  { version: 96, name: "custody_refund_authority", sql: V96_SQL },
+  { version: 97, name: "order_page_checkout", sql: V97_SQL },
+  { version: 98, name: "paypal_order_lifecycle", sql: V98_SQL },
+  { version: 99, name: "paypal_return_processing", sql: V99_SQL },
+  { version: 100, name: "customer_obligations_refusal_reasons", sql: V100_SQL },
+  { version: 101, name: "own_sends_do_not_wake", sql: V101_SQL },
+  { version: 102, name: "premium_work_room_operation_hint", sql: V102_SQL },
+  { version: 103, name: "refund_outcome_wakes_agent", sql: V103_SQL },
+  { version: 104, name: "run_ends_when_next_request_cannot_fit", sql: V104_SQL },
+  { version: 105, name: "platform_calculated_quotes_invoices", sql: V105_SQL },
+  { version: 106, name: "owner_claim_waits_for_proof_refund", sql: V106_SQL },
+  { version: 107, name: "proof_refund_booked_from_owner_held_cash", sql: V107_SQL },
+  { version: 108, name: "launch_completion_geography_conversations_email_sale_values", sql: V108_SQL },
+  { version: 109, name: "closed_order_mail_to_owner", sql: V109_SQL },
+  { version: 110, name: "order_closure_per_conversation", sql: V110_SQL },
+  { version: 111, name: "cognition_settlement_integrity", sql: V111_SQL },
+  { version: 112, name: "local_inference_only", sql: V112_SQL },
 ]);
 
 /** The only functions the restricted service role may execute (name + signature). */
@@ -1178,6 +1353,11 @@ export const SERVICE_API_FUNCTIONS: readonly string[] = Object.freeze([
   "svc_issue_payment_instruction(uuid)",
   "svc_genesis_expire(integer)",
   "svc_settle_estates(integer)",
+  // v35: the economy engine passes (replication window, missions, estates, notifications).
+  "svc_replication_tick(boolean)",
+  "svc_mission_tick()",
+  "svc_estate_tick(integer)",
+  "svc_notify_tick()",
   "svc_genesis_runtime_evidence(text, text, jsonb)",
   "svc_cognition_authorize(text, bigint)",
   "svc_cognition_record(text, uuid, text, integer, integer, text, text, jsonb, text, text, integer, integer, text, integer, integer, integer, text, text)",
@@ -1188,6 +1368,8 @@ export const SERVICE_API_FUNCTIONS: readonly string[] = Object.freeze([
   // v22: neutral cognition routing (inert until enabled): routed authorize/record, routing state, action boundary.
   "svc_cognition_routing_state(text)",
   "svc_cognition_routed_authorize(text, bigint, jsonb, text)",
+  // v62: an owner conversation turn's model call (the treasury pays inside an open turn; otherwise as routed_authorize).
+  "svc_cognition_conversation_authorize(text, bigint, jsonb, text, uuid)",
   "svc_cognition_routed_record(text, uuid, text, integer, integer, text, text, jsonb, text, text, integer, integer, text, integer, integer, integer, text, text, jsonb)",
   "svc_action_cognition_verify(text, text, bigint, text, text)",
   // v24: experiment expiry / run windows (reaper).
@@ -1195,7 +1377,82 @@ export const SERVICE_API_FUNCTIONS: readonly string[] = Object.freeze([
   "svc_research_artifact_record(text, uuid, text, text, text, text, integer, boolean, integer)",
   "svc_experiment_relevance_pending(integer)",
   "svc_experiment_relevance_record(uuid, uuid, text, text, text, jsonb, jsonb)",
+  // v64: Fleet Control spend reviews (the controller's reviewer).
+  "svc_spend_reviews_claim(integer, text)", "svc_spend_review_record(uuid, text, jsonb)", "svc_spend_review_failed(uuid, text, text, jsonb)",
+  // v65: Fleet Control review of shared lessons.
+  "svc_knowledge_proposals_claim(integer, text)", "svc_knowledge_review_record(uuid, text, jsonb)", "svc_knowledge_review_failed(uuid, text, text, jsonb)",
   "svc_relevance_call_failed(uuid, uuid, jsonb)",
+  // v29 (F2): the rail adapter reports external transactions (settled idempotently into the attributed venture) and the
+  // credential broker audits every use of a credential reference (never the secret).
+  "svc_settlement_ingest(uuid, text, text, bigint, bigint, text, uuid, timestamp with time zone, text, text)",
+  "svc_credential_use(uuid, text, text, uuid, text, text)",
+  // v30 (F2): envelope expiry / stop-loss / milestones, and the Treasury sweep run (a no-op until an operator enables sweeps).
+  "svc_capital_reap(integer)",
+  "svc_sweep_run(text)",
+  "svc_tax_true_up(integer)",
+  // v31: the spend boundary with context (category, destination, recoverable value) for contextual cognition depth.
+  "svc_action_cognition_verify_ctx(text, text, bigint, text, text, bigint, text, text)",
+  // v41: communications charging (number rental and usage from the agent's own cash), unpaid / idle / dead-agent numbers.
+  "svc_comms_tick(integer)",
+  // v45: hourly retention of routine event copies and diagnostics (never canonical history; writes no event).
+  "svc_event_retention()",
+  // v83: the hourly operations watch (health findings, overdue paid orders, low AI credit → notifications).
+  "svc_operations_watch()",
+  // v48: PayPal webhooks are stored unverified (custody verifies them); the reaper issues due payment instructions and expires
+  // the owner's custody activation.
+  "svc_paypal_webhook_receive(text, text, text, jsonb, text)",
+  "svc_issue_due_instructions(integer)",
+  "svc_custody_activation_expire()",
+  // v49: undeclared card holds (booked at their maximum when used, else voided). v50: insolvency dormancy, lapsed sweep reductions.
+  "svc_card_holds_expire(integer)",
+  // v70: settle AI credit drawn from treasury-funded lots (minutely lifecycle pass).
+  "svc_ai_credit_settle(integer)",
+  "svc_insolvency_tick()",
+  "svc_sweep_reductions_expire()",
+  // v51: held PayPal captures become available capital on PayPal's evidence (Transaction Search status S + Balances).
+  "svc_paypal_availability(integer)",
+  // v52: Gumroad payouts received in the PayPal treasury are matched from PayPal's own records.
+  "svc_settlement_paypal_match(integer)",
+  // v53: the weekly card statement (issued at the owner's weekday and hour; nothing to report issues nothing).
+  "svc_card_statement_tick()",
+  // v54: open card requests past their time expire.
+  "svc_card_requests_expire()",
+  // v56: failed order deliveries are sent again with back-off (never after a refund).
+  "svc_order_deliveries_retry(integer)",
+  // v76: the public offer and order pages (rate-limited by the controller) and the offer pass (automatic product
+  // delivery from reviewed files, enquiry and retention housekeeping).
+  "svc_offer_page(text)",
+  "svc_offer_preview(text, integer)",
+  // v82: the buyer's consent to immediate supply travels with the purchase; an order page records it for other orders.
+  "svc_offer_buy(text, text, text)",
+  "svc_order_consent(text, text, text)",
+  "svc_offer_enquire(text, text, text, text, text, jsonb)",
+  "svc_enquiry_page(text)",
+  "svc_order_page(text)",
+  "svc_order_file(text, uuid, integer)",
+  // v97: the order page's preview images and the contents of its small deliverables (what the buyer is buying), by access code.
+  "svc_order_sample(text, text, integer)",
+  // v98: the buyer is ready to pay — a fresh or reused PayPal order (custody creates it; the controller only records the request).
+  "svc_order_pay(text, text)",
+  // v99: PayPal brought an approving buyer back — custody reads the order at once; the page says "processing".
+  "svc_order_returned(text, text)",
+  // v108: the buyer states their country before paying (the owner's supported geography).
+  "svc_order_country(text, text, text)",
+  // v79: a channel's attribution code carried onto an order / enquiry; the public outreach opt-out page.
+  "svc_attribute(text, text, text)",
+  "svc_outreach_optout(text, boolean)",
+  // v80: search discovery of the own offer pages (sitemap; IndexNow key, due pages, notifications done).
+  "svc_sitemap()",
+  "svc_indexnow_key()",
+  "svc_customer_message(text, text, text, text, jsonb)",
+  "svc_offer_tick(integer)",
+  // v89: the customer's repository-access requests and consent on their own enquiry / order page (both pages call the
+  // first; missing here until 2026-10-19, so every order and enquiry page failed for the service role).
+  "svc_repo_requests(text, text)",
+  "svc_repo_consent(text, text, uuid, text, text, text)",
+  // v96: Fleet Control's hard daily AI ceiling — every paid review call reserves its bounded maximum first, then settles.
+  "svc_fleet_control_ai_reserve(text, text, bigint)",
+  "svc_fleet_control_ai_settle(uuid, bigint)",
 ]);
 
 /** Tables the service role may SELECT. fleet_agent_credentials (token hashes) is deliberately absent. */
@@ -1224,12 +1481,14 @@ export const AGENT_API_FUNCTIONS: readonly string[] = Object.freeze([
   "api_open_session(text, text, text)",
   "api_propose_allocation(text, text, text, text, bigint, bigint, integer)",
   "api_request_spend(text, text, text, text, text, bigint, text, text)",
-  "api_spend_request(text, text, text, bigint, text, text, text, bigint)",
+  // v95: the durable operation it continues (after: an operationId).
+  "api_spend_request(text, text, text, bigint, text, text, text, bigint, uuid)",
   "api_spend_cancel(text, text, uuid)",
   "api_ledger_summary(text, text)",
   "api_capabilities(text, text)",
   "api_knowledge_propose(text, text, text, text, text)",
   "api_knowledge_list(text, text, bigint, integer)",
+  "api_knowledge_search(text, text, text, text, integer)",
   "api_identity_request(text, text, text, text, text)",
   "api_identity_fact(text, text, uuid)",
   "api_cognition_status(text, text)",
@@ -1240,10 +1499,13 @@ export const AGENT_API_FUNCTIONS: readonly string[] = Object.freeze([
   "api_experiment_start(text, text, uuid)",
   "api_experiment_record(text, text, uuid, text, text, bigint, text, numeric, uuid, text, jsonb)",
   "api_experiment_list(text, text, integer)",
-  // v25 (F1-LIVE-01): explicit owner requests — create, withdraw and list the founder's own (only the owner decides).
-  "api_owner_request_create(text, text, text, text, text, text, text, boolean)",
+  // v25/v26: action-scoped external dependencies — create, withdraw and list the founder's own (identity/legal exceptions only; nothing waits on them).
+  "api_owner_request_create(text, text, text, text, text, text, text, text, uuid)",
   "api_owner_request_withdraw(text, text, uuid)",
   "api_owner_request_list(text, text)",
+  // v28 (F2): the agent's own economic records — opportunities, decisions, ventures, knowledge, performance — through one
+  // authenticated, capability-checked dispatcher (internal fleet_econ_* functions are never granted).
+  "api_economy(text, text, text, jsonb)",
 ]);
 
 /**
@@ -1256,17 +1518,268 @@ export const CUSTODY_API_FUNCTIONS: readonly string[] = Object.freeze([
   "cx_ping()",
   "cx_claim_instruction(text, text)",
   "cx_report_result(uuid, text, text, text, bigint, text)",
+  // v32: the custody signer attests the rails it holds a signer for, and gates each credential use under the lease.
+  "cx_attest_signer(text, uuid, text, text, uuid)",
+  "cx_credential_use(uuid, text, text, text, text)",
+  // v48: the PayPal treasury — webhook verification, checkout creation and capture, receipts, refunds, Transaction Search
+  // records and balance observations (custody is the only holder of the PayPal credential).
+  "cx_paypal_inbox(text, integer)",
+  "cx_paypal_inbox_result(text, text, text, text)",
+  "cx_paypal_work(text, integer)",
+  "cx_paypal_rails(text)",
+  "cx_paypal_checkout_by_order(text, text)",
+  "cx_paypal_checkout_update(text, uuid, text, text, text, text)",
+  "cx_paypal_capture_record(text, uuid, text, text, bigint, bigint, text, text)",
+  "cx_paypal_refund_record(text, text, text, text, bigint, text)",
+  "cx_paypal_txn_record(text, uuid, jsonb)",
+  "cx_paypal_balance_record(text, uuid, text, bigint, bigint)",
+  // v71: the counterparty PayPal reports for a transaction (AI-credit purchase detection).
+  "cx_paypal_txn_counterparty(text, uuid, text, text, text)",
+  // v49: the custody key (public half) and PayPal credentials sealed to it from the dashboard.
+  "cx_publish_key(text, text, text)",
+  "cx_sealed_credentials(text)",
+  // v56: the buyer's contact of a paid order, read from PayPal's own order record.
+  "cx_paypal_buyer_work(text, integer)",
+  "cx_paypal_buyer_record(text, uuid, jsonb)",
+  // v57: refunds / reversals from webhooks as evidence (reconciled with Transaction Search, never posted twice); disputes.
+  "cx_paypal_clawback_evidence(text, text, text, text, text, bigint, text)",
+  "cx_paypal_dispute_record(text, text, text, text, text, bigint, text)",
+  // v59: refunds the Fleet initiates (agent or owner), sent under the money-out authority; posted from PayPal's evidence.
+  "cx_paypal_refund_work(text, integer)",
+  "cx_paypal_refund_result(text, uuid, text, text, bigint, text, text)",
+  // v95: a refused retry after a lost answer is held for reconciliation, never "failed".
+  "cx_paypal_refund_unresolved(text, uuid, text)",
+  // v76: the status of open checkouts, read from PayPal when no webhook reported them.
+  "cx_paypal_status_work(text, integer)",
+  "cx_paypal_status_checked(text, uuid, text)",
+  // v98: the PayPal order lifecycle — claimed creation, reads, evidence-based retirement, watching, reconciliation, sync status.
+  "cx_paypal_pay_work(text, integer)",
+  "cx_paypal_order_claim(text, uuid)",
+  "cx_paypal_order_created(text, uuid, text, text, text, text)",
+  "cx_paypal_order_note(text, uuid, text, integer, text, text, text, jsonb)",
+  "cx_paypal_order_retire(text, uuid, jsonb)",
+  "cx_paypal_order_watch_work(text, integer)",
+  "cx_paypal_recon_report(text, uuid, text, text, bigint, text, jsonb)",
+  "cx_paypal_sync_record(text, uuid, text, boolean, integer, text, text, jsonb)",
 ]);
 
 /** Per custody function: the only tables it may write and the only volatile fleet functions it may call. */
 export const CUSTODY_WRITES: Readonly<Record<string, { writes: readonly string[]; calls: readonly string[] }>> = Object.freeze({
   cx_ping: { writes: [], calls: [] },
-  cx_claim_instruction: { writes: ["fleet_payment_instructions"], calls: [] },
+  // v64: revalidation immediately before execution may fail a stale instruction and release its reservation — the same
+  // release and event the executor's own failure report (cx_report_result) uses.
+  cx_claim_instruction: { writes: ["fleet_payment_instructions"], calls: ["fleet_order_release", "fleet_event"] },
   cx_report_result: {
-    writes: ["fleet_payment_instructions", "fleet_payment_orders", "fleet_assets"],
+    writes: ["fleet_payment_instructions", "fleet_payment_orders", "fleet_assets", "fleet_venture_journals"],
     calls: ["fleet_ledger_post", "fleet_order_release", "fleet_event"],
   },
+  cx_attest_signer: { writes: ["fleet_custody_attestations"], calls: [] },
+  cx_credential_use: { writes: ["fleet_credential_use_log", "fleet_credential_refs"], calls: [] },
+  cx_paypal_inbox: { writes: ["fleet_paypal_webhook_inbox"], calls: [] },
+  cx_paypal_inbox_result: { writes: ["fleet_paypal_webhook_inbox"], calls: ["fleet_event"] },
+  cx_paypal_work: { writes: ["fleet_paypal_checkouts"], calls: [] },
+  cx_paypal_rails: { writes: [], calls: [] },
+  cx_paypal_checkout_by_order: { writes: [], calls: [] },
+  cx_paypal_checkout_update: { writes: ["fleet_paypal_checkouts"], calls: ["fleet_event"] },
+  cx_paypal_capture_record: {
+    // v51: a capture's cash is held (fleet_paypal_availability) until PayPal shows it available.
+    writes: ["fleet_paypal_checkouts", "fleet_revenue_claims", "fleet_venture_journals", "fleet_paypal_availability"],
+    // v98: a second, different capture of a checkout is a reconciliation item.
+    calls: ["fleet_ledger_post", "fleet_event", "fleet_paypal_recon_add"],
+  },
+  // v56: a refund / reversal also reaches the customer order (fleet_order_refunded).
+  cx_paypal_refund_record: { writes: ["fleet_revenue_claims", "fleet_venture_journals", "fleet_paypal_availability", "fleet_paypal_clawback_posts",
+    // v76: refunds / reversals / fees of the owner's proof purchase (owner capital returned, exactly once per PayPal id).
+    "fleet_offer_proof_returns"],
+    calls: ["fleet_ledger_post", "fleet_event", "fleet_order_refunded"] },
+  // v56: a reversal seen only in Transaction Search is raised for the owner.
+  // v57: Transaction Search rows of a sale become clawback evidence, reconciled at once.
+  cx_paypal_txn_record: { writes: ["fleet_paypal_transactions", "fleet_paypal_clawback_evidence"], calls: ["fleet_event", "fleet_paypal_clawback_reconcile", "fleet_refund_request_completed"] },
+  cx_paypal_balance_record: { writes: ["fleet_paypal_balance_observations"], calls: [] },
+  cx_paypal_txn_counterparty: { writes: ["fleet_paypal_transactions"], calls: [] },
+  cx_publish_key: { writes: ["fleet_custody_keys"], calls: ["fleet_event"] },
+  cx_sealed_credentials: { writes: [], calls: [] },
+  cx_paypal_buyer_work: { writes: [], calls: [] },
+  // v58: a buyer PayPal never reveals is raised for the owner.
+  cx_paypal_buyer_record: { writes: ["fleet_customer_orders"], calls: ["fleet_event"] },
+  cx_paypal_clawback_evidence: { writes: ["fleet_paypal_clawback_evidence"], calls: ["fleet_event", "fleet_paypal_clawback_reconcile", "cx_paypal_refund_record", "fleet_refund_request_completed"] },
+  // v76: a new refund leaves only within available treasury cash; a refund that must wait is noted once.
+  // v96: binds each refund it hands out to the refund authority that covers it (under that authority's lock).
+  cx_paypal_refund_work: { writes: ["fleet_paypal_refund_requests"], calls: ["fleet_treasury_liquidity_wait", "fleet_treasury_lock", "fleet_refund_authority_cover", "fleet_refund_authority_wait"] },
+  cx_paypal_refund_result: { writes: ["fleet_paypal_refund_requests"], calls: ["fleet_event", "cx_paypal_clawback_evidence"] },
+  cx_paypal_refund_unresolved: { writes: ["fleet_paypal_refund_requests"], calls: ["fleet_event"] },
+  cx_paypal_dispute_record: { writes: ["fleet_paypal_disputes"], calls: ["fleet_event"] },
+  // v76: reading an open checkout's PayPal status (backed off), failing a voided one.
+  cx_paypal_status_work: { writes: [], calls: [] },
+  cx_paypal_status_checked: { writes: ["fleet_paypal_checkouts"], calls: ["fleet_event"] },
+  // v98
+  cx_paypal_pay_work: { writes: ["fleet_paypal_checkouts"], calls: [] },
+  cx_paypal_order_claim: { writes: ["fleet_paypal_provider_orders"], calls: ["fleet_paypal_order_event", "fleet_paypal_recon_add"] },
+  cx_paypal_order_created: { writes: ["fleet_paypal_provider_orders", "fleet_paypal_checkouts"], calls: ["fleet_paypal_order_event", "fleet_event"] },
+  cx_paypal_order_note: { writes: ["fleet_paypal_provider_orders", "fleet_paypal_checkouts"], calls: ["fleet_paypal_order_event", "fleet_paypal_recon_add", "fleet_event"] },
+  cx_paypal_order_retire: { writes: ["fleet_paypal_provider_orders", "fleet_paypal_checkouts"], calls: ["fleet_paypal_order_event", "fleet_paypal_recon_add", "fleet_event"] },
+  cx_paypal_order_watch_work: { writes: [], calls: [] },
+  cx_paypal_recon_report: { writes: [], calls: ["fleet_paypal_recon_add"] },
+  cx_paypal_sync_record: { writes: ["fleet_paypal_sync_status"], calls: [] },
 });
+
+/** Schema v34: the only functions the identity broker's role may execute (fleet_identity; ix_* protocol). */
+export const IDENTITY_API_FUNCTIONS: readonly string[] = Object.freeze([
+  "ix_ping()",
+  // v95: lost answers are uncertain; mail is reconciled against the Sent folder.
+  ...IDENTITY_FUNCTIONS_V95,
+  "ix_claim_job(text, text)",
+  "ix_pending_jobs(text)",
+  "ix_credential_record(uuid, text, text, text)",
+  "ix_retired_credentials(uuid, text)",
+  "ix_mailbox_record(uuid, text, text, text)",
+  "ix_mailboxes(text)",
+  "ix_mail_deliver(text, text, text, text, text, boolean)",
+  "ix_mail_consumed(uuid, text, uuid)",
+  "ix_identity_authorize(uuid, text, text, text, text[])",
+  "ix_release_record(uuid, text, text, text, text[], uuid, text)",
+  "ix_report_job(uuid, text, text, jsonb, jsonb)",
+  // v36: business mail (idempotent delivery, outbound status), phone numbers and SMS, owner vault installation,
+  // Admin reveal serving (sealed to the Admin session's key) and Admin notification email.
+  "ix_mail_deliver2(text, text, text, text, text, boolean, text)",
+  "ix_mail_sent(uuid, text, text, boolean)",
+  "ix_phone_record(uuid, text, text, text, text, bigint, text)",
+  "ix_phone_status(uuid, text, text, text)",
+  "ix_numbers(text)",
+  "ix_sms_deliver(text, text, text, text, boolean, text)",
+  "ix_sms_sent(uuid, text, text, boolean)",
+  "ix_vault_inbox(text)",
+  "ix_vault_installed(uuid, text, boolean, text)",
+  "ix_reveal_pending(text)",
+  "ix_reveal_serve(uuid, text, bytea, text)",
+  "ix_notifications_unsent(text, integer)",
+  "ix_notification_emailed(uuid, text, boolean)",
+  "ix_publish_owner_key(text, text)",
+  // v37: credential execution for the browser worker (sealed to its one-time key), authentication-message blobs, and
+  // credentials generated or captured during a browser session.
+  "ix_auth_blob_store(text, uuid, text, bytea)",
+  "ix_browser_secrets_pending(text)",
+  "ix_browser_secret_serve(uuid, text, bytea, text, uuid)",
+  "ix_browser_credential_record(uuid, text, text, text)",
+  // v41: the broker's provider configuration and health, shared-mailbox ingestion and sending, provider-secret names,
+  // live number quotes, cost-checked provisioning and message prices.
+  "ix_comms_configure(text, jsonb)",
+  "ix_comms_health(text, uuid, boolean, text)",
+  "ix_mail_ingest(text, uuid, jsonb, boolean)",
+  "ix_mail_sent2(uuid, text, text, text, boolean, text)",
+  "ix_provider_secrets_publish(text, jsonb)",
+  "ix_phone_quote_record(uuid, text, jsonb)",
+  "ix_phone_record2(uuid, text, text, text, text, bigint, text)",
+  "ix_sms_costs_pending(text)",
+  "ix_sms_cost(text, uuid, bigint, text)",
+  // v51: mail / SMS provider secrets sealed to the broker from the dashboard (onboarding).
+  "ix_provider_secret_inbox(text)",
+  "ix_provider_secret_installed(uuid, text, boolean, text)",
+  // v56: an order delivery's files (sent as attachments), and the dedicated account connectors the broker has.
+  "ix_mail_attachments(uuid, text)",
+  "ix_connectors_publish(text, jsonb)",
+]);
+
+/** Schema v37: the browser worker's whole database surface (bx_*): claim an action, report it, ask for / take a sealed secret. */
+export const BROWSER_API_FUNCTIONS: readonly string[] = Object.freeze([
+  "bx_ping()",
+  "bx_claim_action(text, text)",
+  "bx_report_action(uuid, text, boolean, jsonb, text)",
+  ...BROWSER_FUNCTIONS_V95,
+  "bx_secret_request(uuid, text, text, text, text, bytea)",
+  "bx_secret_take(uuid, uuid, text)",
+  "bx_broker_key()",
+  // v79: files the agent staged for a page; files a page produced for the agent.
+  "bx_file_take(uuid, text, uuid)",
+  "bx_file_put(uuid, text, text, text, text, bytea)",
+]);
+
+/** Schema v85: the media provider gateway's whole database surface (mx_*; role fleet_media). */
+/** v87: mx_result also says how the cost was measured (the old five-argument form is dropped). */
+export const MEDIA_API_FUNCTIONS: readonly string[] = Object.freeze([...MEDIA_API_FUNCTIONS_V87]);
+
+/** Schema v89: the code gateway's whole database surface (cgx_*; role fleet_code). */
+export const CODE_API_FUNCTIONS: readonly string[] = Object.freeze([...CODE_API_FUNCTIONS_V89, ...CODE_FUNCTIONS_V95]);
+
+/** Schema v89: the build environment's whole database surface (bbx_*; role fleet_build). */
+export const BUILD_API_FUNCTIONS: readonly string[] = Object.freeze([...BUILD_API_FUNCTIONS_V89]);
+
+/** Schema v83: the phone-push sender's whole database surface (px_*; role fleet_push). */
+export const PUSH_API_FUNCTIONS: readonly string[] = Object.freeze([...PUSH_API_FUNCTIONS_V83]);
+
+/** Schema v80: the channel gateway's whole database surface (chx_*; role fleet_channels): connections, jobs, provider evidence. */
+export const CHANNELS_API_FUNCTIONS: readonly string[] = Object.freeze([
+  "chx_ping()",
+  "chx_connections(text)",
+  "chx_connection_check(text, uuid, text, text[], text)",
+  "chx_claim_job(text, text)",
+  "chx_job_blob(uuid, text)",
+  "chx_job_report(uuid, text, boolean, jsonb, text, text, text)",
+  "chx_sale_record(text, uuid, jsonb)",
+  "chx_payout_record(text, uuid, jsonb)",
+  "chx_cursor(text, uuid, text)",
+  "chx_cursor_set(text, uuid, text, text)",
+  "chx_indexnow_due(text, integer)",
+  "chx_indexnow_done(text, jsonb, integer)",
+]);
+
+/** Schema v52: the Gumroad storefront gateway's whole database surface (gx_*; role fleet_provider). */
+export const GATEWAY_API_FUNCTIONS: readonly string[] = Object.freeze([
+  "gx_ping()",
+  "gx_accounts(text)",
+  "gx_account_check(text, uuid, text, text[])",
+  "gx_claim_job(text, text)",
+  "gx_upload_blob(uuid, text)",
+  "gx_job_report(uuid, text, boolean, jsonb, text)",
+  "gx_sale_record(text, uuid, jsonb, text)",
+  "gx_payout_record(text, uuid, jsonb, jsonb, text)",
+  "gx_cursor(text, uuid, text)",
+  "gx_cursor_set(text, uuid, text, text)",
+  "gx_products_reconcile(text, uuid, jsonb)",
+]);
+
+/** Schema v52: the bank-feed connector's whole database surface (rx_*; role fleet_bankfeed; read-only bank data in). */
+export const BANKFEED_API_FUNCTIONS: readonly string[] = Object.freeze([
+  "rx_ping()",
+  "rx_destinations(text)",
+  "rx_receipt_record(text, uuid, jsonb)",
+  // v86: money-location evidence (balances and transactions of the Fleet's own bank locations), read-only data in.
+  ...BANKFEED_API_FUNCTIONS_V86,
+]);
+
+/** Schema v38: the Admin dashboard's whole database surface (dash_*): authentication protocol + the single Admin gateway. */
+export const DASHBOARD_API_FUNCTIONS: readonly string[] = Object.freeze([
+  "dash_ping()",
+  "dash_auth_state()",
+  "dash_log(text, boolean, text, text, jsonb)",
+  "dash_challenge_new(text, text, text, text, text)",
+  "dash_challenge_use(text, text, text, text, text)",
+  "dash_enroll_valid(text)",
+  "dash_passkey_add(text, text, text, text, bytea, bigint, text[], text, text)",
+  "dash_passkey_get(text)",
+  "dash_passkey_used(text, bigint, text)",
+  "dash_totp_set(text, bytea, text)",
+  "dash_totp_get()",
+  "dash_totp_accept(bigint, boolean)",
+  "dash_session_begin(text, text, text, text, text)",
+  "dash_session_begin_password(text, text, text, text)",
+  "dash_session_csrf_ok(text, text)",
+  "dash_password_get()",
+  "dash_password_set(text, text, text, text, text)",
+  "dash_session_totp(text, boolean, text)",
+  "dash_session_check(text)",
+  "dash_session_end(text, text)",
+  "dash_stepup_record(text, text, text, text, text)",
+  "dash_call(text, text, text, text, text, text)",
+  // v82: owner sign-in recovery (recovery codes; forgot password; lost authenticator).
+  "dash_recovery_valid(text)",
+  "dash_recovery_codes_issue(text, text, text[], text)",
+  "dash_recovery_codes_state(text)",
+  "dash_recovery_password_reset(text, text, text)",
+  "dash_recovery_totp_begin(text, text, bytea, text)",
+  "dash_recovery_totp_pending(text)",
+  "dash_recovery_totp_confirm(text, bigint, text)",
+]);
 
 /** Schema v10: the only functions whose bodies may write the ledger tables (append-only double entry). */
 export const LEDGER_TABLES: readonly string[] = Object.freeze(["fleet_ledger_journal", "fleet_ledger_postings", "fleet_ledger_head"]);

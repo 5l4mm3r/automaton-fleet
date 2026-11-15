@@ -33,6 +33,16 @@ import {
   AGENT_API_FUNCTIONS,
   CUSTODY_API_FUNCTIONS,
   CUSTODY_WRITES,
+  IDENTITY_API_FUNCTIONS,
+  BROWSER_API_FUNCTIONS,
+  GATEWAY_API_FUNCTIONS,
+  BANKFEED_API_FUNCTIONS,
+  CHANNELS_API_FUNCTIONS,
+  PUSH_API_FUNCTIONS,
+  MEDIA_API_FUNCTIONS,
+  CODE_API_FUNCTIONS,
+  BUILD_API_FUNCTIONS,
+  DASHBOARD_API_FUNCTIONS,
   GENESIS_GUARDS,
   GENESIS_OPERATORS,
   LEDGER_TABLES,
@@ -69,6 +79,34 @@ export interface PrivilegeAuditOptions {
   /** Schema v10 custody executor roles (default fleet_custody + fleet_custody_login); same provisioning rule as the operator roles. */
   custodyRoles?: string[];
   requireCustodyRoles?: boolean;
+  /** Schema v34 identity broker roles (default fleet_identity + fleet_identity_login). */
+  identityRoles?: string[];
+  requireIdentityRoles?: boolean;
+  /** Schema v37 browser worker roles (default fleet_browser + fleet_browser_login). */
+  browserRoles?: string[];
+  requireBrowserRoles?: boolean;
+  /** Schema v38 Admin dashboard roles (default fleet_dashboard + fleet_dashboard_login). */
+  dashboardRoles?: string[];
+  requireDashboardRoles?: boolean;
+  /** Schema v52 Gumroad storefront gateway roles (fleet_provider + _login) and bank-feed connector roles (fleet_bankfeed + _login). */
+  providerRoles?: string[];
+  requireProviderRoles?: boolean;
+  bankfeedRoles?: string[];
+  requireBankfeedRoles?: boolean;
+  /** Schema v80 channel gateway roles (fleet_channels + _login). */
+  channelsRoles?: string[];
+  requireChannelsRoles?: boolean;
+  /** Schema v83 phone-push sender roles (fleet_push + _login). */
+  pushRoles?: string[];
+  requirePushRoles?: boolean;
+  /** Schema v85 media provider gateway roles (fleet_media + _login). */
+  mediaRoles?: string[];
+  requireMediaRoles?: boolean;
+  /** Schema v89 code gateway and build environment roles. */
+  codeRoles?: string[];
+  requireCodeRoles?: boolean;
+  buildRoles?: string[];
+  requireBuildRoles?: boolean;
 }
 
 /** "provisioned": every operator role exists; "not_provisioned": none exists (and not required); "incomplete": some are missing. */
@@ -89,8 +127,22 @@ export const DEFAULT_AGENT_ROLES = ["fleet_agent", "fleet_agent_login"];
 export const DEFAULT_SERVICE_ROLES = ["fleet_service", "fleet_service_login"];
 export const DEFAULT_OPERATOR_ROLES = ["fleet_operator", "fleet_operator_login"];
 export const DEFAULT_CUSTODY_ROLES = ["fleet_custody", "fleet_custody_login"];
+/** Schema v34 identity broker roles (same provisioning rule: absent = not provisioned). */
+export const DEFAULT_IDENTITY_ROLES = ["fleet_identity", "fleet_identity_login"];
+/** Schema v37 browser worker roles (same provisioning rule). */
+export const DEFAULT_BROWSER_ROLES = ["fleet_browser", "fleet_browser_login"];
+/** Schema v38 Admin dashboard roles (same provisioning rule). */
+export const DEFAULT_DASHBOARD_ROLES = ["fleet_dashboard", "fleet_dashboard_login"];
+/** Schema v52 storefront gateway and bank-feed roles (same provisioning rule). */
+export const DEFAULT_PROVIDER_ROLES = ["fleet_provider", "fleet_provider_login"];
+export const DEFAULT_BANKFEED_ROLES = ["fleet_bankfeed", "fleet_bankfeed_login"];
+export const DEFAULT_CHANNELS_ROLES = ["fleet_channels", "fleet_channels_login"];
+export const DEFAULT_PUSH_ROLES = ["fleet_push", "fleet_push_login"];
+export const DEFAULT_MEDIA_ROLES = ["fleet_media", "fleet_media_login"];
+export const DEFAULT_CODE_ROLES = ["fleet_code", "fleet_code_login"];
+export const DEFAULT_BUILD_ROLES = ["fleet_build", "fleet_build_login"];
 
-type RoleKind = "agent" | "service" | "operator" | "custody";
+type RoleKind = "agent" | "service" | "operator" | "custody" | "identity" | "browser" | "dashboard" | "provider" | "bankfeed" | "channels" | "push" | "media" | "code" | "build";
 
 const TABLE_PRIVS = ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"];
 
@@ -128,23 +180,91 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
   if (custodyState === "not_provisioned") {
     for (const r of configuredCustodyRoles) roles.push({ role: r, kind: "custody", exists: false, functions: [], tables: [] });
   }
+  const configuredIdentityRoles = opts.identityRoles ?? DEFAULT_IDENTITY_ROLES;
+  const identityPresent = (await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM pg_roles WHERE rolname = ANY($1)`, [configuredIdentityRoles])).rows[0].n;
+  const identityState: OperatorRoleState =
+    identityPresent === configuredIdentityRoles.length ? "provisioned" : identityPresent === 0 && !opts.requireIdentityRoles ? "not_provisioned" : "incomplete";
+  const identityRoles = identityState === "not_provisioned" ? [] : configuredIdentityRoles;
+  if (identityState === "not_provisioned") {
+    for (const r of configuredIdentityRoles) roles.push({ role: r, kind: "identity", exists: false, functions: [], tables: [] });
+  }
+  const configuredBrowserRoles = opts.browserRoles ?? DEFAULT_BROWSER_ROLES;
+  const browserPresent = (await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM pg_roles WHERE rolname = ANY($1)`, [configuredBrowserRoles])).rows[0].n;
+  const browserState: OperatorRoleState =
+    browserPresent === configuredBrowserRoles.length ? "provisioned" : browserPresent === 0 && !opts.requireBrowserRoles ? "not_provisioned" : "incomplete";
+  const browserRoles = browserState === "not_provisioned" ? [] : configuredBrowserRoles;
+  if (browserState === "not_provisioned") {
+    for (const r of configuredBrowserRoles) roles.push({ role: r, kind: "browser", exists: false, functions: [], tables: [] });
+  }
+  const configuredDashboardRoles = opts.dashboardRoles ?? DEFAULT_DASHBOARD_ROLES;
+  const dashboardPresent = (await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM pg_roles WHERE rolname = ANY($1)`, [configuredDashboardRoles])).rows[0].n;
+  const dashboardState: OperatorRoleState =
+    dashboardPresent === configuredDashboardRoles.length ? "provisioned" : dashboardPresent === 0 && !opts.requireDashboardRoles ? "not_provisioned" : "incomplete";
+  const dashboardRoles = dashboardState === "not_provisioned" ? [] : configuredDashboardRoles;
+  if (dashboardState === "not_provisioned") {
+    for (const r of configuredDashboardRoles) roles.push({ role: r, kind: "dashboard", exists: false, functions: [], tables: [] });
+  }
+  // Schema v52: the storefront gateway and the bank-feed connector (each only when provisioned).
+  const optional = async (configured: string[], required: boolean | undefined, kind: RoleKind) => {
+    const present = (await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM pg_roles WHERE rolname = ANY($1)`, [configured])).rows[0].n;
+    const state: OperatorRoleState = present === configured.length ? "provisioned" : present === 0 && !required ? "not_provisioned" : "incomplete";
+    if (state === "not_provisioned") for (const r of configured) roles.push({ role: r, kind, exists: false, functions: [], tables: [] });
+    return state === "not_provisioned" ? [] : configured;
+  };
+  const providerRoles = await optional(opts.providerRoles ?? DEFAULT_PROVIDER_ROLES, opts.requireProviderRoles, "provider");
+  const bankfeedRoles = await optional(opts.bankfeedRoles ?? DEFAULT_BANKFEED_ROLES, opts.requireBankfeedRoles, "bankfeed");
+  const channelsRoles = await optional(opts.channelsRoles ?? DEFAULT_CHANNELS_ROLES, opts.requireChannelsRoles, "channels");
+  const pushRoles = await optional(opts.pushRoles ?? DEFAULT_PUSH_ROLES, opts.requirePushRoles, "push");
+  const mediaRoles = await optional(opts.mediaRoles ?? DEFAULT_MEDIA_ROLES, opts.requireMediaRoles, "media");
+  const codeRoles = await optional(opts.codeRoles ?? DEFAULT_CODE_ROLES, opts.requireCodeRoles, "code");
+  const buildRoles = await optional(opts.buildRoles ?? DEFAULT_BUILD_ROLES, opts.requireBuildRoles, "build");
   const allRestricted = [
     ...(opts.agentRoles ?? DEFAULT_AGENT_ROLES),
     ...(opts.serviceRoles ?? DEFAULT_SERVICE_ROLES),
     ...operatorRoles,
     ...custodyRoles,
+    ...identityRoles,
+    ...browserRoles,
+    ...dashboardRoles,
+    ...providerRoles,
+    ...bankfeedRoles,
+    ...channelsRoles,
+    ...pushRoles,
+    ...mediaRoles,
+    ...codeRoles,
+    ...buildRoles,
   ];
   const plan: Array<[string, RoleKind]> = [
     ...(opts.agentRoles ?? DEFAULT_AGENT_ROLES).map((r) => [r, "agent"] as [string, RoleKind]),
     ...(opts.serviceRoles ?? DEFAULT_SERVICE_ROLES).map((r) => [r, "service"] as [string, RoleKind]),
     ...operatorRoles.map((r) => [r, "operator"] as [string, RoleKind]),
     ...custodyRoles.map((r) => [r, "custody"] as [string, RoleKind]),
+    ...identityRoles.map((r) => [r, "identity"] as [string, RoleKind]),
+    ...browserRoles.map((r) => [r, "browser"] as [string, RoleKind]),
+    ...dashboardRoles.map((r) => [r, "dashboard"] as [string, RoleKind]),
+    ...providerRoles.map((r) => [r, "provider"] as [string, RoleKind]),
+    ...bankfeedRoles.map((r) => [r, "bankfeed"] as [string, RoleKind]),
+    ...channelsRoles.map((r) => [r, "channels"] as [string, RoleKind]),
+    ...pushRoles.map((r) => [r, "push"] as [string, RoleKind]),
+    ...mediaRoles.map((r) => [r, "media"] as [string, RoleKind]),
+    ...codeRoles.map((r) => [r, "code"] as [string, RoleKind]),
+    ...buildRoles.map((r) => [r, "build"] as [string, RoleKind]),
   ];
 
   const agentFns = new Set(AGENT_API_FUNCTIONS.map(normSig));
   const serviceFns = new Set(SERVICE_API_FUNCTIONS.map(normSig));
   const operatorFns = new Set(OPERATOR_API_FUNCTIONS.map(normSig));
   const custodyFns = new Set(CUSTODY_API_FUNCTIONS.map(normSig));
+  const identityFns = new Set(IDENTITY_API_FUNCTIONS.map(normSig));
+  const browserFns = new Set(BROWSER_API_FUNCTIONS.map(normSig));
+  const dashboardFns = new Set(DASHBOARD_API_FUNCTIONS.map(normSig));
+  const providerFns = new Set(GATEWAY_API_FUNCTIONS.map(normSig));
+  const bankfeedFns = new Set(BANKFEED_API_FUNCTIONS.map(normSig));
+  const channelsFns = new Set(CHANNELS_API_FUNCTIONS.map(normSig));
+  const pushFns = new Set(PUSH_API_FUNCTIONS.map(normSig));
+  const mediaFns = new Set(MEDIA_API_FUNCTIONS.map(normSig));
+  const codeFns = new Set(CODE_API_FUNCTIONS.map(normSig));
+  const buildFns = new Set(BUILD_API_FUNCTIONS.map(normSig));
   const operatorVolatile = new Set(OPERATOR_VOLATILE_FUNCTIONS.map(normSig));
   const serviceTables = new Set(SERVICE_READ_TABLES);
 
@@ -239,7 +359,8 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
         ORDER BY 1`,
       [role, schema],
     );
-    const allowed = kind === "agent" ? agentFns : kind === "service" ? serviceFns : kind === "custody" ? custodyFns : operatorFns;
+    const allowed = kind === "agent" ? agentFns : kind === "service" ? serviceFns : kind === "custody" ? custodyFns : kind === "identity" ? identityFns : kind === "browser" ? browserFns
+      : kind === "dashboard" ? dashboardFns : kind === "provider" ? providerFns : kind === "bankfeed" ? bankfeedFns : kind === "channels" ? channelsFns : kind === "push" ? pushFns : kind === "media" ? mediaFns : kind === "code" ? codeFns : kind === "build" ? buildFns : operatorFns;
     const executable: string[] = [];
     for (const f of fns.rows) {
       const sig = normSig(f.sig);
@@ -286,6 +407,7 @@ export async function auditPrivileges(db: Queryable, opts: PrivilegeAuditOptions
   if (owner) problems.push(...(await ledgerSurfaceProblems(db, schema)));
   if (owner) problems.push(...(await genesisSurfaceProblems(db, schema)));
   if (owner) problems.push(...(await cognitionSurfaceProblems(db, schema)));
+  if (owner) problems.push(...(await economySurfaceProblems(db, schema)));
 
   return { ok: problems.length === 0, schema, owner, database, problems, roles, operatorRoles: operatorState, custodyRoles: custodyState };
 }
@@ -518,6 +640,23 @@ export async function ledgerSurfaceProblems(db: Queryable, schema: string): Prom
     [schema],
   );
   if (!model.rows[0]?.ok) problems.push("custody surface: custody execution is not pinned off by a CHECK constraint (constitutional invariant)");
+  // v48: custody execution is on only while it names an owner activation, and only the activation switch (behind its guard
+  // trigger) changes it.
+  const v48 = (await db.query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = 'fleet_custody_activations'`, [schema])).rows[0]?.n;
+  if (v48) {
+    const act = await db.query<{ d: string }>(
+      `SELECT pg_get_constraintdef(k.oid) AS d FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = $1 AND c.relname = 'fleet_economic_model' AND k.conname = 'fleet_economic_model_custody_activation'`, [schema]);
+    if (!/NOT custody_execution_enabled/.test(act.rows[0]?.d ?? "") || !/custody_activation_id IS NOT NULL/.test(act.rows[0]?.d ?? "")) {
+      problems.push("custody surface: custody execution is not bound to an owner activation (CHECK missing)");
+    }
+    for (const f of fns.rows) {
+      if (/fleet\.custody_activation/.test(f.src) && !["fleet_custody_switch", "fleet_economic_model_custody_guard"].includes(f.name)) {
+        problems.push(`custody surface: ${f.name} references the custody activation guard`);
+      }
+    }
+  }
   const trig = await db.query<{ t: string }>(
     `SELECT c.relname || ':' || tg.tgname AS t FROM pg_trigger tg JOIN pg_class c ON c.oid = tg.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace
       WHERE n.nspname = $1 AND NOT tg.tgisinternal AND tg.tgenabled <> 'D'`,
@@ -539,6 +678,8 @@ export async function ledgerSurfaceProblems(db: Queryable, schema: string): Prom
     "fleet_payment_instructions:fleet_instructions_guard",
     "fleet_payment_orders:fleet_orders_guard",
     "fleet_payment_destinations:fleet_destinations_guard",
+    ...(v48 ? ["fleet_economic_model:fleet_economic_model_custody_guard", "fleet_custody_activations:fleet_custody_activations_guard",
+      "fleet_custody_activations:fleet_custody_activations_no_truncate"] : []),
   ]) {
     if (!have.has(need)) problems.push(`ledger surface: trigger ${need.replace(":", ".")} is missing or disabled`);
   }
@@ -646,6 +787,8 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
     "fleet_founder_cognition:fleet_founder_cognition_no_delete",
     "fleet_agents:fleet_agents_cognition_stop",
     "fleet_cognition_accrual:fleet_cognition_accrual_no_delete",
+    "fleet_cognition_cost_exceptions:fleet_cognition_cost_exceptions_no_delete",
+    "fleet_cognition_cost_exceptions:fleet_cognition_cost_exceptions_no_truncate",
     "fleet_research_attempts:fleet_research_attempts_no_change",
     "fleet_research_attempts:fleet_research_attempts_no_truncate",
     "fleet_research_results:fleet_research_results_no_change",
@@ -717,6 +860,34 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
       `SELECT p.proname AS name FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1 AND p.prosrc ~* 'simulated_roi'`, [schema]);
     for (const r of roi.rows) if (!roiReaders.has(r.name)) problems.push(`experiment pipeline: ${r.name} reads simulated (non-authoritative) ROI`);
   }
+  // v26 (F2-A): dependency records are guarded and never deleted; an OPEN record is always an action-scoped exception
+  // (never an ordinary business decision waiting on the owner).
+  const v26 = (await db.query(`SELECT 1 FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'fleet_owner_requests' AND column_name = 'blocks_action'`, [schema])).rows.length > 0;
+  for (const need of v26 ? ["fleet_owner_requests:fleet_owner_requests_guard", "fleet_owner_requests:fleet_owner_requests_no_truncate"] : []) {
+    if (!have.has(need)) problems.push(`autonomy: trigger ${need.replace(":", ".")} is missing or disabled`);
+  }
+  if (v26) {
+    const ck = await db.query<{ t: string }>(
+      `SELECT pg_get_constraintdef(k.oid) AS t FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = $1 AND c.relname = 'fleet_owner_requests' AND k.conname = 'fleet_owner_requests_open_is_exception'`, [schema]);
+    if (!ck.rows.length) problems.push("autonomy: an open dependency could be an ordinary owner decision (CHECK missing)");
+  }
+  // v27 (F2-A): own-capital spend never waits on the owner; the circuit breaker is infrastructure with relative signals only.
+  const v27 = (await db.query(`SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = 'fleet_spend_circuit_breaker'`, [schema])).rows.length > 0;
+  for (const need of v27 ? ["fleet_spend_circuit_breaker:fleet_spend_circuit_breaker_no_delete", "fleet_spend_circuit_breaker:fleet_spend_circuit_breaker_no_truncate"] : []) {
+    if (!have.has(need)) problems.push(`own capital: trigger ${need.replace(":", ".")} is missing or disabled`);
+  }
+  if (v27) {
+    const ck = await db.query<{ t: string }>(
+      `SELECT pg_get_constraintdef(k.oid) AS t FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = $1 AND c.relname = 'fleet_payment_orders' AND k.conname = 'fleet_payment_orders_no_owner_route'`, [schema]);
+    if (!ck.rows.length) problems.push("own capital: a spend order could wait on the owner (CHECK fleet_payment_orders_no_owner_route missing)");
+    const cols = await db.query<{ c: string }>(
+      `SELECT column_name AS c FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'fleet_spend_circuit_breaker'`, [schema]);
+    for (const r of cols.rows) {
+      if (/cents|minor|amount|gbp|usd/i.test(r.c)) problems.push(`own capital: circuit breaker column ${r.c} looks like a nominal amount (relative signals only)`);
+    }
+  }
   if (v23) {
     const ck = await db.query<{ t: string }>(
       `SELECT pg_get_constraintdef(k.oid) AS t FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -735,12 +906,14 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
   );
   const writers: Record<string, Set<string>> = {
     fleet_cognition_log: new Set(["svc_cognition_record", "svc_cognition_routed_record"]),
-    fleet_cognition_policy: new Set(["fleet_cognition_set_policy"]),
+    // v112: the inference profile returning to local_only disables cloud policy and tiers.
+    fleet_cognition_policy: new Set(["fleet_cognition_set_policy", "fleet_admin_inference_profile_set"]),
     fleet_founder_cognition: new Set(["fleet_founder_cognition_set", "fleet_agents_cognition_stop"]),
     fleet_cognition_accrual: new Set(["svc_cognition_record", "svc_cognition_routed_record"]),
     // v22 routing: policy data only through the owner functions; action links only through the boundary check.
     fleet_cognition_routing: new Set(["fleet_cognition_routing_set"]),
-    fleet_cognition_tiers: new Set(["fleet_cognition_tier_set", "fleet_cognition_tier_verify", "fleet_cognition_tier_enable", "fleet_cognition_tier_cache_set"]),
+    fleet_cognition_tiers: new Set(["fleet_cognition_tier_set", "fleet_cognition_tier_verify", "fleet_cognition_tier_enable", "fleet_cognition_tier_cache_set",
+      "fleet_cognition_tier_set_local", "fleet_admin_inference_profile_set"]),
     // v23: a living founder's runtime-upgrade history only through the lifecycle functions.
     // v24: experiments change only through the experiment functions (founder API, controller reaper, owner decisions).
     fleet_experiments: new Set(["api_experiment_propose", "api_experiment_add_evidence", "api_experiment_start", "api_experiment_record", "svc_experiment_reap",
@@ -758,7 +931,7 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
     fleet_founder_runtime_upgrades: new Set(["fleet_founder_runtime_upgrade_prepare", "fleet_founder_runtime_upgrade_commit", "fleet_founder_runtime_upgrade_verify",
       "fleet_founder_runtime_upgrade_rollback", "fleet_founder_runtime_upgrade_rollback_verify", "fleet_founder_runtime_upgrade_abort"]),
     fleet_founder_routing: new Set(["fleet_founder_routing_set"]),
-    fleet_action_cognition_links: new Set(["svc_action_cognition_verify"]),
+    fleet_action_cognition_links: new Set(["svc_action_cognition_verify", "svc_action_cognition_verify_ctx"]),
     // v18 research: only the controller functions write the audit; only the owner functions write the switches.
     fleet_research_attempts: new Set(["svc_research_authorize"]),
     fleet_research_refusals_suppressed: new Set(["svc_research_authorize"]),
@@ -767,7 +940,31 @@ export async function cognitionSurfaceProblems(db: Queryable, schema: string): P
     fleet_founder_research: new Set(["fleet_founder_research_set"]),
     // v21: rates only through the validated insert; provider credit only through the owner recorder and inference recording.
     fleet_fx_rates: new Set(["fleet_fx_insert"]),
-    fleet_provider_credit_events: new Set(["fleet_provider_credits_record", "svc_cognition_record", "svc_cognition_routed_record", "svc_experiment_relevance_record", "svc_relevance_call_failed", "fleet_relevance_call_reconcile"]),
+    fleet_provider_credit_events: new Set(["fleet_provider_credits_record", "fleet_admin_engineering_calls_import", "svc_cognition_record", "svc_cognition_routed_record", "svc_experiment_relevance_record", "svc_relevance_call_failed", "fleet_relevance_call_reconcile",
+      "fleet_spend_review_charge", "fleet_control_charge",
+      // v70: a treasury-funded AI-credit purchase records its USD purchase.
+      "fleet_admin_ai_credit_treasury_purchase",
+      // v71: a confirmed purchase records its USD purchase (observations never do).
+      "fleet_ai_credit_promote",
+      // v72: the owner's console reconciliation records its adjustment.
+      "fleet_admin_ai_credit_balance_reconcile"]),
+    // v25/v26: dependency records only through the founder API and the owner's resolve/import.
+    fleet_owner_requests: new Set(["api_owner_request_create", "api_owner_request_withdraw", "fleet_owner_request_decide", "fleet_owner_request_import",
+      // v95: the founder API's body behind its durable-operation wrapper.
+      "fleet_owner_request_create_core",
+      // v29: PAYMENT_RAIL_REQUIRED records ONE action-scoped kyc dependency (and answers it when a rail is connected).
+      "fleet_rail_resolve",
+      // v36: a number provider's account-holder identity step records ONE action-scoped human_identity dependency.
+      "ix_phone_status",
+      // v37: an agent marking its own account human_action_required (CAPTCHA, liveness) records ONE dependency for it.
+      "fleet_account_human_dependency",
+      // v34: a provider needing a non-delegable human identity act records ONE action-scoped dependency for that account.
+      "ix_report_job",
+      // v46: a rail answers a dependency only with its evidenced readiness, and keeps unverified holder identity open as
+      // its own dependency; a legacy request is answered only from a verified, assigned capability.
+      "fleet_rail_requirement_assign", "fleet_rail_identity_dependency", "fleet_admin_dependency_answer_from_capability"]),
+    // v27: the spend circuit breaker only through the owner's infrastructure control.
+    fleet_spend_circuit_breaker: new Set(["fleet_admin_spend_circuit_breaker", "fleet_admin_spend_circuit_breaker_novelty"]),
   };
   for (const f of fns.rows) {
     for (const t of writeTargets(f.src)) {
@@ -789,4 +986,489 @@ function schemaIdent(schema: string): string {
 /** Problems that concern only the given roles (plus PUBLIC); used by the service's startup self-check. */
 export function problemsFor(result: PrivilegeAuditResult, roles: string[]): string[] {
   return result.problems.filter((p) => p.startsWith("PUBLIC") || roles.some((r) => p.startsWith(`${r} `) || p.startsWith(`role ${r} `)) || p.includes(" is not SECURITY DEFINER") || p.includes(" does not pin search_path"));
+}
+
+/**
+ * Schema v28–v30 (F2) economy invariants (only once the economy tables exist):
+ *  - the guard / append-only / no-delete triggers of the economic records, money tables and policies are present and
+ *    enabled;
+ *  - real money is constitutionally off here: no payment rail can be live (CHECK), and every capital decision is the
+ *    controller's (CHECK), never the owner's or the agent's;
+ *  - each money / record / policy table is written only by its named functions (no other function can attribute money,
+ *    settle a transaction, move an envelope, change a rail or a credential, or move a venture's state);
+ *  - the state-machine and vendor-registry bypass settings are referenced only by their single owner functions;
+ *  - no economy function uses dynamic SQL near those tables.
+ */
+export async function economySurfaceProblems(db: Queryable, schema: string): Promise<string[]> {
+  const problems: string[] = [];
+  const has = async (t: string) => (await db.query(`SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = $2`, [schema, t])).rows.length > 0;
+  if (!(await has("fleet_ventures"))) return problems;
+  const v29 = await has("fleet_payment_rails");
+  const v30 = await has("fleet_envelopes");
+  const v42 = await has("fleet_projects");
+  const v46 = await has("fleet_rail_capability_checks");
+  const v47 = await has("fleet_settlement_receipts");
+  const trig = await db.query<{ t: string }>(
+    `SELECT c.relname || ':' || tg.tgname AS t FROM pg_trigger tg JOIN pg_class c ON c.oid = tg.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = $1 AND NOT tg.tgisinternal AND tg.tgenabled <> 'D'`, [schema]);
+  const have = new Set(trig.rows.map((r) => r.t));
+  const need = [
+    "fleet_ventures:fleet_ventures_guard", "fleet_ventures:fleet_ventures_no_delete", "fleet_venture_transitions:fleet_venture_transitions_no_change",
+    "fleet_venture_transition_rules:fleet_venture_transition_rules_no_change", "fleet_venture_journals:fleet_venture_journals_guard",
+    "fleet_venture_journals:fleet_venture_journals_no_change", "fleet_decision_records:fleet_decision_records_guard", "fleet_opportunities:fleet_opportunities_guard",
+    "fleet_economic_knowledge:fleet_economic_knowledge_guard", "fleet_economy_policy:fleet_economy_policy_no_delete",
+    ...(v29 ? ["fleet_payment_rails:fleet_payment_rails_guard", "fleet_payment_rails:fleet_payment_rails_no_delete", "fleet_external_transactions:fleet_external_transactions_guard",
+      "fleet_external_transactions:fleet_external_transactions_no_delete", "fleet_credential_refs:fleet_credential_refs_guard", "fleet_credential_use_log:fleet_credential_use_log_no_change",
+      "fleet_tax_profiles:fleet_tax_profiles_no_change", "fleet_legal_entities:fleet_legal_entities_guard", "fleet_vendor_destinations:fleet_vendor_destinations_no_delete",
+      "fleet_rail_assignments:fleet_rail_assignments_no_delete", "fleet_tax_policy:fleet_tax_policy_no_delete", "fleet_transfer_policy:fleet_transfer_policy_no_delete"] : []),
+    ...(v30 ? ["fleet_envelopes:fleet_envelopes_guard", "fleet_envelopes:fleet_envelopes_no_delete", "fleet_capital_decisions:fleet_capital_decisions_no_change",
+      "fleet_capital_requests:fleet_capital_requests_no_change", "fleet_payment_orders:fleet_orders_funding_guard", "fleet_capital_policy:fleet_capital_policy_no_delete",
+      "fleet_sweep_policy:fleet_sweep_policy_no_delete", "fleet_cognition_depth_policy:fleet_cognition_depth_policy_no_delete"] : []),
+    ...(v42 ? ["fleet_projects:fleet_projects_guard", "fleet_projects:fleet_projects_no_delete", "fleet_project_members:fleet_project_members_guard",
+      "fleet_project_members:fleet_project_members_no_delete", "fleet_project_payments:fleet_project_payments_no_change",
+      "fleet_project_events:fleet_project_events_no_change", "fleet_project_outcomes:fleet_project_outcomes_no_change",
+      "fleet_project_distributions:fleet_project_distributions_no_change", "fleet_sweep_records:fleet_sweep_records_no_change"] : []),
+    ...(v46 ? ["fleet_rail_capability_checks:fleet_rail_capability_checks_no_change", "fleet_rail_capability_checks:fleet_rail_capability_checks_no_truncate",
+      "fleet_revenue_claims:fleet_revenue_claims_no_change", "fleet_revenue_claims:fleet_revenue_claims_no_truncate",
+      "fleet_payment_rails:fleet_payment_rails_simulation_guard"] : []),
+    ...(v47 ? ["fleet_provider_accounts:fleet_provider_accounts_no_change", "fleet_provider_product_attributions:fleet_provider_product_attributions_no_change",
+      "fleet_provider_product_attributions:fleet_provider_product_attributions_guard", "fleet_provider_sales:fleet_provider_sales_guard",
+      "fleet_provider_sales:fleet_provider_sales_no_delete", "fleet_provider_payouts:fleet_provider_payouts_guard", "fleet_provider_payouts:fleet_provider_payouts_no_delete",
+      "fleet_provider_payout_lines:fleet_provider_payout_lines_no_change", "fleet_settlement_destinations:fleet_settlement_destinations_guard",
+      "fleet_settlement_destinations:fleet_settlement_destinations_no_delete", "fleet_settlement_receipts:fleet_settlement_receipts_guard",
+      "fleet_settlement_receipts:fleet_settlement_receipts_no_delete", "fleet_provider_allocations:fleet_provider_allocations_no_change",
+      "fleet_pilot_authorisations:fleet_pilot_authorisations_no_delete"] : []),
+  ];
+  for (const t of need) if (!have.has(t)) problems.push(`economy surface: trigger ${t.replace(":", ".")} is missing or disabled`);
+  const checks = await db.query<{ n: string; d: string }>(
+    `SELECT k.conname AS n, pg_get_constraintdef(k.oid) AS d FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid JOIN pg_namespace s ON s.oid = c.relnamespace
+      WHERE s.nspname = $1 AND k.contype = 'c' AND c.relname IN ('fleet_payment_rails','fleet_capital_decisions','fleet_credential_refs')`, [schema]);
+  const v48 = await has("fleet_custody_activations");
+  if (v29 && !v48 && !checks.rows.some((r) => r.n === "fleet_payment_rails_not_live" && /mode <> 'live'/.test(r.d))) {
+    problems.push("economy surface: a payment rail could be live (the not-live CHECK is missing) — real payments are constitutionally off");
+  }
+  if (v48) {
+    // v48: a live rail is only the owner's PayPal treasury, with a credential, receiving / refunding / paying out — never a
+    // card, storefront or bank-transfer capability.
+    const live = checks.rows.find((r) => r.n === "fleet_payment_rails_live_scope")?.d ?? "";
+    if (!/mode <> 'live'/.test(live) || !/'paypal'/.test(live) || !/credential_id IS NOT NULL/.test(live) || /card_spend|bank_transfer|storefront|marketplace/.test(live)) {
+      problems.push("economy surface: the live rail scope CHECK is missing or allows more than the PayPal treasury capabilities");
+    }
+  }
+  if (v46) {
+    // v46: the receive-only mode is its own pinned capability — one provider, receiving capabilities only — and a gumroad
+    // credential never carries more than the gateway's scopes; a registry with such a rail never allows simulated settlement.
+    const scope = checks.rows.find((r) => r.n === "fleet_payment_rails_live_receive_scope")?.d ?? "";
+    if (!/live_receive/.test(scope) || !/gumroad/.test(scope) || !/storefront/.test(scope) || /payouts|refunds|card_spend|bank_transfer/.test(scope)) {
+      problems.push("economy surface: the receive-only rail scope CHECK is missing or allows an outgoing capability");
+    }
+    const cred = checks.rows.find((r) => r.n === "fleet_credential_refs_gumroad_scope")?.d ?? "";
+    if (!/gumroad/.test(cred) || !/view_sales/.test(cred) || /edit_sales|refund_sales|account/.test(cred)) {
+      problems.push("economy surface: the gumroad credential scope CHECK is missing or allows more than the receive-only scopes");
+    }
+    const sim = await db.query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM ${schema}.fleet_payment_rails WHERE mode IN ('live_receive','live') AND status <> 'revoked'
+          AND (SELECT simulated_settlement_allowed FROM ${schema}.fleet_economic_model WHERE id = 1)`);
+    if (Number(sim.rows[0]?.n ?? 0) > 0) problems.push("economy surface: simulated settlement is allowed on a registry with a receive-only provider rail or a live rail");
+  }
+  if (v30 && !checks.rows.some((r) => /decided_by = 'controller'/.test(r.d))) problems.push("economy surface: a capital decision could be made by someone other than the controller (CHECK missing)");
+  const writers: Record<string, Set<string>> = {
+    fleet_ventures: new Set(["fleet_econ_venture_create", "fleet_econ_venture_transition", "fleet_venture_move"]),
+    fleet_venture_transitions: new Set(["fleet_econ_venture_create", "fleet_venture_move"]),
+    fleet_venture_journals: new Set(["fleet_channel_payout_post", "fleet_admin_venture_attribute", "fleet_settlement_post", "cx_report_result", "cx_paypal_capture_record", "cx_paypal_refund_record",
+      // v57: money PayPal gave back to a sale is attributed to its venture.
+      "fleet_paypal_clawback_return"]),
+    fleet_decision_records: new Set(["fleet_econ_decision_record", "fleet_econ_decision_outcome", "fleet_econ_decision_correct"]),
+    fleet_opportunities: new Set(["fleet_econ_opportunity_record", "fleet_econ_opportunity_shortlist", "fleet_econ_opportunity_status", "fleet_opportunity_expire", "fleet_econ_venture_create"]),
+    fleet_economic_knowledge: new Set(["fleet_econ_knowledge_record", "fleet_econ_decision_outcome", "fleet_project_finish"]),
+    fleet_economy_policy: new Set(["fleet_admin_economy_policy_set"]),
+    fleet_payment_rails: new Set(["fleet_admin_rail_add", "fleet_admin_rail_set_status", "fleet_admin_credential_set_status", "fleet_settlement_post",
+      "fleet_admin_rail_webhook_set"]),
+    fleet_rail_assignments: new Set(["fleet_rail_resolve", "fleet_admin_rail_set_status", "fleet_admin_rail_assign"]),
+    fleet_rail_requirements: new Set(["fleet_rail_resolve", "fleet_econ_rail_require", "fleet_rail_requirement_assign"]),
+    // v46: readiness evidence only by the owner (and simulated evidence for a simulated rail at registration); external
+    // settlement claims only by the claiming recorder.
+    fleet_rail_capability_checks: new Set(["fleet_admin_rail_add", "fleet_admin_rail_verify",
+      // v52: the gateway's and the receipt matcher's own automatic evidence.
+      "fleet_rail_check_record"]),
+    fleet_revenue_claims: new Set(["fleet_channel_payout_post", "fleet_admin_record_external_claimed",
+      // v47: the posting transaction claims the payout and the bank transaction; a linked transfer claims the original.
+      "fleet_provider_receipt_post", "fleet_receipt_process", "fleet_admin_receipt_transfer_link",
+      // v48: PayPal captures and refunds, and money paid to the owner's card.
+      "cx_paypal_capture_record", "cx_paypal_refund_record", "fleet_admin_card_receipt_record"]),
+    // v47: provider records only through their recorders (the G3 gateway / G4 bank feed call them via their roles),
+    // attribution and destinations only by the owner, allocations only by the posting functions.
+    fleet_provider_accounts: new Set(["fleet_admin_provider_account_register"]),
+    fleet_provider_product_attributions: new Set(["fleet_admin_provider_product_assign", "gx_job_report", "gx_products_reconcile"]),
+    fleet_provider_sales: new Set(["fleet_provider_sale_record"]),
+    fleet_provider_payouts: new Set(["fleet_provider_payout_record"]),
+    fleet_provider_payout_lines: new Set(["fleet_provider_payout_record"]),
+    fleet_settlement_destinations: new Set(["fleet_admin_settlement_destination_add", "fleet_admin_settlement_destination_verify_access",
+      "fleet_admin_settlement_destination_paypal"]),
+    fleet_settlement_receipts: new Set(["fleet_bank_receipt_record", "fleet_receipt_process", "fleet_provider_receipt_post", "fleet_admin_receipt_attest",
+      "fleet_admin_receipt_transfer_link", "svc_settlement_paypal_match"]),
+    // v52: the storefront — products and jobs by the agent operations and the gateway; uploads by the agent and the gateway.
+    fleet_provider_products: new Set(["fleet_econ_storefront_product_create", "gx_job_report", "gx_products_reconcile"]),
+    fleet_provider_jobs: new Set(["fleet_storefront_enqueue", "gx_claim_job", "gx_job_report"]),
+    fleet_provider_uploads: new Set(["fleet_econ_storefront_file", "gx_job_report"]),
+    fleet_provider_cursors: new Set(["gx_cursor_set"]),
+    fleet_provider_allocations: new Set(["fleet_provider_post_share", "fleet_provider_post_suspense", "fleet_provider_receipt_post",
+      "fleet_admin_provider_suspense_release", "fleet_admin_receipt_debit_assign"]),
+    fleet_pilot_authorisations: new Set(["fleet_admin_pilot_authorise", "fleet_admin_pilot_revoke"]),
+    fleet_external_transactions: new Set(["svc_settlement_ingest", "fleet_settlement_post"]),
+    fleet_credential_refs: new Set(["fleet_admin_credential_register", "fleet_admin_credential_set_status", "svc_credential_use", "cx_credential_use"]),
+    fleet_credential_use_log: new Set(["svc_credential_use", "cx_credential_use"]),
+    fleet_legal_entities: new Set(["fleet_admin_legal_entity_add"]),
+    fleet_tax_profiles: new Set(["fleet_admin_tax_profile_set"]),
+    fleet_tax_policy: new Set(["fleet_admin_tax_policy_set"]),
+    fleet_transfer_policy: new Set(["fleet_admin_transfer_policy_set"]),
+    fleet_vendor_destinations: new Set(["fleet_econ_vendor_register"]),
+    fleet_destination_references: new Set(["fleet_econ_vendor_register", "fleet_admin_destination_reference_set"]),
+    fleet_agent_wallet_plans: new Set(["fleet_econ_wallet_plan"]),
+    fleet_capital_requests: new Set(["fleet_econ_capital_request"]),
+    fleet_capital_decisions: new Set(["fleet_econ_capital_request"]),
+    fleet_envelopes: new Set(["fleet_econ_capital_request", "fleet_envelope_allocate", "fleet_envelope_return", "fleet_envelope_evaluate"]),
+    fleet_capital_policy: new Set(["fleet_admin_capital_policy_set"]),
+    fleet_sweep_policy: new Set(["fleet_admin_sweep_policy_set"]),
+    fleet_cognition_depth_policy: new Set(["fleet_admin_cognition_depth_set"]),
+    fleet_admin_withdrawal_policy: new Set(["fleet_admin_withdrawal_policy_set"]),
+    // v32: custody signer attestations (custody role only) and the attestation heartbeat policy (owner).
+    fleet_custody_attestations: new Set(["cx_attest_signer"]),
+    fleet_custody_policy: new Set(["fleet_admin_custody_policy_set"]),
+    // v34: agent operational identity (agent ops), the broker protocol (ix_*), owner identity metadata/consent (owner).
+    // (v35: an estate transfer re-owns an inherited identity/account/mailbox and queues the credential re-seal.)
+    fleet_agent_identities: new Set(["fleet_econ_identity_create", "fleet_econ_identity_update", "fleet_estate_assign_internal"]),
+    fleet_agent_accounts: new Set(["fleet_admin_account_freeze", "fleet_admin_account_unfreeze", "fleet_econ_account_create", "fleet_econ_mailbox_provision", "fleet_econ_account_revoke", "ix_claim_job",
+      "ix_credential_record", "ix_mailbox_record", "ix_report_job", "fleet_estate_assign_internal",
+      // v37: browser-created accounts (register / pin origins / record outcome) and broker-stored browser credentials.
+      "fleet_econ_account_register", "fleet_econ_account_add_origin", "fleet_econ_account_mark", "fleet_account_human_dependency", "ix_browser_credential_record"]),
+    fleet_agent_account_credentials: new Set(["fleet_econ_account_password_confirm", "fleet_econ_account_password_discard", "fleet_econ_account_revoke", "ix_credential_record", "ix_browser_credential_record"]),
+    fleet_agent_mailboxes: new Set(["ix_mailbox_record", "fleet_estate_assign_internal", "fleet_econ_mailbox_provision"]),
+    fleet_identity_jobs: new Set(["fleet_identity_enqueue", "ix_claim_job", "ix_report_job", "fleet_estate_assign_internal", "svc_estate_tick",
+      // v95: a lost answer is uncertain (never re-sent blindly); uncertain mail is reconciled against the Sent folder.
+      "ix_jobs_lost", "ix_job_uncertain", "ix_reconcile_mail",
+      // v51: freezing an account stops its queued jobs.
+      "fleet_admin_account_freeze"]),
+    // v35: the economy engine. Replication state/birth orders only by the controller pass and Admin; missions by their
+    // engine; commitments by the agent; notifications through fleet_notify; estate items by the estate engine.
+    fleet_replication_state: new Set(["svc_replication_tick"]),
+    fleet_replication_policy: new Set(["fleet_admin_replication_policy_set"]),
+    fleet_birth_orders: new Set(["svc_replication_tick", "fleet_admin_birth", "fleet_admin_reseed", "fleet_admin_birth_fulfil", "fleet_admin_birth_cancel",
+      "fleet_birth_authorize", "fleet_birth_born"]),
+    fleet_mission_policy: new Set(["fleet_admin_mission_policy_set"]),
+    fleet_mission_requests: new Set(["fleet_mission_start", "fleet_mission_end", "fleet_admin_mission_request", "fleet_econ_mission_request"]),
+    fleet_agent_missions: new Set(["fleet_mission_start", "fleet_mission_end", "fleet_econ_mission_report", "fleet_econ_mission_review"]),
+    fleet_agent_commitments: new Set(["fleet_econ_commitment_add", "fleet_econ_commitment_cancel", "fleet_estate_assign_internal", "svc_estate_tick",
+      "ix_phone_record", "fleet_econ_phone_release",
+      // v41: a number's rental commitment (created at provisioning, advanced when charged, cancelled at release, inherited).
+      "ix_phone_record2", "fleet_phone_release_internal", "svc_comms_tick"]),
+    fleet_risk_policy: new Set(["fleet_admin_risk_policy_set"]),
+    fleet_notifications: new Set(["fleet_notify", "fleet_admin_notification_ack", "ix_notification_emailed", "fleet_admin_notifications_delete",
+      "fleet_admin_notifications_delete_acknowledged"]),
+    fleet_notification_policy: new Set(["fleet_admin_notification_policy_set", "svc_notify_tick"]),
+    fleet_estate_items: new Set(["svc_estate_tick", "fleet_estate_assign_internal", "fleet_admin_estate_release"]),
+    fleet_estate_policy: new Set([]),
+    // v36: mail (agent send; broker delivery/status), phones/SMS (agent ops; broker provision/delivery/status), commitments
+    // created for a number's monthly fee, owner vault installation, reveal serving/taking, notification email status.
+    fleet_agent_mail: new Set(["fleet_mail_to_order", "fleet_mail_keep_for_owner", "ix_mail_deliver", "ix_mail_consumed", "ix_mail_deliver2", "ix_mail_sent", "fleet_econ_mail_send", "ix_reconcile_mail",
+      // v41: shared-mailbox ingestion (attribution), outbound status, Admin routing of unassigned mail.
+      "fleet_mail_store_in", "ix_mail_sent2", "fleet_admin_mail_assign",
+      // v63: the owner's dismiss / delete and the retention pass (one delete path, keep rules applied).
+      "fleet_admin_mail_dismiss", "fleet_mail_delete_internal"]),
+    fleet_agent_phone_numbers: new Set(["fleet_econ_phone_provision", "fleet_econ_phone_release", "ix_phone_record", "ix_phone_status",
+      "ix_phone_record2", "fleet_phone_release_internal", "svc_comms_tick"]),
+    fleet_agent_sms: new Set(["fleet_econ_sms_send", "ix_sms_deliver", "ix_sms_sent", "ix_sms_cost", "svc_comms_tick"]),
+    // v41: communications providers (the broker's configuration), capability dependencies, quotes, charges, number
+    // dependencies, provider-secret names.
+    fleet_comms_providers: new Set(["ix_comms_configure", "ix_comms_health"]),
+    fleet_capability_demands: new Set(["fleet_comms_unavailable", "ix_comms_configure", "fleet_econ_capabilities_request"]),
+    fleet_phone_quotes: new Set(["fleet_econ_phone_quote", "ix_phone_quote_record"]),
+    fleet_phone_charges: new Set(["fleet_comms_charge"]),
+    fleet_phone_number_dependencies: new Set(["ix_browser_secret_serve"]),
+    fleet_provider_secrets: new Set(["ix_provider_secrets_publish"]),
+    fleet_owner_vault_inbox: new Set(["fleet_admin_owner_vault_upload", "ix_vault_installed"]),
+    fleet_reveal_requests: new Set(["fleet_admin_reveal_request", "fleet_admin_reveal_take", "ix_reveal_pending", "ix_reveal_serve"]),
+    fleet_reveal_log: new Set(["fleet_reveal_log_write"]),
+    fleet_identity_broker_keys: new Set(["ix_publish_owner_key"]),
+    // v37: the browser operator — sessions/actions by the agent ops and the worker (bx_*); credential requests by the worker,
+    // served by the broker; authentication-message blobs by the broker only.
+    fleet_browser_sessions: new Set(["fleet_econ_browser_open", "fleet_econ_browser_close", "fleet_browser_enqueue", "bx_report_action", "fleet_admin_account_freeze", "bx_actions_lost"]),
+    fleet_browser_actions: new Set(["fleet_browser_enqueue", "bx_claim_action", "bx_report_action", "bx_actions_lost"]),
+    fleet_browser_secret_requests: new Set(["bx_secret_request", "bx_secret_take", "ix_browser_secrets_pending", "ix_browser_secret_serve"]),
+    fleet_auth_message_blobs: new Set(["ix_auth_blob_store", "ix_browser_secrets_pending", "ix_browser_secret_serve", "fleet_admin_mail_assign",
+      "fleet_mail_delete_internal"]),
+    // v38: Admin authentication state — written only by the dashboard gateway functions (and the owner's enrollment).
+    fleet_admin_passkeys: new Set(["dash_passkey_add", "dash_passkey_used", "dash_passkey_revoke", "dash_passkey_rename"]),
+    // v45: Fleet Command's bounded feed (copied from routed events; cleared by the owner) and the short-lived suppression
+    // keys of deleted notifications.
+    fleet_command_feed: new Set(["fleet_command_feed_capture", "fleet_admin_command_clear", "fleet_command_feed_backfill_p3"]),
+    fleet_notification_suppress: new Set(["fleet_notify", "fleet_admin_notifications_delete", "fleet_admin_notifications_delete_acknowledged", "svc_event_retention"]),
+    // v43: the password verifier — written only by dash_password_set (enrollment token, or a session with a step-up).
+    fleet_admin_password: new Set(["dash_password_set", "dash_recovery_password_reset"]),
+    fleet_admin_totp: new Set(["dash_totp_set", "dash_totp_accept", "dash_totp_reset", "fleet_admin_dashboard_totp_reset", "dash_recovery_totp_confirm"]),
+    // v82: recovery codes (issued from a session with a step-up, spent by a recovery) and a replacement authenticator awaiting
+    // its first code.
+    fleet_admin_recovery_codes: new Set(["dash_recovery_codes_issue", "fleet_admin_recovery_spend", "fleet_admin_host_recovery_end_access"]),
+    fleet_admin_totp_pending: new Set(["dash_recovery_totp_begin", "dash_recovery_totp_confirm", "fleet_admin_host_recovery_end_access"]),
+    // v82: helper jobs — opened by the reservation's route snapshot, closed by the call's result or the reservation's end.
+    fleet_helper_jobs: new Set(["fleet_helper_job_open", "fleet_helper_job_close", "fleet_helper_job_end"]),
+    // v83: phone push — devices by the owner; deliveries queued by the notification trigger and the owner's test, advanced
+    // only by the sender's protocol (px_*) and the owner's controls.
+    fleet_push_devices: new Set(["fleet_admin_push_device_add", "fleet_admin_push_device_revoke"]),
+    fleet_push_deliveries: new Set(["fleet_push_enqueue", "px_push_claim", "px_push_result", "px_push_cancelled", "fleet_admin_push_test",
+      "fleet_admin_push_device_revoke", "fleet_admin_push_test_received"]),
+    fleet_push_sender: new Set(["px_push_heartbeat"]),
+    // v85: capability checks are written by the agent's own op only.
+    fleet_capability_checks: new Set(["fleet_econ_capabilities_check"]),
+    fleet_media_jobs: new Set(["fleet_econ_media_request", "fleet_econ_media_result", "mx_claim", "mx_result",
+      // v87: the one settlement per job (reservation → actual cost) and the owner's resolution of a job of unknown cost.
+      "fleet_media_settle", "fleet_admin_media_job_resolve"]),
+    fleet_media_provider_statements: new Set(["fleet_admin_media_statement"]),
+    fleet_media_providers: new Set(["mx_report"]),
+    // v86: money locations and their evidence — locations by the owner (and the migration's PayPal rows), evidence through
+    // the bank-feed connector or the owner's CSV, transfers by the owner, matching and classification.
+    fleet_money_locations: new Set(["fleet_admin_location_add", "fleet_admin_location_status", "fleet_admin_location_bind_card", "fleet_money_location_for_rail",
+      // v90: PayPal's own failure codes mark the PayPal location limited (the hourly watch); the card registry keeps card_drawn true.
+      "svc_operations_watch", "fleet_admin_card_slot_set"]),
+    fleet_cards: new Set(["fleet_admin_card_slot_set", "fleet_admin_location_bind_card"]),
+    fleet_bank_balance_observations: new Set(["fleet_location_balance_record"]),
+    fleet_bank_transactions: new Set(["fleet_location_txn_record", "fleet_location_match", "fleet_admin_location_contribution", "fleet_admin_bank_txn_classify",
+      "fleet_location_transfer_arrive", "fleet_location_transfers_evidence", "fleet_admin_transfer_arrival", "fleet_card_dispute_credit",
+      // v88: a line whose booking failed keeps its error (recorded, retried, listed).
+      "fleet_location_match_safe",
+      // v90: a provisional dispute credit the bank took back.
+      "fleet_card_dispute_reverse"]),
+    fleet_location_transfers: new Set(["fleet_admin_location_transfer", "fleet_location_transfer_arrive", "fleet_location_transfers_evidence"]),
+    fleet_card_disputes: new Set(["fleet_admin_card_dispute_open", "fleet_card_dispute_credit", "fleet_admin_card_dispute_resolve", "fleet_card_dispute_reverse"]),
+    fleet_admin_enrollment: new Set(["dash_passkey_add", "dash_password_set", "fleet_admin_dashboard_enroll", "fleet_admin_host_recovery_end_access"]),
+    fleet_admin_challenges: new Set(["dash_challenge_new", "dash_challenge_use"]),
+    fleet_admin_sessions: new Set(["dash_session_begin", "dash_session_begin_password", "dash_session_totp", "dash_session_live", "dash_session_end",
+      "dash_sessions_revoke_all", "dash_password_set", "dash_recovery_password_reset", "dash_recovery_totp_confirm",
+      "fleet_admin_host_recovery_end_access"]),
+    fleet_admin_stepups: new Set(["dash_stepup_record", "dash_stepup_consume"]),
+    fleet_admin_auth_log: new Set(["fleet_admin_auth_log_write"]),
+    fleet_identity_releases: new Set(["ix_release_record"]),
+    fleet_owner_identity_classes: new Set(["fleet_admin_owner_identity_class_set", "ix_vault_installed"]),
+    fleet_owner_identity_consent: new Set(["fleet_admin_owner_identity_consent_set", "fleet_admin_owner_identity_consent_revoke"]),
+    // v42: team projects — written only by the project operations and their settlement helpers (money moves only through
+    // fleet_project_pay / fleet_project_release, both posting through fleet_ledger_post).
+    fleet_projects: new Set(["fleet_econ_project_propose", "fleet_econ_project_replan", "fleet_econ_project_fund", "fleet_econ_project_start",
+      "fleet_project_evaluate", "fleet_project_pay", "fleet_project_release", "fleet_project_finish"]),
+    fleet_project_roles: new Set(["fleet_project_set_plan"]),
+    fleet_project_tasks: new Set(["fleet_project_set_plan", "fleet_econ_project_task", "fleet_econ_project_review", "fleet_project_end_member", "fleet_project_finish"]),
+    fleet_project_members: new Set(["fleet_econ_project_offer", "fleet_econ_project_respond", "fleet_econ_project_counter_accept", "fleet_econ_project_withdraw_offer",
+      "fleet_econ_project_task", "fleet_econ_project_review", "fleet_project_pay", "fleet_project_pay_share", "fleet_project_distribute", "fleet_project_end_member",
+      "fleet_project_finish"]),
+    fleet_project_payments: new Set(["fleet_project_pay", "fleet_project_pay_share"]),
+    fleet_project_distributions: new Set(["fleet_project_distribute"]),
+    fleet_sweep_records: new Set(["fleet_sweep_execute"]),
+    fleet_project_events: new Set(["fleet_project_event"]),
+    fleet_project_outcomes: new Set(["fleet_project_finish"]),
+    // v48: custody activations only by the owner functions and the reaper's expiry; wallet limits only by the owner; PayPal
+    // records by the agent's checkout ops and the custody executor; card clearing only by the owner (and its booking helper).
+    fleet_custody_activations: new Set(["fleet_admin_custody_activate", "fleet_admin_custody_deactivate", "svc_custody_activation_expire"]),
+    fleet_agent_wallet_limits: new Set(["fleet_admin_wallet_limits_set"]),
+    fleet_paypal_checkouts: new Set(["fleet_admin_paypal_test_checkout", "fleet_econ_paypal_checkout", "fleet_econ_paypal_cancel", "cx_paypal_work", "cx_paypal_checkout_update", "cx_paypal_capture_record",
+      "cx_paypal_status_checked",
+      // v98: the buyer's pay request; custody's order lifecycle (a fresh order, its reads, its retirement); the owner's retirement.
+      "svc_order_pay", "svc_order_returned", "cx_paypal_pay_work", "cx_paypal_order_created", "cx_paypal_order_note", "cx_paypal_order_retire", "fleet_admin_paypal_order_retire"]),
+    // v98: provider orders by custody's lifecycle functions, the checkout follower (every order id a checkout carries) and the owner's
+    // retirement; their history only through the event helper; reconciliation items only by their helper and the owner's resolution.
+    fleet_paypal_provider_orders: new Set(["cx_paypal_order_claim", "cx_paypal_order_created", "cx_paypal_order_note", "cx_paypal_order_retire",
+      "fleet_paypal_checkouts_follow_orders", "fleet_admin_paypal_order_retire"]),
+    fleet_paypal_provider_order_events: new Set(["fleet_paypal_order_event"]),
+    fleet_paypal_reconciliation_items: new Set(["fleet_paypal_recon_add", "fleet_admin_paypal_reconciliation_resolve"]),
+    fleet_paypal_sync_status: new Set(["cx_paypal_sync_record"]),
+    fleet_paypal_webhook_inbox: new Set(["svc_paypal_webhook_receive", "cx_paypal_inbox", "cx_paypal_inbox_result"]),
+    fleet_paypal_transactions: new Set(["fleet_channel_payout_book", "fleet_admin_channel_payout_transfer", "cx_paypal_txn_record", "fleet_admin_paypal_txn_attribute", "svc_settlement_paypal_match",
+      // v66: a deposit backing the existing capital closes its transaction.
+      "fleet_admin_capital_back",
+      // v77: a treasury debit evidencing an owner withdrawal is attributed by the owner's record.
+      "fleet_admin_owner_withdrawal_record",
+      // v70: a treasury debit evidencing an AI-credit purchase closes its transaction.
+      "fleet_admin_ai_credit_treasury_purchase",
+      // v71: the counterparty from custody, and a debit attributed to an AI-credit purchase.
+      "cx_paypal_txn_counterparty", "fleet_ai_credit_promote"]),
+    fleet_paypal_balance_observations: new Set(["cx_paypal_balance_record"]),
+    fleet_card_charges: new Set(["fleet_admin_card_charge_record", "fleet_admin_card_charge_confirm", "fleet_card_charge_post",
+      "fleet_econ_card_authorize", "fleet_econ_card_void", "svc_card_holds_expire",
+      // v51: a hold's reservation is released by its helper (void, expiry, booking).
+      "fleet_card_hold_release",
+      // v86: debit mode — the agent's declaration, the bank evidence matcher, a 3-D Secure wait.
+      "fleet_econ_card_declare", "fleet_location_match", "fleet_econ_card_awaiting_approval",
+      // the owner's verified release of a used hold the bank never showed; open a dispute (the charge row is locked).
+      "fleet_admin_card_hold_release", "fleet_admin_card_dispute_open", "fleet_card_dispute_credit"]),
+    fleet_card_repayments: new Set(["fleet_admin_card_repayment_record"]),
+    // v53: card statements only by their issuer (the reaper's tick or the owner) and the owner's "paid"; the schedule only by the owner.
+    fleet_card_statements: new Set(["fleet_card_statement_issue", "fleet_admin_card_statement_paid"]),
+    fleet_card_statement_policy: new Set(["fleet_admin_card_statement_policy_set"]),
+    // v54: card requests by the agent's request, its hold (uses it up), the owner's decision and the reaper's expiry; the threshold only by the owner.
+    fleet_card_requests: new Set(["fleet_econ_card_request", "fleet_econ_card_authorize", "fleet_admin_card_request_decide", "svc_card_requests_expire",
+      // v64: Fleet Control's review decides a flagged request (approve / decline).
+      "fleet_spend_review_apply"]),
+    // v64: spend reviews — opened by the request functions, decided by the reviewer or the owner, costed by the charge; the
+    // policy only by migration; the review cost accrual only by the charge.
+    fleet_spend_reviews: new Set(["fleet_spend_review_open", "fleet_spend_review_decide_internal", "svc_spend_reviews_claim", "fleet_spend_review_failed_internal",
+      "fleet_spend_review_charge", "fleet_admin_spend_review_decide", "fleet_spend_review_use_override"]),
+    fleet_spend_review_policy: new Set([]),
+    fleet_spend_review_accrual: new Set(["fleet_spend_review_charge"]),
+    // v65: shared-lesson reviews (state by the claim / record / failure path), Fleet Control review costs, channel unlocks.
+    fleet_knowledge_review_state: new Set(["svc_knowledge_proposals_claim", "svc_knowledge_review_failed", "svc_knowledge_review_record", "fleet_knowledge_review_failed_internal"]),
+    fleet_control_accrual: new Set(["fleet_control_charge"]),
+    fleet_channel_unlocks: new Set(["fleet_channel_unlocked"]),
+    // v66: backings of the existing capital only by the owner's backing function.
+    fleet_capital_backings: new Set(["fleet_admin_capital_back", "fleet_admin_location_contribution"]), // v91: a bank deposit backs capital
+    // v68: lesson supersessions only by Fleet Control's review record.
+    fleet_knowledge_supersessions: new Set(["svc_knowledge_review_record"]),
+    // v94: request supersessions only by the owner's supersede (the request itself never changes).
+    fleet_owner_request_supersessions: new Set(["fleet_admin_owner_request_supersede"]),
+    // v94: a run budget only by the owner's start / end.
+    fleet_cognition_run_budgets: new Set(["fleet_admin_cognition_run_start", "fleet_admin_cognition_run_end",
+      // v104: a run whose next request cannot be reserved ends now (its end time brought forward; never extended or reopened).
+      "fleet_cognition_run_end_unfit"]),
+    // v70: AI-credit lots and draws — by the provider-credit event trigger, the draw, the treasury purchase and the settlement.
+    fleet_ai_credit_lots: new Set(["fleet_ai_credit_draw", "fleet_ai_credit_events_trigger", "fleet_admin_ai_credit_treasury_purchase", "svc_ai_credit_settle",
+      // v71: a confirmed purchase (matched pair or the owner's confirmation) creates its lot.
+      "fleet_ai_credit_promote",
+      // v72: acquisition cost from evidence; over-recorded usage restored.
+      "fleet_admin_ai_credit_lot_cost", "fleet_ai_credit_restore"]),
+    fleet_ai_credit_receipts: new Set(["fleet_ai_credit_receipt_trigger", "fleet_ai_credit_promote", "fleet_ai_credit_match", "fleet_admin_ai_credit_reject"]),
+    fleet_ai_credit_absorptions: new Set(["fleet_ai_credit_promote"]),
+    fleet_ai_credit_debit_notices: new Set(["fleet_ai_credit_match"]),
+    // v72: acquisition cost pricing and accrual; console reconciliations.
+    fleet_ai_credit_draw_costs: new Set(["fleet_ai_credit_cost_pass"]),
+    fleet_ai_credit_cost_accrual: new Set(["fleet_ai_credit_cost_pass",
+      // v73: the one-time historical correction adds each historical charge's share to the opening pool's accrual.
+      "fleet_admin_ai_credit_historical_cost",
+      // v74: the pre-launch write-off waives the sub-penny tax still carried for pre-launch usage.
+      "fleet_admin_ai_credit_test_period_writeoff"]),
+    fleet_ai_credit_historical_costs: new Set(["fleet_admin_ai_credit_historical_cost"]),
+    fleet_ai_credit_historical_runs: new Set(["fleet_admin_ai_credit_historical_cost"]),
+    fleet_ai_credit_test_period_runs: new Set(["fleet_admin_ai_credit_test_period_writeoff"]),
+    fleet_ai_credit_test_period_items: new Set(["fleet_admin_ai_credit_test_period_writeoff"]),
+    fleet_ai_credit_test_period_waivers: new Set(["fleet_admin_ai_credit_test_period_writeoff"]),
+    // v74: the launch boundary, recorded once by the owner (independent of any agent's pause or resume).
+    fleet_launch_boundary: new Set(["fleet_admin_launch_boundary_record"]),
+    fleet_ai_credit_reconciliations: new Set(["fleet_admin_ai_credit_balance_reconcile"]),
+    fleet_ai_credit_policy: new Set(["fleet_admin_ai_credit_policy_set"]),
+    fleet_ai_credit_policy_history: new Set(["fleet_admin_ai_credit_policy_set"]),
+    fleet_ai_credit_draws: new Set(["fleet_ai_credit_draw"]),
+    fleet_card_request_policy: new Set(["fleet_admin_card_request_policy_set"]),
+    // v55: the owner's survival protection switch, only by the owner.
+    fleet_survival_protection: new Set(["fleet_admin_survival_protection_set"]),
+    fleet_survival_protection_history: new Set(["fleet_admin_survival_protection_set", "fleet_admin_survival_protection_agent_set"]),
+    fleet_survival_protection_agents: new Set(["fleet_admin_survival_protection_agent_set"]),
+    fleet_card_receipts: new Set(["fleet_admin_card_receipt_record", "fleet_admin_card_receipt_resolve", "fleet_admin_card_receipt_settle"]),
+    // v49: the owner's standing authority and account freezes only by the owner; identity uses only by the worker's request
+    // function; sealed custody credentials only by the owner, the custody key only by custody.
+    fleet_identity_autonomy: new Set(["fleet_admin_identity_autonomy_set", "fleet_admin_identity_documents_set"]),
+    fleet_identity_autonomy_history: new Set(["fleet_admin_identity_autonomy_set", "fleet_admin_identity_documents_set"]),
+    fleet_identity_uses: new Set(["bx_secret_request"]),
+    fleet_custody_sealed_credentials: new Set(["fleet_admin_custody_credential_upload", "fleet_admin_custody_credential_revoke"]),
+    fleet_custody_keys: new Set(["cx_publish_key"]),
+    // v50: insolvency episodes only by the reaper; sweep reductions by the owner functions and the reaper's expiry; the
+    // knowledge library only by its loader.
+    fleet_agent_insolvency: new Set(["svc_insolvency_tick"]),
+    fleet_insolvency_policy: new Set(["fleet_admin_insolvency_policy_set"]),
+    fleet_sweep_rate_reductions: new Set(["fleet_admin_sweep_reduction_grant", "fleet_admin_sweep_reduction_end", "svc_sweep_reductions_expire",
+      "fleet_sweep_reduction_decide"]),
+    fleet_sweep_rate_reduction_requests: new Set(["fleet_econ_sweep_reduction_request", "fleet_admin_sweep_reduction_grant", "fleet_admin_sweep_reduction_decline",
+      "fleet_sweep_reduction_decide"]),
+    fleet_knowledge_library: new Set(["fleet_admin_knowledge_library_load"]),
+    // v51: held PayPal captures by the capture / refund recorders and the reaper's availability pass; provider secrets sealed
+    // to the broker by the owner, installed by the broker.
+    fleet_paypal_availability: new Set(["cx_paypal_capture_record", "cx_paypal_refund_record", "svc_paypal_availability"]),
+    fleet_provider_secret_inbox: new Set(["fleet_admin_provider_secret_upload", "ix_provider_secret_installed"]),
+    // v56: customer orders by the checkout wrapper, the checkout-state follower, the refund recorder, custody's buyer record and the
+    // agent's own delivery / fulfilment; deliveries and their files by delivery, the mail-outcome follower and the reaper's retry;
+    // the broker's connector list only by the broker.
+    fleet_customer_orders: new Set(["svc_order_country", "svc_attribute", "fleet_econ_paypal_checkout_order", "fleet_customer_orders_follow", "fleet_order_refunded", "cx_paypal_buyer_record", "fleet_paypal_clawback_return",
+      "fleet_econ_order_deliver", "fleet_econ_order_fulfil", "fleet_order_delivery_follow", "svc_order_deliveries_retry",
+      // v76: orders from an offer page (svc_offer_buy) or a quote (fleet_econ_enquiry_quote); a delivery's dispatch.
+      "svc_offer_buy", "fleet_econ_enquiry_quote", "fleet_order_delivery_dispatch",
+      // v82: the buyer's consent given on the order page; the order confirmation sent by the offer pass.
+      "svc_order_consent", "fleet_order_confirmations",
+      // v76: the owner's live proof purchase of a published product (booked as owner capital at capture).
+      "fleet_admin_offer_proof_buy"]),
+    fleet_order_deliveries: new Set(["fleet_econ_order_deliver", "fleet_order_delivery_follow", "svc_order_deliveries_retry", "fleet_order_refunded",
+      "fleet_order_delivery_dispatch", "svc_offer_tick"]),
+    fleet_order_delivery_files: new Set(["fleet_econ_order_deliver", "fleet_order_delivery_follow", "svc_order_deliveries_retry", "fleet_order_refunded",
+      "fleet_order_delivery_dispatch", "svc_offer_tick", "svc_order_file"]),
+    // v76: reviews only by the agent's review record; offers and their files only by the agent's offer functions (and the
+    // owner nowhere: they are the agent's commercial decisions); enquiries and buyer messages by the public intake and the
+    // agent's own replies, quotes and declines (and the reaper's expiry / follow-up).
+    fleet_artifact_reviews: new Set(["fleet_econ_review_record"]),
+    // v96: the owner may hold one offer (and release it); everything else about an offer is the agent's.
+    fleet_offers: new Set(["fleet_econ_offer_create", "fleet_econ_offer_update", "fleet_econ_offer_file", "fleet_econ_offer_publish", "fleet_econ_offer_status",
+      "fleet_admin_offer_hold", "fleet_admin_offer_release"]),
+    fleet_offer_files: new Set(["fleet_econ_offer_file"]),
+    fleet_offer_enquiries: new Set(["svc_attribute", "svc_offer_enquire", "svc_customer_message", "fleet_econ_enquiry_reply", "fleet_econ_enquiry_quote", "fleet_econ_enquiry_decline", "svc_offer_tick"]),
+    fleet_customer_messages: new Set(["fleet_mail_to_order", "svc_offer_enquire", "svc_customer_message", "fleet_econ_enquiry_reply", "fleet_econ_enquiry_quote", "fleet_econ_enquiry_decline",
+      "fleet_econ_order_message"]),
+    fleet_customer_files: new Set(["fleet_customer_files_add", "svc_offer_tick"]),
+    fleet_order_staged_files: new Set(["fleet_econ_order_stage_file", "fleet_econ_order_deliver", "svc_offer_tick"]),
+    fleet_public_site: new Set(["fleet_admin_public_site_set", "fleet_admin_sales_set"]),
+    // v78: the legal seller only by the owner.
+    fleet_seller_identity: new Set(["fleet_admin_seller_set"]),
+    // v79: the business operator — browser files (agent staging, worker output, expiry), the agent's channels / presence /
+    // leads / business obligations, outreach records and opt-outs, external sales and payout claims (booked only by the
+    // payout booking on a real PayPal credit, the controller's unambiguous match or the owner's decision).
+    fleet_outward_release: new Set(["fleet_admin_outward_set", "fleet_admin_outward_release", "fleet_admin_outward_hold"]),
+    // v80: discovery notifications; owner-connected API channels, agents' jobs, the channel gateway's evidence and cursors.
+    fleet_discovery: new Set(["chx_indexnow_done", "fleet_discovery_key"]),
+    fleet_discovery_pings: new Set(["chx_indexnow_done"]),
+    fleet_channel_connections: new Set(["fleet_admin_channel_connect", "fleet_admin_channel_disconnect", "chx_connection_check"]),
+    fleet_channel_jobs: new Set(["fleet_econ_channel_api", "chx_claim_job", "chx_job_report", "fleet_admin_channel_disconnect"]),
+    fleet_channel_cursors: new Set(["chx_cursor_set"]),
+    fleet_browser_files: new Set(["fleet_econ_browser_stage_file", "bx_file_put", "fleet_browser_files_expire"]),
+    fleet_venture_channels: new Set(["fleet_econ_channel_add", "fleet_econ_channel_update"]),
+    fleet_presence_items: new Set(["fleet_econ_presence_record", "fleet_econ_presence_update", "chx_job_report"]),
+    fleet_leads: new Set(["fleet_econ_lead_add", "fleet_econ_lead_update", "fleet_leads_retention", "fleet_econ_mail_send", "svc_outreach_optout"]),
+    fleet_business_obligations: new Set(["fleet_econ_obligation_add", "fleet_econ_obligation_done", "fleet_econ_obligation_cancel"]),
+    fleet_outreach_suppressions: new Set(["fleet_econ_outreach_suppress", "svc_outreach_optout"]),
+    fleet_outreach_messages: new Set(["fleet_econ_mail_send", "svc_outreach_optout"]),
+    fleet_channel_sales: new Set(["chx_sale_record", "fleet_econ_sale_report", "fleet_econ_sale_update", "fleet_econ_payout_claim", "fleet_channel_payout_post", "fleet_admin_channel_payout_decide"]),
+    fleet_channel_payouts: new Set(["chx_payout_record", "fleet_econ_payout_claim", "fleet_channel_payout_try", "fleet_channel_payout_book", "fleet_admin_channel_payout_decide",
+      "fleet_admin_channel_payout_bank", "fleet_admin_channel_payout_transfer"]),
+    // v76: refunds / reversals / fees of the owner's proof purchase, only by custody's refund recorder.
+    fleet_offer_proof_returns: new Set(["cx_paypal_refund_record"]),
+    // v77: owner withdrawals (profit distribution / capital return) only by the owner's record.
+    fleet_owner_withdrawal_records: new Set(["fleet_admin_owner_withdrawal_record"]),
+    fleet_identity_connectors: new Set(["ix_connectors_publish"]),
+    // v57: clawback evidence only from custody's sources and the owner's classification; posts only by the posting functions;
+    // disputes by custody's record and the owner's resolution.
+    fleet_paypal_clawback_evidence: new Set(["cx_paypal_clawback_evidence", "cx_paypal_txn_record", "fleet_admin_paypal_debit_classify"]),
+    fleet_paypal_clawback_posts: new Set(["cx_paypal_refund_record", "fleet_paypal_clawback_return"]),
+    fleet_paypal_disputes: new Set(["cx_paypal_dispute_record", "fleet_admin_paypal_dispute_resolve"]),
+    fleet_paypal_debit_classifications: new Set(["fleet_admin_paypal_debit_classify"]),
+    // v59: refund requests by the one request function (agent or owner), custody's result and PayPal's evidence.
+    // v96: custody's dispatch binds a refund to the refund authority that covers it; authorities only by the owner.
+    fleet_paypal_refund_requests: new Set(["fleet_order_refund_request", "cx_paypal_refund_result", "fleet_refund_request_completed", "cx_paypal_refund_unresolved",
+      "cx_paypal_refund_work"]),
+    fleet_refund_authorities: new Set(["fleet_admin_refund_authority_grant", "fleet_admin_refund_authority_end"]),
+    // v106: the owner lets their own claim wait behind the refund of their own proof order (owner only).
+    fleet_owner_claim_waits: new Set(["fleet_admin_owner_claim_wait", "fleet_admin_owner_claim_wait_end"]),
+    // v108: the owner's supported customer geography (owner only).
+    fleet_sales_geography: new Set(["fleet_admin_sales_geography"]),
+    fleet_control_ai_budget: new Set(["fleet_admin_fleet_control_ai_budget", "fleet_admin_fleet_control_ai_budget_clear"]),
+    fleet_control_ai_reservations: new Set(["svc_fleet_control_ai_reserve", "svc_fleet_control_ai_settle"]),
+    // v111: cost exceptions only by the routed record (overrun / uncollectable) and the owner's allocation.
+    fleet_cognition_cost_exceptions: new Set(["svc_cognition_routed_record", "fleet_admin_cognition_exception_allocate"]),
+    fleet_engineering_cognition_calls: new Set(["fleet_admin_engineering_calls_import"]),
+    fleet_provider_credit_holds: new Set(["fleet_admin_engineering_credit_hold", "fleet_admin_engineering_credit_release"]),
+    fleet_knowledge_candidates: new Set(["fleet_econ_knowledge_candidate"]),
+  };
+  const fns = await db.query<{ name: string; src: string }>(
+    `SELECT p.proname AS name, p.prosrc AS src FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1`, [schema]);
+  for (const f of fns.rows) {
+    for (const t of writeTargets(f.src)) {
+      if (writers[t] && !writers[t].has(f.name)) problems.push(`economy surface: ${f.name} writes ${t}`);
+    }
+    if (/fleet\.venture_move/.test(f.src) && !["fleet_venture_move", "fleet_ventures_guard"].includes(f.name)) problems.push(`economy surface: ${f.name} references the venture state-machine guard`);
+    if (/fleet\.vendor_register/.test(f.src) && !["fleet_econ_vendor_register", "fleet_destinations_guard"].includes(f.name)) problems.push(`economy surface: ${f.name} references the vendor-registry guard`);
+    if (/\bEXECUTE\b/i.test(codeOf(f.src)) && /fleet_(ventures|venture_journals|external_transactions|envelopes|capital_decisions|payment_rails|credential_refs|tax_profiles)\b/.test(f.src)) {
+      problems.push(`economy surface: ${f.name} uses dynamic SQL near an economy table`);
+    }
+  }
+  return [...new Set(problems)];
 }

@@ -12,7 +12,7 @@
  */
 
 import crypto from "crypto";
-import { FOUNDER_CHARTER, FOUNDER_EXPERIMENT_TOOLS, FOUNDER_TOOLS, MAX_TOOL_CALLS_PER_RESPONSE, ProviderError, type ChatMessage, type ChatResult, type CognitionProvider, type ThinkingBlock, type ToolSpec } from "./types.js";
+import { DEFAULT_RUNTIME_TOOLSET, FOUNDER_CHARTER, FOUNDER_EXPERIMENT_TOOLS, FOUNDER_TOOLS, imageHeaderProblem, imageTokens, MAX_IMAGES_PER_MESSAGE, MAX_IMAGE_B64_CHARS, MAX_TOOL_CALLS_PER_RESPONSE, applyToolset, ProviderError, type ChatImage, type ChatMessage, type ChatResult, type CognitionProvider, type ThinkingBlock, type ToolSpec } from "./types.js";
 import type { CognitionRecord } from "../postgres/store.js";
 
 export class CognitionError extends Error {
@@ -48,6 +48,20 @@ export function containsSecretShape(text: string): boolean {
 const sha = (s: string) => crypto.createHash("sha256").update(s, "utf8").digest("hex");
 const approxTokens = (s: string) => Math.ceil(s.length / 4);
 
+/**
+ * v79: the prompt as hashed and estimated — images are represented by their digest (never their base64 counted as text)
+ * and each adds its imageTokenBound (w·h/750, at least IMAGE_TOKEN_ESTIMATE) to the pre-authorization bound. The provider's own usage is what is
+ * charged; this bounds the authorization.
+ */
+export function promptMaterial(system: string, messages: ChatMessage[], toolNames: string[]): { text: string; tokens: number } {
+  const shown = messages.map((m) => {
+    if (!m.images?.length) return m;
+    return { ...m, images: m.images.map((i) => ({ mediaType: i.mediaType, sha256: sha(i.dataB64) })) };
+  });
+  const text = JSON.stringify({ system, messages: shown, tools: toolNames });
+  return { text, tokens: approxTokens(text) + imageTokens(messages) };
+}
+
 export function validateMessages(raw: unknown): ChatMessage[] {
   if (!Array.isArray(raw) || raw.length === 0 || raw.length > MAX_MESSAGES) throw new CognitionError(400, "FLEET_BAD_REQUEST", `messages must be 1..${MAX_MESSAGES}`);
   return raw.map((m) => {
@@ -62,6 +76,21 @@ export function validateMessages(raw: unknown): ChatMessage[] {
     if (x.role === "tool") {
       out.toolCallId = typeof x.toolCallId === "string" ? x.toolCallId.slice(0, 64) : "unknown";
       if (x.isError === true) out.isError = true;
+      // v79: images a tool returned (bounded; only real base64 of the four image types the provider accepts).
+      if (x.images !== undefined) {
+        if (!Array.isArray(x.images) || x.images.length > MAX_IMAGES_PER_MESSAGE) throw new CognitionError(400, "FLEET_BAD_REQUEST", `a tool result carries at most ${MAX_IMAGES_PER_MESSAGE} images`);
+        out.images = (x.images as Array<Record<string, unknown>>).map((i) => {
+          if (!["image/png", "image/jpeg", "image/webp", "image/gif"].includes(String(i?.mediaType)) || typeof i.dataB64 !== "string"
+              || i.dataB64.length < 8 || i.dataB64.length > MAX_IMAGE_B64_CHARS || !/^[A-Za-z0-9+/]+={0,2}$/.test(i.dataB64)) {
+            throw new CognitionError(400, "FLEET_BAD_REQUEST", "an image is png, jpeg, webp or gif base64 of bounded size");
+          }
+          const img = { mediaType: i.mediaType as ChatImage["mediaType"], dataB64: i.dataB64 };
+          // 2026-10-23: only an image whose pixel size is known is sent — its cost bound never rests on the provider refusing it.
+          const bad = imageHeaderProblem(img);
+          if (bad) throw new CognitionError(400, "FLEET_BAD_REQUEST", `an image is refused: ${bad}`);
+          return img;
+        });
+      }
     }
     if (x.role === "assistant" && x.thinking !== undefined) out.thinking = validateThinking(x.thinking);
     if (x.role === "assistant" && x.blockOrder !== undefined) out.blockOrder = validateBlockOrder(x.blockOrder);
@@ -145,10 +174,12 @@ export async function infer(
   if (status.model !== provider.model) throw new CognitionError(409, "FLEET_COGNITION_MODEL_MISMATCH", "registry model differs from the controller's");
   const allowed = Array.isArray(caps.allowed) ? (caps.allowed as string[]) : [];
   // R24: the experiment tools only while the owner has the pipeline on (otherwise the legacy prompt is byte-identical).
-  const tools = [...toolsFor(allowed), ...(caps.experimentsEnabled === true ? FOUNDER_EXPERIMENT_TOOLS.filter((t) => allowed.includes(t.capability)) : [])];
+  // Legacy (unrouted) path: the conservative runtime toolset (attested compatibility is resolved on the routed path).
+  const tools = applyToolset([...toolsFor(allowed), ...(caps.experimentsEnabled === true ? FOUNDER_EXPERIMENT_TOOLS.filter((t) => allowed.includes(t.capability)) : [])], DEFAULT_RUNTIME_TOOLSET);
   const maxTokens = Number(status.maxOutputTokens) || 1024;
-  const promptText = JSON.stringify({ system: FOUNDER_CHARTER, messages, tools: tools.map((t) => t.name) });
-  const inTok = approxTokens(promptText);
+  const prompt = promptMaterial(FOUNDER_CHARTER, messages, tools.map((t) => t.name));
+  const promptText = prompt.text;
+  const inTok = prompt.tokens;
   const estimateMicro = inTok * Number(status.inputMicrocentsPerToken ?? 0) + maxTokens * Number(status.outputMicrocentsPerToken ?? 0);
   const auth = await ports.authorize(agentId, Math.max(1, Math.ceil(estimateMicro / 1_000_000)));
   if (!auth.ok) throw new CognitionError(auth.code === "FLEET_COGNITION_BUSY" || auth.code === "FLEET_COGNITION_RATE_LIMITED" ? 429 : 403, String(auth.code), "inference not authorized");

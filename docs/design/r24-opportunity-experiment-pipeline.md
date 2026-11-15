@@ -168,6 +168,11 @@ founder cannot attribute its own revenue. A later reversal of the journal remove
 
 ## Deterministic evaluation (`fleet_experiment_evaluate`)
 
+> **Superseded at v30/v31** (see `f2-autonomous-economy.md` §30): the ladder cap, the WATCH evidence gates, the owner
+> branch, the survival-headroom netting and controller partial approval are retired for own capital. Since v31 the founder
+> sizes its own budget; the controller approves it in full when it fits the founder's available own capital, otherwise
+> refuses it (`FLEET_INSUFFICIENT_OWN_CAPITAL`). The list below is the original v24 design, kept for history.
+
 The checks run in this order, and the first one that matches decides:
 
 1. Requested amount above `hard_cap_minor` (default 5000, simulation-only): **rejected** (`FLEET_EXPERIMENT_OVER_CAP`).

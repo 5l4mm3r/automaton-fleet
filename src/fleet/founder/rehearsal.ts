@@ -499,6 +499,8 @@ async function cognitionPhase(
   if (ledgerCur !== "USD") await ledger.recordFxRate("USD", ledgerCur, REHEARSAL_COGNITION_FX_MICRO, "synthetic rehearsal rate (throwaway registry)", today, o.actor);
   await ledger.recordProviderCredits("anthropic", "purchase", 5_000, `rehearsal:synthetic-${crypto.randomUUID()}`, o.actor);
   x.faults.target = ids[0];
+  // v112: a new registry is local_only; this throwaway one speaks the Messages API to the FAKE provider (no real one): allowed explicitly.
+  await genesis.inferenceProfileSet("cloud_allowed", "founder rehearsal: fake Messages API, throwaway registry", o.actor);
   await genesis.setCognitionPolicy({ enabled: true, provider: "anthropic", model: REHEARSAL_MODEL, inputMicrocents: 1_000, outputMicrocents: 4_000, maxOutputTokens: 4_000, actor: o.actor });
   // Budget well above what the phase can use, so no check depends on how long a wait took.
   for (const id of ids) await genesis.setFounderCognition(id, { enabled: true, maxTurnsPerHour: 2_000, dailyBudgetCents: 5_000, reason: "rehearsal registry only", actor: o.actor });

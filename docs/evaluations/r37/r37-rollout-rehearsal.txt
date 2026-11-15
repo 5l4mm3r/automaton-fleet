@@ -1,0 +1,18 @@
+== rollout rehearse 94f09a7 (schema 41 -> 42) from 29cde7d start 2026-10-07T11:21:49Z
+
+
+do so (now or later) by using -c with the switch command. Example:
+
+
+
+
+
+dump /home/ubuntu/automaton_fleet-v41-rollout-94f09a7-20261007T112153Z.dump sha 37c440c0b11884d2
+restore: row counts identical
+migrate-check: {"currentVersion":41,"resultingVersion":42,"wouldApply":[42],"requiredVersion":42,"rolledBack":true}
+{"ok":true,"latencyMs":2,"schemaVersion":42,"countersConsistent":true}
+reconciliation: OK (5 new accounts at zero; 503 journals; events preserved 2729)
+ledger verify: true
+re-run: {"currentVersion":42,"resultingVersion":42,"wouldApply":[],"requiredVersion":42,"rolledBack":true}
+rollback proof: the dump restores to schema 41 with the same ledger head
+== REHEARSAL PASSED 2026-10-07T11:22:06Z — live untouched (schema 41)

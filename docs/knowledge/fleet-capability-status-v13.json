@@ -1,0 +1,235 @@
+{
+ "library": "economic_knowledge",
+ "entries": [
+  {
+   "id": "fleet-capability-status",
+   "body": "This entry is dated status, not enduring guidance. It changes as the Fleet is onboarded: re-read it (economic_knowledge library, id fleet-capability-status) when a decision depends on a capability, and never treat today's onboarding gaps as permanent limits on what you may build.\n\nEach capability is described by five separate states, and each is stated plainly: BUILT (the Fleet's software has it), INSTALLED (the service or package it needs runs on the Fleet's host), CONNECTED (the outside account it uses has been linked by the owner), ENABLED (the owner's setting allows its use now) and LIVE-PROVEN (it has worked at least once with a real customer, real money or a real platform account). Built is not working: a capability you need is usable only when it is also installed, connected and enabled. Where one is missing, prepare everything that does not depend on it, record the dependency once if a human step is needed, and keep working on unblocked tasks.\n\nRelated: bf-cash-and-settlement, bf-delivery-commitments, bf-tax-worldwide, bf-venture-types, bf-ai-costs, bf-fulfilment-loop, bf-channels, bf-production-tools",
+   "tags": [
+    "status",
+    "capabilities",
+    "paypal",
+    "checkout",
+    "offers",
+    "delivery",
+    "tools",
+    "payout",
+    "card",
+    "gumroad",
+    "etsy",
+    "pinterest",
+    "mail",
+    "sms",
+    "research",
+    "wake",
+    "sweep",
+    "ai-credit",
+    "onboarding",
+    "browser",
+    "channels",
+    "leads",
+    "outreach",
+    "consent",
+    "runtime"
+   ],
+   "title": "Fleet capability status (dated 2026-10-16, v12) — what works today",
+   "sources": [],
+   "version": 13,
+   "category": "fleet-status",
+   "keywords": [],
+   "hardRules": [],
+   "lastReviewed": "2026-10-17",
+   "factsThatChange": [
+    {
+     "fact": "Your runtime: the tools named in this entry exist in the current agent runtime. If a tool is not in your own tool list, your runtime predates it and it is not available to you yet — the owner upgrades runtimes; record the dependency once and work with the tools you have",
+     "verifyAt": [],
+     "confidence": "verified-official",
+     "lastChecked": "2026-10-16",
+     "staleAfterDays": 14
+    },
+    {
+     "fact": "Fleet offer pages and checkout — BUILT, INSTALLED (served by the Fleet controller), CONNECTED (treasury PayPal, receiving), NOT ENABLED (the owner has not yet set the public site or recorded the legal seller, and sales are closed: publishing is refused, your offers are not public — prepare everything else), NOT LIVE-PROVEN for agents (the owner's £1 PayPal receiving test passed on 2026-10-10; no agent sale yet). A payment is confirmed by the Fleet reading the order's status every few seconds to minutes; PayPal's webhook is not relied on (not verified as delivering). A sale is booked to your wallet net of PayPal's fee",
+     "verifyAt": [],
+     "confidence": "verified-official",
+     "lastChecked": "2026-10-16",
+     "staleAfterDays": 14
+    },
+    {
+     "fact": "Buyer consent — BUILT and ENABLED on every Fleet order page: the buyer ticks the consent to immediate supply before the payment link appears and before any download. Give buyers the order page, never a raw PayPal link. Sales on another platform's checkout (Etsy, Gumroad) follow that platform's checkout; what it records for the buyer's consent and cancellation rights is not established — do not tell buyers otherwise",
+     "verifyAt": [],
+     "confidence": "verified-official",
+     "lastChecked": "2026-10-16",
+     "staleAfterDays": 14
+    },
+    {
+     "fact": "Delivery — BUILT, INSTALLED (the Fleet's shared mail runs on the host). Files go by mail from your routing address (create one with identity provision_mailbox) and stay downloadable on the buyer's order page for 30 days. NOT LIVE-PROVEN: no agent order has been delivered to a real buyer",
+     "verifyAt": [],
+     "confidence": "verified-official",
+     "lastChecked": "2026-10-16",
+     "staleAfterDays": 14
+    },
+    {
+     "fact": "Production tools — BUILT, INSTALLED (the pinned agent toolchain on the host: spreadsheets with openpyxl and XlsxWriter, Word documents, slide decks with python-pptx, PDFs with reportlab, pypdf and pypdfium2, images with Pillow, a formula engine, a spelling checker; chart images with matplotlib, EPUB e-books with ebooklib, OCR from Python with pytesseract (toolchain agent-tools-2, installed 2026-10-17) — capabilities op check lists what YOUR runtime can import). deliverable inspect verifies each type (capabilities op check says how); with the founder-v10 runtime a .pptx is a deliverable, publishable and uploadable type, checked for empty slides, leftover template prompts, missing titles, overfull text, alt text and spelling. Rendering Word, Excel and PowerPoint files to images (LibreOffice, headless) and OCR of scanned pages (Tesseract, English) are INSTALLED on the host since 2026-10-17: inspect the rendered pages, not only the file's structure (capabilities op check confirms what your runtime can use). No network inside the sandbox. NOT LIVE-PROVEN on a real order",
+     "verifyAt": [],
+     "confidence": "verified-official",
+     "lastChecked": "2026-10-17",
+     "staleAfterDays": 14
+    },
+    {
+     "fact": "Browser — BUILT, INSTALLED (an isolated browser worker): forms, logins with vault credentials, dynamic pages, popups and tabs, embedded frames, uploads of your own files, downloads, screenshots and printed PDFs, rendering your own HTML / SVG. Tested on representative test sites, NOT LIVE-PROVEN on any real platform account. A session is temporary (30 minutes idle; ended by any worker restart): open a new session with the accountId and log in again. CAPTCHAs, live selfies, passkeys / security keys, app push approvals and codes sent to the owner's phone are human-only",
+     "verifyAt": [],
+     "confidence": "verified-official",
+     "lastChecked": "2026-10-16",
+     "staleAfterDays": 14
+    },
+    {
+     "fact": "Choosing channels — your choice, from research; no platform is required and none is excluded by this entry. What decides HOW you use a platform is its current terms, per workflow: (1) may AI help a person run the account, (2) who must own the account, (3) may software operate the account, and by which route (its API, or also the website). Read the platform's own terms before operating an account and record what you found with business add_channel. Silence in the terms is not permission. Where browser operation is not permitted, you may still prepare listings, posts, images and replies for the owner to publish, use the platform's official API where the Fleet has a connector, or choose another channel",
+     "verifyAt": [],
+     "confidence": "verified-official",
+     "lastChecked": "2026-10-16",
+     "staleAfterDays": 14
+    },
+    {
+     "fact": "Platform findings (the Fleet's reading of each platform's terms on 2026-10-15, docs/marketplaces/channel-rules-2026-10-15.md; terms change — re-verify at the source before relying on one): LinkedIn prohibits bots and automated posting, connecting or engagement and requires one real person per account; X prohibits automation outside its API; Instagram / Facebook and Pinterest do not permit automated use of the website without permission (Pinterest permits approved API apps; a business account is required for commercial use); Etsy requires the shop owner's identity verification and routes automation through its API (its AI-use disclosure rules for listings were read from secondary sources: provisional); Fiverr and Upwork require one identity-verified human per account (Upwork provisional); Gumtree and Reddit: automated posting not established. None of these is a ranking or a list of allowed channels",
+     "verifyAt": [],
+     "confidence": "verified-official",
+     "lastChecked": "2026-10-16",
+     "staleAfterDays": 14
+    },
+    {
+     "fact": "API channels (the Fleet's channel gateway) — Etsy (the owner's shop: draft, images, files, activate / deactivate; receipts and payouts read back; Etsy's AI-use disclosure added) and Pinterest (the owner's business account: boards and Pins; Pins visible only to their creator until Pinterest grants Standard access): BUILT, INSTALLED (the gateway runs on the host), NOT CONNECTED (the owner has connected no account), NOT LIVE-PROVEN (tested against simulated platforms only). Use business api for a channel once its account is connected",
+     "verifyAt": [],
+     "confidence": "verified-official",
+     "lastChecked": "2026-10-16",
+     "staleAfterDays": 14
+    },
+    {
+     "fact": "Gumroad — gateway BUILT, NOT INSTALLED on the host, NOT CONNECTED; locked for each agent until its wallet first reaches £500 (owner decision 2026-10-10). The Fleet has API connectors for these three platforms only (Etsy, Pinterest, Gumroad)",
+     "verifyAt": [],
+     "confidence": "verified-official",
+     "lastChecked": "2026-10-16",
+     "staleAfterDays": 14
+    },
+    {
+     "fact": "Sales elsewhere — BUILT: report each one (report_sale, a memo); a payout into the treasury PayPal becomes your cash when matched to the credit from the channel's payer (claim_payout); a payout to the owner's bank (Etsy pays sellers to a bank) is booked when the owner moves it into the treasury PayPal. NOT LIVE-PROVEN",
+     "verifyAt": [],
+     "confidence": "verified-official",
+     "lastChecked": "2026-10-16",
+     "staleAfterDays": 14
+    },
+    {
+     "fact": "Controlled-proof release — BUILT: before launch the owner may release you for a named proof — only the actions, accounts, origins, recipients, channels and API operations it names, until it expires (at most 72 hours); anything you publish within it is public at once; spending is never part of it. Until sales open or such a release names it, outward actions (sending mail or SMS, clicking, filling, uploading or downloading on websites, creating or operating accounts, storefront publishing, card requests) are held; reading and rendering in the browser, research, building, reviewing, private publishing and fulfilling orders continue",
+     "verifyAt": [],
+     "confidence": "verified-official",
+     "lastChecked": "2026-10-16",
+     "staleAfterDays": 14
+    },
+    {
+     "fact": "Search discovery — BUILT: published offer pages are listed in the sitemap and announced to search engines (IndexNow) automatically, once sales are open (NOT ENABLED yet)",
+     "verifyAt": [],
+     "confidence": "verified-official",
+     "lastChecked": "2026-10-16",
+     "staleAfterDays": 14
+    },
+    {
+     "fact": "Leads, obligations and deadlines — BUILT: kept with business; a lead's next action, an obligation and a paid order's due date wake you when due",
+     "verifyAt": [],
+     "confidence": "verified-official",
+     "lastChecked": "2026-10-16",
+     "staleAfterDays": 14
+    },
+    {
+     "fact": "Outreach email — BUILT, INSTALLED: personal, one recipient, with its lawful basis; the Fleet adds the legal seller and an opt-out link; an address that opted out is closed to every agent. Held until sales open or a release names it. NOT LIVE-PROVEN",
+     "verifyAt": [],
+     "confidence": "verified-official",
+     "lastChecked": "2026-10-16",
+     "staleAfterDays": 14
+    },
+    {
+     "fact": "Paying out through PayPal (suppliers, advertising, refunds) — BUILT; the treasury rail supports payouts and refunds, but NOT ENABLED: the owner has not activated custody execution. Requests can be prepared and submitted; they wait and say so. NOT LIVE-PROVEN. Refunds to buyers depend on it",
+     "verifyAt": [],
+     "confidence": "verified-official",
+     "lastChecked": "2026-10-16",
+     "staleAfterDays": 14
+    },
+    {
+     "fact": "Card purchases — BUILT (card requests, Fleet Control's review, statements), NOT ENABLED: the owner has not turned on standing authority for a card, so a card request cannot be used. NOT LIVE-PROVEN. A debit card on a separate bank account is BUILT, INSTALLED (the bank feed runs on the host), NOT CONNECTED (no bank account yet): when it is, a hold must fit that bank's money, your declared amount books nothing — the bank's own record does — and if the bank asks the owner to approve a purchase you report it (card_awaiting_approval) and wait, never working around it",
+     "verifyAt": [],
+     "confidence": "verified-official",
+     "lastChecked": "2026-10-17",
+     "staleAfterDays": 14
+    },
+    {
+     "fact": "EU consumer digital sales — through a merchant-of-record platform you operate where its terms permit; today none is connected (Gumroad, above, through its gateway once your wallet has reached £500). bf-tax-worldwide explains the obligations",
+     "verifyAt": [],
+     "confidence": "verified-official",
+     "lastChecked": "2026-10-16",
+     "staleAfterDays": 14
+    },
+    {
+     "fact": "SMS — BUILT, NOT CONNECTED (no SMS provider is configured)",
+     "verifyAt": [],
+     "confidence": "verified-official",
+     "lastChecked": "2026-10-16",
+     "staleAfterDays": 14
+    },
+    {
+     "fact": "Web research — BUILT, ENABLED, with per-agent daily and hourly limits; no search-engine API (use the browser on sites' own search pages where their terms permit)",
+     "verifyAt": [],
+     "confidence": "verified-official",
+     "lastChecked": "2026-10-16",
+     "staleAfterDays": 14
+    },
+    {
+     "fact": "Capability check — BUILT (founder-v10 runtime): before you publish an offer or quote an enquiry, check THAT offer or enquiry with what it delivers — capabilities op check {offerId or enquiryId, deliverables: [{format, needs}]}. Publishing or quoting needs such a check from the last 7 days with every deliverable ready, covering the offer's files, and still true (a provider dropping, money out changing or your runtime changing makes it stale: check again). capabilities op request asks the owner for something missing, once, with reason and evidence — a request, never a permission you wait for",
+     "verifyAt": [],
+     "confidence": "verified-official",
+     "lastChecked": "2026-10-16",
+     "staleAfterDays": 14
+    },
+    {
+     "fact": "Web search and image generation — BUILT, INSTALLED (the Fleet's media gateway runs on the host; web_search, generate_image, daily caps), NOT CONNECTED (no provider key yet: you are told so). When connected you pay for each job: the most it can cost is reserved from your cash first (not enough cash, no job) and the actual cost charged when it finishes, the rest returned (if a provider reports usage the Fleet's prices do not cover, the cost stays unknown — your reservation held — until the owner records the actual cost); for one of your active missions pass missionId (its beneficiaries share the cost when it ends). Until then use web_fetch on sites' own search pages, and draw images with code",
+     "verifyAt": [],
+     "confidence": "verified-official",
+     "lastChecked": "2026-10-17",
+     "staleAfterDays": 14
+    },
+    {
+     "fact": "Software fixes and maintenance on a customer's code — BUILT, INSTALLED (the code gateway, the isolated build environment and its egress proxy run on the host; builds can use python3, Node 22 and npm 10 — only Python builds are proven), NOT CONNECTED (the Fleet's GitHub App is not set up yet: the check reports it not connected, and quoting such work is refused). When connected: code.request_access asks the customer (they consent on their enquiry page and install the app on that repository); code.snapshot reads the code; code.build runs your commands on it in the isolated build environment (package registries only, no credentials); code.propose opens a pull request from a new fleet/ branch — only after a passing build of exactly that patch, never to the base branch, never merged by the Fleet. NOT LIVE-PROVEN",
+     "verifyAt": [],
+     "confidence": "verified-official",
+     "lastChecked": "2026-10-17",
+     "staleAfterDays": 14
+    },
+    {
+     "fact": "Helper calls — routine_task needs a stated purpose (research, marketing, production or customer_support) and is refused without one; escalate_question and independent_review record theirs. Each call's purpose, start and end are recorded and shown to the owner",
+     "verifyAt": [],
+     "confidence": "verified-official",
+     "lastChecked": "2026-10-16",
+     "staleAfterDays": 14
+    },
+    {
+     "fact": "Sweeps: the sweep policy is OFF. Survival protection: ON — an owner setting during setup, not a business strategy or a promise of rescue; actual exhaustion follows the Fleet's lifecycle rule",
+     "verifyAt": [],
+     "confidence": "verified-official",
+     "lastChecked": "2026-10-16",
+     "staleAfterDays": 14
+    },
+    {
+     "fact": "Waking from hibernation — BUILT: owner messages, revenue and refunds, paid orders to fulfil or coming due, buyers' briefs and messages, leads and obligations coming due, capital changes, answered owner requests, your review time, inbound email, card-request and spend-review decisions, lesson reviews and dispute changes wake you within about a minute",
+     "verifyAt": [],
+     "confidence": "verified-official",
+     "lastChecked": "2026-10-16",
+     "staleAfterDays": 14
+    },
+    {
+     "fact": "AI cost attribution: your own autonomous work is charged to your wallet at cost (the provider's price plus the unrecoverable tax on the credit used); turns that process the owner's messages are paid by the treasury. Pre-launch AI costs were written off on 2026-10-14 (wallets restored)",
+     "verifyAt": [],
+     "confidence": "verified-official",
+     "lastChecked": "2026-10-16",
+     "staleAfterDays": 14
+    }
+   ],
+   "recommendations": []
+  }
+ ]
+}

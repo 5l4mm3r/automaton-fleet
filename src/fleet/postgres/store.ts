@@ -55,11 +55,22 @@ import type {
 import { migrateCheck,
   AGENT_API_FUNCTIONS,
   CUSTODY_API_FUNCTIONS,
+  IDENTITY_API_FUNCTIONS,
+  BROWSER_API_FUNCTIONS,
+  GATEWAY_API_FUNCTIONS,
+  BANKFEED_API_FUNCTIONS,
+  CHANNELS_API_FUNCTIONS,
+  PUSH_API_FUNCTIONS,
+  MEDIA_API_FUNCTIONS,
+  CODE_API_FUNCTIONS,
+  BUILD_API_FUNCTIONS,
+  DASHBOARD_API_FUNCTIONS,
   FLEET_PG_HARD_MAX_AGENTS,
   FLEET_PG_SCHEMA_VERSION,
   OPERATOR_API_FUNCTIONS,
   SERVICE_API_FUNCTIONS,
   SERVICE_READ_TABLES,
+  MIGRATION_LOCK_KEY,
   migrate,
   quoteIdent,
 } from "./migrations.js";
@@ -75,6 +86,22 @@ export const DEFAULT_SERVICE_ROLE = "fleet_service";
 export const DEFAULT_OPERATOR_ROLE = "fleet_operator";
 /** Schema v10: inert custody executor role (granted cx_* only). */
 export const DEFAULT_CUSTODY_ROLE = "fleet_custody";
+/** Schema v34: the identity broker's NOLOGIN group (ix_* only). */
+export const DEFAULT_IDENTITY_ROLE = "fleet_identity";
+/** Schema v37: the browser worker's NOLOGIN group (bx_* only). */
+export const DEFAULT_BROWSER_ROLE = "fleet_browser";
+/** Schema v38: the Admin dashboard's NOLOGIN group (dash_* only). */
+export const DEFAULT_DASHBOARD_ROLE = "fleet_dashboard";
+/** Schema v52: the Gumroad storefront gateway (gx_*) and the bank-feed receipt connector (rx_*). */
+export const DEFAULT_PROVIDER_ROLE = "fleet_provider";
+export const DEFAULT_BANKFEED_ROLE = "fleet_bankfeed";
+export const DEFAULT_CHANNELS_ROLE = "fleet_channels";
+/** Schema v83: the phone-push sender (px_* only). */
+export const DEFAULT_PUSH_ROLE = "fleet_push";
+/** Schema v85: the media provider gateway (mx_* only). */
+export const DEFAULT_MEDIA_ROLE = "fleet_media";
+export const DEFAULT_CODE_ROLE = "fleet_code";
+export const DEFAULT_BUILD_ROLE = "fleet_build";
 
 export interface FleetTimeouts {
   reservationTtlS: number;
@@ -231,6 +258,7 @@ interface AgentRow {
   generation: number;
   name: string;
   wallet_address: string | null;
+  runtime_wallet_address?: string | null;
   runtime_version: string | null;
   runtime_repo: string | null;
   runtime_commit: string | null;
@@ -308,6 +336,7 @@ function toAgent(r: AgentRow): SharedAgentRecord {
     generation: r.generation,
     name: r.name,
     walletAddress: r.wallet_address,
+    runtimeWalletAddress: r.runtime_wallet_address ?? null,
     runtimeVersion: r.runtime_version,
     runtimeRepo: r.runtime_repo,
     runtimeCommit: r.runtime_commit,
@@ -589,13 +618,24 @@ export class PgFleetStore {
       client.release();
     }
     const roles = await this.pool
-      .query<{ rolname: string }>("SELECT rolname FROM pg_roles WHERE rolname = ANY($1)", [[this.agentRole, this.serviceRole, this.operatorRole, DEFAULT_CUSTODY_ROLE]])
+      .query<{ rolname: string }>("SELECT rolname FROM pg_roles WHERE rolname = ANY($1)", [[this.agentRole, this.serviceRole, this.operatorRole, DEFAULT_CUSTODY_ROLE, DEFAULT_IDENTITY_ROLE, DEFAULT_BROWSER_ROLE, DEFAULT_DASHBOARD_ROLE,
+        DEFAULT_PROVIDER_ROLE, DEFAULT_BANKFEED_ROLE, DEFAULT_CHANNELS_ROLE, DEFAULT_PUSH_ROLE, DEFAULT_MEDIA_ROLE, DEFAULT_CODE_ROLE, DEFAULT_BUILD_ROLE]])
       .catch(() => null);
     const present = new Set(roles?.rows.map((r) => r.rolname) ?? []);
     if (present.has(this.agentRole)) await this.grantAgentRole(this.agentRole);
     if (present.has(this.serviceRole)) await this.grantServiceRole(this.serviceRole);
     if (present.has(this.operatorRole)) await this.grantOperatorRole(this.operatorRole);
     if (present.has(DEFAULT_CUSTODY_ROLE)) await this.grantCustodyRole(DEFAULT_CUSTODY_ROLE);
+    if (present.has(DEFAULT_IDENTITY_ROLE)) await this.grantIdentityRole(DEFAULT_IDENTITY_ROLE);
+    if (present.has(DEFAULT_BROWSER_ROLE)) await this.grantBrowserRole(DEFAULT_BROWSER_ROLE);
+    if (present.has(DEFAULT_DASHBOARD_ROLE)) await this.grantDashboardRole(DEFAULT_DASHBOARD_ROLE);
+    if (present.has(DEFAULT_PROVIDER_ROLE)) await this.grantProtocolRole(DEFAULT_PROVIDER_ROLE, GATEWAY_API_FUNCTIONS, "provider_role_granted");
+    if (present.has(DEFAULT_BANKFEED_ROLE)) await this.grantProtocolRole(DEFAULT_BANKFEED_ROLE, BANKFEED_API_FUNCTIONS, "bankfeed_role_granted");
+    if (present.has(DEFAULT_CHANNELS_ROLE)) await this.grantProtocolRole(DEFAULT_CHANNELS_ROLE, CHANNELS_API_FUNCTIONS, "channels_role_granted");
+    if (present.has(DEFAULT_PUSH_ROLE)) await this.grantProtocolRole(DEFAULT_PUSH_ROLE, PUSH_API_FUNCTIONS, "push_role_granted");
+    if (present.has(DEFAULT_MEDIA_ROLE)) await this.grantProtocolRole(DEFAULT_MEDIA_ROLE, MEDIA_API_FUNCTIONS, "media_role_granted");
+    if (present.has(DEFAULT_CODE_ROLE)) await this.grantProtocolRole(DEFAULT_CODE_ROLE, CODE_API_FUNCTIONS, "code_role_granted");
+    if (present.has(DEFAULT_BUILD_ROLE)) await this.grantProtocolRole(DEFAULT_BUILD_ROLE, BUILD_API_FUNCTIONS, "build_role_granted");
     return applied;
   }
 
@@ -726,6 +766,15 @@ export class PgFleetStore {
   }
 
   /** Operator-only: approve the runtime children must run, with its build identity. Null clears it (blocks all replication). */
+  /**
+   * v44: ONE operational event per production cutover (scripts/fleet-rollout.sh) — what Fleet Command shows instead of
+   * the release's preparation records (approvals, pins, builds stay audit-only). Only these two types are accepted.
+   */
+  async recordProductionEvent(type: "production_deployed" | "production_rolled_back", detail: Record<string, unknown>, actor: string): Promise<void> {
+    if (type !== "production_deployed" && type !== "production_rolled_back") throw new Error("unknown production event");
+    await this.tx(async (c) => { await c.query(`SELECT ${quoteIdent(this.schema)}.fleet_event($1, NULL, $2, $3::jsonb)`, [type, actor, JSON.stringify(detail)]); });
+  }
+
   async setApprovedRuntime(pin: RuntimePin | null, actor: string, build: RuntimeBuild | null = null): Promise<void> {
     await this.tx(async (c) => {
       const prev = await this.lockState(c);
@@ -798,6 +847,8 @@ export class PgFleetStore {
     const r = quoteIdent(role);
     const s = quoteIdent(this.schema);
     await this.tx(async (c) => {
+      // FLEET-KI-1: one migrator/granter at a time (the same advisory lock the migrations hold).
+      await c.query("SELECT pg_advisory_xact_lock($1)", [MIGRATION_LOCK_KEY]);
       const exists = await c.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [role]);
       if (!exists.rowCount) throw new Error(`Role ${role} does not exist (create it with scripts/fleet-db-roles.sql).`);
       await c.query(`REVOKE ALL ON ALL TABLES IN SCHEMA ${s} FROM PUBLIC, ${r}`);
@@ -819,6 +870,8 @@ export class PgFleetStore {
     const r = quoteIdent(role);
     const s = quoteIdent(this.schema);
     await this.tx(async (c) => {
+      // FLEET-KI-1: one migrator/granter at a time (the same advisory lock the migrations hold).
+      await c.query("SELECT pg_advisory_xact_lock($1)", [MIGRATION_LOCK_KEY]);
       const exists = await c.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [role]);
       if (!exists.rowCount) throw new Error(`Role ${role} does not exist (create it with scripts/fleet-db-roles.sql).`);
       await c.query(`REVOKE ALL ON ALL TABLES IN SCHEMA ${s} FROM ${r}`);
@@ -845,6 +898,8 @@ export class PgFleetStore {
     const r = quoteIdent(role);
     const s = quoteIdent(this.schema);
     await this.tx(async (c) => {
+      // FLEET-KI-1: one migrator/granter at a time (the same advisory lock the migrations hold).
+      await c.query("SELECT pg_advisory_xact_lock($1)", [MIGRATION_LOCK_KEY]);
       const exists = await c.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [role]);
       if (!exists.rowCount) throw new Error(`Role ${role} does not exist (create it with scripts/fleet-db-roles.sql).`);
       await c.query(`REVOKE ALL ON ALL TABLES IN SCHEMA ${s} FROM PUBLIC, ${r}`);
@@ -866,6 +921,8 @@ export class PgFleetStore {
     const r = quoteIdent(role);
     const s = quoteIdent(this.schema);
     await this.tx(async (c) => {
+      // FLEET-KI-1: one migrator/granter at a time (the same advisory lock the migrations hold).
+      await c.query("SELECT pg_advisory_xact_lock($1)", [MIGRATION_LOCK_KEY]);
       const exists = await c.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [role]);
       if (!exists.rowCount) throw new Error(`Role ${role} does not exist (create it with scripts/fleet-db-roles.sql).`);
       await c.query(`REVOKE ALL ON ALL TABLES IN SCHEMA ${s} FROM PUBLIC, ${r}`);
@@ -875,6 +932,113 @@ export class PgFleetStore {
       await c.query(`GRANT USAGE ON SCHEMA ${s} TO ${r}`);
       for (const fn of CUSTODY_API_FUNCTIONS) await c.query(`GRANT EXECUTE ON FUNCTION ${s}.${fn} TO ${r}`);
       await this.event(c, "custody_role_granted", null, "operator", { role, functions: [...CUSTODY_API_FUNCTIONS] });
+    });
+  }
+  /** Schema v34: the identity broker's role — USAGE on the schema and EXECUTE on IDENTITY_API_FUNCTIONS only. */
+  async grantIdentityRole(role: string = DEFAULT_IDENTITY_ROLE): Promise<void> {
+    const r = quoteIdent(role);
+    const s = quoteIdent(this.schema);
+    await this.tx(async (c) => {
+      // FLEET-KI-1: one migrator/granter at a time (the same advisory lock the migrations hold).
+      await c.query("SELECT pg_advisory_xact_lock($1)", [MIGRATION_LOCK_KEY]);
+      const exists = await c.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [role]);
+      if (!exists.rowCount) throw new Error(`Role ${role} does not exist (create it with scripts/fleet-db-roles.sql).`);
+      await c.query(`REVOKE ALL ON ALL TABLES IN SCHEMA ${s} FROM PUBLIC, ${r}`);
+      await c.query(`REVOKE ALL ON ALL SEQUENCES IN SCHEMA ${s} FROM PUBLIC, ${r}`);
+      await c.query(`REVOKE ALL ON ALL FUNCTIONS IN SCHEMA ${s} FROM PUBLIC, ${r}`);
+      await c.query(`REVOKE ALL ON SCHEMA ${s} FROM PUBLIC, ${r}`);
+      await c.query(`GRANT USAGE ON SCHEMA ${s} TO ${r}`);
+      for (const fn of IDENTITY_API_FUNCTIONS) await c.query(`GRANT EXECUTE ON FUNCTION ${s}.${fn} TO ${r}`);
+      await this.event(c, "identity_role_granted", null, "operator", { role, functions: [...IDENTITY_API_FUNCTIONS] });
+    });
+  }
+
+  /** Schema v37: the browser worker's role — USAGE on the schema and EXECUTE on BROWSER_API_FUNCTIONS only. */
+  async grantBrowserRole(role: string = DEFAULT_BROWSER_ROLE): Promise<void> {
+    const r = quoteIdent(role);
+    const s = quoteIdent(this.schema);
+    await this.tx(async (c) => {
+      // FLEET-KI-1: one migrator/granter at a time (the same advisory lock the migrations hold).
+      await c.query("SELECT pg_advisory_xact_lock($1)", [MIGRATION_LOCK_KEY]);
+      const exists = await c.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [role]);
+      if (!exists.rowCount) throw new Error(`Role ${role} does not exist (create it with scripts/fleet-db-roles.sql).`);
+      await c.query(`REVOKE ALL ON ALL TABLES IN SCHEMA ${s} FROM PUBLIC, ${r}`);
+      await c.query(`REVOKE ALL ON ALL SEQUENCES IN SCHEMA ${s} FROM PUBLIC, ${r}`);
+      await c.query(`REVOKE ALL ON ALL FUNCTIONS IN SCHEMA ${s} FROM PUBLIC, ${r}`);
+      await c.query(`REVOKE ALL ON SCHEMA ${s} FROM PUBLIC, ${r}`);
+      await c.query(`GRANT USAGE ON SCHEMA ${s} TO ${r}`);
+      for (const fn of BROWSER_API_FUNCTIONS) await c.query(`GRANT EXECUTE ON FUNCTION ${s}.${fn} TO ${r}`);
+      await this.event(c, "browser_role_granted", null, "operator", { role, functions: [...BROWSER_API_FUNCTIONS] });
+    });
+  }
+
+  /** Schema v52: the Gumroad storefront gateway's role — USAGE on the schema and EXECUTE on GATEWAY_API_FUNCTIONS only. */
+  async grantProviderRole(role: string = DEFAULT_PROVIDER_ROLE): Promise<void> {
+    await this.grantProtocolRole(role, GATEWAY_API_FUNCTIONS, "provider_role_granted");
+  }
+
+  /** Schema v52: the bank-feed connector's role — USAGE on the schema and EXECUTE on BANKFEED_API_FUNCTIONS only. */
+  /** Schema v89: the code gateway's role — EXECUTE on CODE_API_FUNCTIONS only. */
+  async grantCodeRole(role: string = DEFAULT_CODE_ROLE): Promise<void> {
+    await this.grantProtocolRole(role, CODE_API_FUNCTIONS, "code_role_granted");
+  }
+  /** Schema v89: the build environment's role — EXECUTE on BUILD_API_FUNCTIONS only. */
+  async grantBuildRole(role: string = DEFAULT_BUILD_ROLE): Promise<void> {
+    await this.grantProtocolRole(role, BUILD_API_FUNCTIONS, "build_role_granted");
+  }
+  /** Schema v85: the media provider gateway's role — EXECUTE on MEDIA_API_FUNCTIONS only. */
+  async grantMediaRole(role: string = DEFAULT_MEDIA_ROLE): Promise<void> {
+    await this.grantProtocolRole(role, MEDIA_API_FUNCTIONS, "media_role_granted");
+  }
+
+  /** Schema v83: the phone-push sender's role — USAGE on the schema and EXECUTE on PUSH_API_FUNCTIONS only. */
+  async grantPushRole(role: string = DEFAULT_PUSH_ROLE): Promise<void> {
+    await this.grantProtocolRole(role, PUSH_API_FUNCTIONS, "push_role_granted");
+  }
+
+  /** Schema v80: the channel gateway's role — USAGE on the schema and EXECUTE on CHANNELS_API_FUNCTIONS only. */
+  async grantChannelsRole(role: string = DEFAULT_CHANNELS_ROLE): Promise<void> {
+    await this.grantProtocolRole(role, CHANNELS_API_FUNCTIONS, "channels_role_granted");
+  }
+
+  async grantBankfeedRole(role: string = DEFAULT_BANKFEED_ROLE): Promise<void> {
+    await this.grantProtocolRole(role, BANKFEED_API_FUNCTIONS, "bankfeed_role_granted");
+  }
+
+  /** A protocol-only role: everything revoked, then USAGE on the schema and EXECUTE on exactly `functions`. */
+  private async grantProtocolRole(role: string, functions: readonly string[], event: string): Promise<void> {
+    const r = quoteIdent(role);
+    const s = quoteIdent(this.schema);
+    await this.tx(async (c) => {
+      await c.query("SELECT pg_advisory_xact_lock($1)", [MIGRATION_LOCK_KEY]);
+      const exists = await c.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [role]);
+      if (!exists.rowCount) throw new Error(`Role ${role} does not exist (create it with scripts/fleet-db-roles.sql).`);
+      await c.query(`REVOKE ALL ON ALL TABLES IN SCHEMA ${s} FROM PUBLIC, ${r}`);
+      await c.query(`REVOKE ALL ON ALL SEQUENCES IN SCHEMA ${s} FROM PUBLIC, ${r}`);
+      await c.query(`REVOKE ALL ON ALL FUNCTIONS IN SCHEMA ${s} FROM PUBLIC, ${r}`);
+      await c.query(`REVOKE ALL ON SCHEMA ${s} FROM PUBLIC, ${r}`);
+      await c.query(`GRANT USAGE ON SCHEMA ${s} TO ${r}`);
+      for (const fn of functions) await c.query(`GRANT EXECUTE ON FUNCTION ${s}.${fn} TO ${r}`);
+      await this.event(c, event, null, "operator", { role, functions: [...functions] });
+    });
+  }
+
+  /** Schema v38: the Admin dashboard's role — USAGE on the schema and EXECUTE on DASHBOARD_API_FUNCTIONS only. */
+  async grantDashboardRole(role: string = DEFAULT_DASHBOARD_ROLE): Promise<void> {
+    const r = quoteIdent(role);
+    const s = quoteIdent(this.schema);
+    await this.tx(async (c) => {
+      // FLEET-KI-1: one migrator/granter at a time (the same advisory lock the migrations hold).
+      await c.query("SELECT pg_advisory_xact_lock($1)", [MIGRATION_LOCK_KEY]);
+      const exists = await c.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [role]);
+      if (!exists.rowCount) throw new Error(`Role ${role} does not exist (create it with scripts/fleet-db-roles.sql).`);
+      await c.query(`REVOKE ALL ON ALL TABLES IN SCHEMA ${s} FROM PUBLIC, ${r}`);
+      await c.query(`REVOKE ALL ON ALL SEQUENCES IN SCHEMA ${s} FROM PUBLIC, ${r}`);
+      await c.query(`REVOKE ALL ON ALL FUNCTIONS IN SCHEMA ${s} FROM PUBLIC, ${r}`);
+      await c.query(`REVOKE ALL ON SCHEMA ${s} FROM PUBLIC, ${r}`);
+      await c.query(`GRANT USAGE ON SCHEMA ${s} TO ${r}`);
+      for (const fn of DASHBOARD_API_FUNCTIONS) await c.query(`GRANT EXECUTE ON FUNCTION ${s}.${fn} TO ${r}`);
+      await this.event(c, "dashboard_role_granted", null, "operator", { role, functions: [...DASHBOARD_API_FUNCTIONS] });
     });
   }
 
@@ -945,7 +1109,10 @@ export class PgFleetStore {
     verify: { ok: boolean; journals: number; unbalanced?: number; firstBadSeq?: number };
     custodyExecutionEnabled: boolean;
     ledgerAuthoritative: boolean;
-    awaitingOwner: number;
+    /** Orders left in the retired owner spend route (v27: a CHECK keeps this at 0). */
+    legacyOwnerRoute: number;
+    /** v27 infrastructure circuit breaker: tripped, and how many relative signals are configured (0 = every signal unset). */
+    circuitBreaker: { tripped: boolean; signals: number };
     reserved: number;
     executing: number;
     pendingDestinations: number;
@@ -961,6 +1128,8 @@ export class PgFleetStore {
         const r = await c.query(
           `SELECT fleet_ledger_verify() AS verify, m.custody_execution_enabled, m.ledger_authoritative,
                   (SELECT count(*) FROM fleet_payment_orders WHERE status = 'awaiting_owner') AS awaiting,
+                  (SELECT jsonb_build_object('tripped', b.tripped, 'signals', num_nonnulls(b.order_wallet_bp, b.velocity_wallet_bp))
+                     FROM fleet_spend_circuit_breaker b WHERE b.id = 1) AS breaker,
                   (SELECT count(*) FROM fleet_payment_orders WHERE status = 'reserved') AS reserved,
                   (SELECT count(*) FROM fleet_payment_orders WHERE status = 'executing') AS executing,
                   (SELECT count(*) FROM fleet_payment_destinations WHERE status = 'pending') AS dst_pending,
@@ -978,7 +1147,8 @@ export class PgFleetStore {
           verify: x.verify,
           custodyExecutionEnabled: x.custody_execution_enabled === true,
           ledgerAuthoritative: x.ledger_authoritative === true,
-          awaitingOwner: Number(x.awaiting),
+          legacyOwnerRoute: Number(x.awaiting),
+          circuitBreaker: { tripped: x.breaker?.tripped === true, signals: Number(x.breaker?.signals ?? 0) },
           reserved: Number(x.reserved),
           executing: Number(x.executing),
           pendingDestinations: Number(x.dst_pending),
@@ -995,16 +1165,44 @@ export class PgFleetStore {
     }
   }
 
-  /** Schema v25 (F1-LIVE-01): owner-request liveness for doctor (admin credential; null before v25 or otherwise). */
-  async ownerRequestsOverview(): Promise<{ staleAfterS: number; pending: number; blockingPending: number; stalePending: number; staleBlocking: number;
-    oldestPendingS: number | null; knowledgePending: number; knowledgeImported: number; oldestKnowledgePendingS: number | null } | null> {
+  /** Schema v26 (F2-A): open external dependencies for doctor — information, never an owner to-do (admin credential). */
+  /** Schema v30 (F2): the economy doctor's findings (INFO / WARN / FAIL); null before v30 or when unreadable. */
+  /** Schema v34: identity broker facts (queue, stale jobs, human-action accounts, owner vault configured, consents). Null before v34. */
+  async identityStatus(): Promise<{ identities: number; accounts: number; queued: number; queuedStale: number; claimedStale: number; humanActionRequired: number;
+    ownerVaultConfigured: boolean; activeConsents: number } | null> {
+    try {
+      return await this.read(async (c) => (await c.query(`SELECT fleet_identity_status() AS j`)).rows[0].j);
+    } catch {
+      return null;
+    }
+  }
+
+  /** Schema v32: custody facts — keyless vs agent-held-key living agents, attested signers, instruction states. Null before v32. */
+  async custodyStatus(): Promise<{ executionEnabled: boolean; livingAgents: number; keylessAgents: number; agentHeldKeys: number; attestedRails: number;
+    liveSigners: number; attestationTtlS: number; instructions: { issued: number; claimed: number; claimedStale: number; settled: number; failed: number } } | null> {
+    try {
+      return await this.read(async (c) => (await c.query(`SELECT fleet_custody_status() AS j`)).rows[0].j);
+    } catch {
+      return null;
+    }
+  }
+
+  async economyHealth(): Promise<{ ok: boolean; warn: boolean; findings: Array<{ severity: "INFO" | "WARN" | "FAIL"; code: string; detail: unknown }> } | null> {
+    try {
+      return await this.read(async (c) => (await c.query(`SELECT fleet_economy_health() AS j`)).rows[0].j);
+    } catch {
+      return null;
+    }
+  }
+
+  async ownerRequestsOverview(): Promise<{ open: number; openByKind: Record<string, number>; constitutionalOpen: number; oldestOpenS: number | null;
+    knowledgePending: number; knowledgeImported: number } | null> {
     try {
       return await this.read(async (c) => {
         const j = (await c.query(`SELECT fleet_owner_requests_overview() AS j`)).rows[0].j as Record<string, unknown>;
-        const n = (v: unknown) => (v === null || v === undefined ? null : Number(v));
-        return { staleAfterS: Number(j.staleAfterS), pending: Number(j.pending), blockingPending: Number(j.blockingPending), stalePending: Number(j.stalePending),
-          staleBlocking: Number(j.staleBlocking), oldestPendingS: n(j.oldestPendingS), knowledgePending: Number(j.knowledgePending),
-          knowledgeImported: Number(j.knowledgeImported ?? 0), oldestKnowledgePendingS: n(j.oldestKnowledgePendingS) };
+        return { open: Number(j.open ?? 0), openByKind: (j.openByKind ?? {}) as Record<string, number>, constitutionalOpen: Number(j.constitutionalOpen ?? 0),
+          oldestOpenS: j.oldestOpenS === null || j.oldestOpenS === undefined ? null : Number(j.oldestOpenS),
+          knowledgePending: Number(j.knowledgePending ?? 0), knowledgeImported: Number(j.knowledgeImported ?? 0) };
       });
     } catch {
       return null;
@@ -1190,7 +1388,9 @@ export class PgFleetStore {
       const r = await c.query<AgentRow>("SELECT * FROM fleet_agents WHERE agent_id = $1", [agentId]);
       const row = r.rows[0];
       if (!row) return { ok: false, code: "FLEET_NOT_REGISTERED", reason: `Agent ${agentId} is not in the fleet registry.` };
-      if (!row.wallet_address || row.wallet_address.toLowerCase() !== walletAddress.toLowerCase()) {
+      // v33: a replicated child's runtime knows its own (runtime) address; its economic identity is the keyless custody one.
+      const mine = [row.wallet_address, row.runtime_wallet_address].filter((x): x is string => !!x).map((x) => x.toLowerCase());
+      if (!mine.includes(walletAddress.toLowerCase())) {
         return { ok: false, code: "FLEET_IDENTITY_MISMATCH", reason: "Wallet does not match the registered agent." };
       }
       if (row.status !== "active" && row.status !== "unresponsive") {
@@ -1753,6 +1953,14 @@ export class PgFleetStore {
     return this.tx(async (c) => (await c.query("SELECT svc_cognition_routed_authorize($1, $2, $3, $4) AS r", [agentId, estimateUsdCents, JSON.stringify(route), promptSha256])).rows[0].r);
   }
 
+  /**
+   * Schema v62: a model call inside an owner conversation turn. The treasury pays while the turn is this founder's,
+   * open and within its anti-abuse bound; otherwise exactly cognitionRoutedAuthorize (the founder pays).
+   */
+  async cognitionConversationAuthorize(agentId: string, estimateUsdCents: number, route: Record<string, unknown>, promptSha256: string, turnId: string): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_cognition_conversation_authorize($1, $2, $3, $4, $5) AS r", [agentId, estimateUsdCents, JSON.stringify(route), promptSha256, turnId])).rows[0].r);
+  }
+
   /** Schema v22: record a routed call at its snapshot prices, with routing observability. */
   async cognitionRoutedRecord(agentId: string, requestId: string, r: CognitionRecord, obs: { packetBytes?: number | null; thinkingTokens?: number | null; promptCache?: string | null; cacheReason?: string | null }): Promise<Record<string, unknown> & { ok: boolean }> {
     return this.tx(async (c) =>
@@ -1762,6 +1970,13 @@ export class PgFleetStore {
         r.cacheReadTokens ?? 0, r.cacheWriteTokens ?? 0, r.providerRequestId ?? null, r.stopReason ?? null, JSON.stringify(obs),
       ])).rows[0].r,
     );
+  }
+
+  /** Schema v31: the spend boundary with context (category, destination, recoverable value). */
+  async actionCognitionVerifyCtx(agentId: string, actionClass: string, amountMinor: number | null, category: string | null, destinationId: string | null,
+    recoverableMinor: number | null, toolCallId: string | null, actionSha256: string | null): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_action_cognition_verify_ctx($1, $2, $3, $4, $5, $6, $7, $8) AS r",
+      [agentId, actionClass, amountMinor, category, destinationId, recoverableMinor, toolCallId, actionSha256])).rows[0].r);
   }
 
   /** Schema v22: consequential-action boundary (single-use link to the producing cognition call at the class's minimum tier). */
@@ -1866,9 +2081,156 @@ export class PgFleetStore {
       [experimentId, attemptId, verdict, tier, reason, JSON.stringify(refs), JSON.stringify(calls)])).rows[0].r);
   }
 
+  /** Schema v64: Fleet Control spend reviews due now (claimed for this worker), with the tiers the reviewer may use. */
+  async spendReviewsClaim(limit: number, worker: string): Promise<Record<string, unknown>> {
+    return this.tx(async (c) => (await c.query("SELECT svc_spend_reviews_claim($1, $2) AS r", [limit, worker])).rows[0].r);
+  }
+
+  /** Schema v64: the reviewer's answer (a hold needs a category, reason and evidence; anything else clears) and its call cost. */
+  async spendReviewRecord(reviewId: string, worker: string, result: Record<string, unknown>): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_spend_review_record($1, $2, $3) AS r", [reviewId, worker, JSON.stringify(result)])).rows[0].r);
+  }
+
+  /** Schema v65: shared-lesson proposals due for Fleet Control review (claimed for this worker). */
+  async knowledgeProposalsClaim(limit: number, worker: string): Promise<Record<string, unknown>> {
+    return this.tx(async (c) => (await c.query("SELECT svc_knowledge_proposals_claim($1, $2) AS r", [limit, worker])).rows[0].r);
+  }
+
+  /** Schema v65: the shared-lesson reviewer's decision (promote / reject with reason) and its call cost. */
+  async knowledgeReviewRecord(proposalId: string, worker: string, result: Record<string, unknown>): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_knowledge_review_record($1, $2, $3) AS r", [proposalId, worker, JSON.stringify(result)])).rows[0].r);
+  }
+
+  /** Schema v65: a failed shared-lesson review attempt (bounded retry; never a decision). */
+  async knowledgeReviewFailed(proposalId: string, worker: string, error: string, calls: unknown[]): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_knowledge_review_failed($1, $2, $3, $4) AS r", [proposalId, worker, error, JSON.stringify(calls)])).rows[0].r);
+  }
+
+  /** Schema v64: a failed review attempt (bounded retry with backoff; never an approval). */
+  async spendReviewFailed(reviewId: string, worker: string, error: string, calls: unknown[]): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_spend_review_failed($1, $2, $3, $4) AS r", [reviewId, worker, error, JSON.stringify(calls)])).rows[0].r);
+  }
+
   /** Schema v24: expire experiment proposals/approvals and conclude experiments past their run window. Returns the count. */
   async reapExperiments(limit = 50): Promise<number> {
     return this.tx(async (c) => Number((await c.query<{ n: number }>("SELECT svc_experiment_reap($1) AS n", [limit])).rows[0].n));
+  }
+
+  /** Schema v30 (F2): envelope expiry, stop-loss and ledger-verified milestones for every active execution envelope. */
+  async reapCapital(limit = 100): Promise<{ evaluated: number; changed: number }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_capital_reap($1) AS r", [limit])).rows[0].r);
+  }
+
+  /** Schema v35: the economy engine's passes — replication window (births only when every switch is on), missions, estates, notifications. */
+  async engineTick(realReplicationEnabled: boolean): Promise<{ replication: Record<string, unknown>; missions: Record<string, unknown>;
+    estates: Record<string, unknown>; notifications: Record<string, unknown>; comms: Record<string, unknown> }> {
+    return this.tx(async (c) => ({
+      replication: (await c.query("SELECT svc_replication_tick($1) AS r", [realReplicationEnabled])).rows[0].r,
+      missions: (await c.query("SELECT svc_mission_tick() AS r")).rows[0].r,
+      estates: (await c.query("SELECT svc_estate_tick(20) AS r")).rows[0].r,
+      notifications: (await c.query("SELECT svc_notify_tick() AS r")).rows[0].r,
+      // v41: number rental / usage charged to their agents; unpaid, idle and dead-agent numbers (a no-op while SMS is dormant).
+      comms: (await c.query("SELECT svc_comms_tick(50) AS r")).rows[0].r,
+    }));
+  }
+
+  /** Schema v45: expire routine event copies and diagnostics past their retention (the guard trigger refuses anything else). */
+  /** v83: the hourly operations watch — health findings, overdue paid orders and low AI credit become notifications. */
+  async operationsWatch(): Promise<{ ok: boolean; raised: number }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_operations_watch() AS r")).rows[0].r);
+  }
+
+  /** v96: Fleet Control's hard daily AI ceiling — reserve a paid call's bounded maximum (USD microcents) before it is made. */
+  async controlAiReserve(kind: "spend_review" | "knowledge_review" | "evidence_relevance", ref: string, maxUsdMicrocents: number): Promise<Record<string, unknown>> {
+    return this.tx(async (c) => (await c.query("SELECT svc_fleet_control_ai_reserve($1, $2, $3) AS r", [kind, ref, Math.ceil(maxUsdMicrocents)])).rows[0].r);
+  }
+  /** v96: settle a reservation at the call's actual cost (null: unknown — the maximum keeps counting). */
+  async controlAiSettle(reservationId: string, actualUsdMicrocents: number | null): Promise<Record<string, unknown>> {
+    return this.tx(async (c) => (await c.query("SELECT svc_fleet_control_ai_settle($1, $2) AS r", [reservationId, actualUsdMicrocents === null ? null : Math.ceil(actualUsdMicrocents)])).rows[0].r);
+  }
+
+  async eventRetention(): Promise<{ eventsExpired: number; suppressionExpired: number; mailCleared?: number; mailFreedBytes?: number }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_event_retention() AS r")).rows[0].r);
+  }
+
+  /** Schema v30 (F2): FleetController's tax true-up pass (reserves follow the estimated liability; over-reserve released). */
+  async taxTrueUp(limit = 100): Promise<Record<string, unknown>> {
+    return this.tx(async (c) => (await c.query("SELECT svc_tax_true_up($1) AS r", [limit])).rows[0].r);
+  }
+
+  /** Schema v30 (F2): one Treasury sweep pass for a period (a no-op returning {enabled:false} until an operator enables sweeps). */
+  async sweepRun(period: string): Promise<Record<string, unknown>> {
+    return this.tx(async (c) => (await c.query("SELECT svc_sweep_run($1) AS r", [period])).rows[0].r);
+  }
+
+  /**
+   * Schema v29 (F2): the rail adapter reports one external transaction. Idempotent per (rail, external id, kind); a
+   * transaction not attributable to a venture assignment stays UNATTRIBUTED for reconciliation (never guessed).
+   */
+  async settlementIngest(t: { railId: string; externalId: string; kind: "sale" | "refund"; grossMinor: number; feeMinor: number; currency: string;
+    ventureId: string | null; occurredAt: string; payloadSha256: string; counterpartySha256: string | null }): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_settlement_ingest($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) AS r",
+      [t.railId, t.externalId, t.kind, t.grossMinor, t.feeMinor, t.currency, t.ventureId, t.occurredAt, t.payloadSha256, t.counterpartySha256])).rows[0].r);
+  }
+
+  /** Schema v29 (F2): the credential broker's audit of one credential use (never the secret). */
+  async credentialUse(credentialId: string, action: string, agentId: string | null, ventureId: string | null, outcome: "ok" | "refused" | "failed", detail: string | null): Promise<{ ok: boolean; status?: string; code?: string }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_credential_use($1, $2, $3, $4, $5, $6) AS r", [credentialId, action, agentId, ventureId, outcome, detail])).rows[0].r);
+  }
+
+  /** Schema v48: store one PayPal webhook as received (unverified; the custody executor verifies it with PayPal). */
+  async paypalWebhookReceive(eventId: string, eventType: string, resourceId: string | null, headers: Record<string, string>, body: string):
+    Promise<{ ok: boolean; duplicate?: boolean; code?: string }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_paypal_webhook_receive($1, $2, $3, $4, $5) AS r",
+      [eventId, eventType, resourceId, JSON.stringify(headers), body])).rows[0].r);
+  }
+
+  /** Schema v48: issue every reserved agent order the four keys allow (a no-op returning {enabled:false} without an activation). */
+  async issueDueInstructions(limit = 50): Promise<{ ok: boolean; enabled: boolean; issued: number; waiting?: Record<string, number> }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_issue_due_instructions($1) AS r", [limit])).rows[0].r);
+  }
+
+  /** Schema v48: an expired (or ended) owner custody activation switches custody off. */
+  async custodyActivationExpire(): Promise<{ ok: boolean; active: boolean; expired?: string }> {
+    return this.tx(async (c) => (await c.query("SELECT svc_custody_activation_expire() AS r")).rows[0].r);
+  }
+
+  /**
+   * Schema v49–v51: undeclared card holds, held PayPal captures that PayPal now shows available, deaths on wallet exhaustion
+   * and lapsed sweep reductions — each pass in its own transaction, in that order (money that became available is seen
+   * before exhaustion is judged).
+   */
+  async lifecycleTick(): Promise<{ cardHolds: Record<string, unknown>; availability: Record<string, unknown>; settlement: Record<string, unknown>;
+    insolvency: Record<string, unknown>; reductions: Record<string, unknown>; cardStatement: Record<string, unknown>; cardRequests: Record<string, unknown>;
+    deliveries: Record<string, unknown>; aiCredits: Record<string, unknown>; offers: Record<string, unknown> }> {
+    // v56: each pass is isolated — one failing pass is reported in its own result and never skips the passes after it.
+    const one = (sql: string) => this.tx(async (c) => (await c.query(sql)).rows[0].r as Record<string, unknown>)
+      .catch((err: unknown) => ({ ok: false, error: (err instanceof Error ? err.message : String(err)).slice(0, 200) }) as Record<string, unknown>);
+    return {
+      cardHolds: await one("SELECT svc_card_holds_expire(50) AS r"),
+      availability: await one("SELECT svc_paypal_availability(200) AS r"),
+      // v52: Gumroad payouts received in the PayPal treasury, matched from PayPal's own records.
+      settlement: await one("SELECT svc_settlement_paypal_match(50) AS r"),
+      insolvency: await one("SELECT svc_insolvency_tick() AS r"),
+      reductions: await one("SELECT svc_sweep_reductions_expire() AS r"),
+      // v53: the weekly card statement, at the owner's weekday and hour.
+      cardStatement: await one("SELECT svc_card_statement_tick() AS r"),
+      // v54: card requests past their time expire.
+      cardRequests: await one("SELECT svc_card_requests_expire() AS r"),
+      // v56: failed order deliveries are sent again with back-off.
+      deliveries: await one("SELECT svc_order_deliveries_retry(20) AS r"),
+      // v70: AI credit drawn from treasury-funded lots leaves the owner payable (whole pence; used-up lots settled).
+      aiCredits: await one("SELECT svc_ai_credit_settle(20) AS r"),
+      // v76: paid products delivered from their reviewed files; enquiry and retention housekeeping.
+      offers: await one("SELECT svc_offer_tick(20) AS r"),
+    };
+  }
+
+  /** v76: the public offer / order pages' reads and buyer actions (service role; arguments validated by each function). */
+  async publicCall(fn: PublicPageFunction, args: unknown[]): Promise<Record<string, unknown>> {
+    if (!PUBLIC_PAGE_FUNCTIONS.includes(fn)) throw new Error("not a public page function");
+    const ph = args.map((_, i) => `$${i + 1}`).join(", ");
+    return this.tx(async (c) => (await c.query(`SELECT ${fn}(${ph}) AS r`, args.map((a) => (a !== null && typeof a === "object" ? JSON.stringify(a) : a)))).rows[0].r as Record<string, unknown>);
   }
 
   /** Schema v10: expire payment orders past their TTL (releases their reservations). Returns the count. */
@@ -2045,3 +2407,24 @@ export class PgFleetStore {
     });
   }
 }
+
+/** v76: the public page functions the controller may call (each is a service-role SECURITY DEFINER function). */
+export const PUBLIC_PAGE_FUNCTIONS = ["svc_offer_page", "svc_offer_preview", "svc_offer_buy", "svc_offer_enquire", "svc_enquiry_page", "svc_order_page",
+  "svc_order_file", "svc_customer_message",
+  // v97: the order page's preview images and deliverable contents.
+  "svc_order_sample",
+  // v98: the buyer is ready to pay.
+  "svc_order_pay",
+  // v99: the buyer back from PayPal.
+  "svc_order_returned",
+  // v79: a channel's attribution code on the order / enquiry it brought; the outreach opt-out page.
+  "svc_attribute", "svc_outreach_optout",
+  // v80: search discovery (sitemap, IndexNow key) — read only.
+  "svc_sitemap", "svc_indexnow_key",
+  // v82: the buyer's consent to immediate supply, given on the order page.
+  "svc_order_consent",
+  // v89: the customer's consent to repository access, on their own enquiry / order page.
+  "svc_repo_requests", "svc_repo_consent",
+  // v108: the buyer's country, before paying.
+  "svc_order_country"] as const;
+export type PublicPageFunction = (typeof PUBLIC_PAGE_FUNCTIONS)[number];

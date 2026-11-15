@@ -69,6 +69,10 @@ LFC is the `fleet:profit` balance.
 
 ## E5. Spend-request state machine
 
+> **LEGACY (retired at schema v27).** The owner threshold, the agent daily limit and the `awaiting_owner` state below
+> no longer apply to own-capital spending: an own-capital order is reserved or refused on custody alone, and the
+> state is unreachable. See `docs/design/f2-autonomous-economy.md` §24.
+
 ```
 requested → awaiting_owner | reserved | rejected
 awaiting_owner → reserved | rejected | cancelled | expired

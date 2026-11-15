@@ -29,6 +29,7 @@ const scrub = (s: string) => (scrubKey ? s.split(scrubKey).join("[REDACTED]") : 
 
 async function readStdin(): Promise<string> {
   let s = "";
+  process.stdin.setEncoding("utf8");   // a multi-byte character split across chunks stays intact
   for await (const chunk of process.stdin) {
     s += chunk;
     if (s.length > MAX_STDIN) throw new Error("request too large");

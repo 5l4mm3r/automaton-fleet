@@ -6,7 +6,8 @@
  * opportunity count or any other commercial history: cognition is routed by task, capital is allocated by proposal
  * (a separate system). Tier semantics are stable; which model serves a tier is policy data (fleet_cognition_tiers).
  *
- *   T0 deterministic software (no inference)   T1 routine   T2 standard autonomous work   T3 critical
+ *   T0 deterministic software (no inference)   T1 routine   T2 standard autonomous work   T3 critical — and every step of a
+ *   founder's own work (founder_work, 2026-10-20)
  *
  * Rules:
  *   - every task class has a deterministic [minTier, maxTier]; T0 classes are never sent to a model;
@@ -66,6 +67,10 @@ export const TASK_CLASSES: Readonly<Record<string, TaskClassSpec>> = Object.free
   strategy_preparation: { minTier: "T2", maxTier: "T3", description: "strategy preparation" },
   capital_request_preparation: { minTier: "T2", maxTier: "T3", description: "capital-request preparation" },
   // T3 — critical.
+  // 2026-10-20 (owner): a founder's own work is what its customers receive — the products it builds, revises and checks,
+  // its offers, deliveries and replies. Every step of it runs on the most capable tier with deep reasoning: work done on a
+  // lesser model comes back as a refund. (Before: agent_step, T2; Opus only for one escalated question, which stays so.)
+  founder_work: { minTier: "T3", maxTier: "T3", deep: true, description: "a founder's own multistep work (what its customers receive)" },
   evidence_conflict_resolution: { minTier: "T3", maxTier: "T3", deep: true, description: "conflicting high-quality evidence" },
   failure_diagnosis: { minTier: "T3", maxTier: "T3", deep: true, description: "difficult failure diagnosis" },
   strategic_pivot: { minTier: "T3", maxTier: "T3", description: "materially consequential strategic pivot" },
@@ -102,7 +107,24 @@ export interface RouteRequest {
   escalation?: { reasonCode: string; requestedTier: Tier; parentRequestId?: string };
   /** The consequential action this output may directly lead to (router-forced minimum). */
   actionClass?: string;
+  /**
+   * v82: a helper call's own record — what kind of helper call it is and what the agent says it is FOR. Observability only
+   * (the Virtual station's specialist desks): it never influences the tier or the price.
+   */
+  helper?: { kind: HelperCallKind; purpose: HelperPurpose };
 }
+
+/** v82: the helper calls a founder makes besides its own steps. */
+export const HELPER_CALL_KINDS = Object.freeze(["routine", "escalation", "review"] as const);
+export type HelperCallKind = (typeof HELPER_CALL_KINDS)[number];
+/** v82: what a helper call is for, as the agent records it (a routine chore names one of the first four). */
+export const ROUTINE_PURPOSES = Object.freeze(["research", "marketing", "production", "customer_support"] as const);
+export const HELPER_PURPOSES = Object.freeze([...ROUTINE_PURPOSES, "quality_review", "decision"] as const);
+export type HelperPurpose = (typeof HELPER_PURPOSES)[number];
+/** Which purposes each kind may carry (an escalation is a decision; an independent review is a quality review). */
+const HELPER_KIND_PURPOSES: Readonly<Record<HelperCallKind, readonly string[]>> = Object.freeze({
+  routine: ROUTINE_PURPOSES, escalation: ["decision"], review: ["quality_review"],
+});
 
 export interface RouteDecision {
   tier: Tier;
@@ -129,7 +151,7 @@ export class RouteError extends Error {
   }
 }
 
-const ALLOWED_KEYS = new Set(["taskClass", "taskId", "escalation", "actionClass"]);
+const ALLOWED_KEYS = new Set(["taskClass", "taskId", "escalation", "actionClass", "helper"]);
 const ALLOWED_ESCALATION_KEYS = new Set(["reasonCode", "requestedTier", "parentRequestId"]);
 const UUIDISH = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -159,6 +181,14 @@ export function parseRouteRequest(raw: unknown): RouteRequest {
     if (typeof e.requestedTier !== "string" || !(TIER_ORDER as readonly string[]).includes(e.requestedTier) || e.requestedTier === "T0") throw new RouteError("FLEET_ROUTE_INVALID", "requestedTier must be T1..T3");
     if (e.parentRequestId !== undefined && (typeof e.parentRequestId !== "string" || !UUIDISH.test(e.parentRequestId))) throw new RouteError("FLEET_ROUTE_INVALID", "parentRequestId must be a request id");
     out.escalation = { reasonCode: e.reasonCode, requestedTier: e.requestedTier as Tier, ...(typeof e.parentRequestId === "string" ? { parentRequestId: e.parentRequestId } : {}) };
+  }
+  if (x.helper !== undefined) {
+    const h = x.helper as Record<string, unknown>;
+    if (!h || typeof h !== "object" || Array.isArray(h) || Object.keys(h).some((k) => k !== "kind" && k !== "purpose")) throw new RouteError("FLEET_ROUTE_INVALID", "helper is { kind, purpose }");
+    if (typeof h.kind !== "string" || !(HELPER_CALL_KINDS as readonly string[]).includes(h.kind)) throw new RouteError("FLEET_ROUTE_INVALID", "helper.kind is routine, escalation or review");
+    if (typeof h.purpose !== "string" || !HELPER_KIND_PURPOSES[h.kind as HelperCallKind].includes(h.purpose)) throw new RouteError("FLEET_ROUTE_INVALID", `helper.purpose for ${h.kind}: ${HELPER_KIND_PURPOSES[h.kind as HelperCallKind].join(", ")}`);
+    if (h.kind === "escalation" && !out.escalation) throw new RouteError("FLEET_ROUTE_INVALID", "an escalation helper record needs the escalation itself");
+    out.helper = { kind: h.kind as HelperCallKind, purpose: h.purpose as HelperPurpose };
   }
   return out;
 }
@@ -212,7 +242,7 @@ export function route(req: RouteRequest): RouteDecision {
 /** A tier's configured candidate (a row of fleet_cognition_tiers). */
 export interface TierCandidate {
   tier: Tier;
-  provider: "anthropic";
+  provider: "anthropic" | "local";
   model: string;
   thinking: "adaptive" | null;
   effort: "low" | "medium" | "high" | "max" | null;

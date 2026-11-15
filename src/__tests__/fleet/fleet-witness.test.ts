@@ -92,6 +92,8 @@ describe("Fleet security: witness route policy (default deny)", () => {
     expect(served).toEqual(Object.keys(ROUTE_POLICY).sort());
     // Every non-public route authenticates.
     for (const [k, p] of Object.entries(ROUTE_POLICY)) if (k !== "GET /v1/health") expect(p.auth, k).not.toBe("public");
+    // v48: exactly one provider webhook (PayPal's signed delivery, verified by custody, never acted on by the controller).
+    expect(Object.entries(ROUTE_POLICY).filter(([, p]) => p.auth === "provider_webhook").map(([k]) => k)).toEqual(["POST /v1/webhooks/paypal"]);
   });
 
   it("witness is opt-in: exactly session, heartbeat, health challenge and self", () => {
@@ -109,7 +111,7 @@ describe("Fleet security: witness route policy (default deny)", () => {
       const [m, p] = k.split(" ");
       expect(routeDecision(m, p, "full"), k).toBe("allow");
       // genesis_attest is authenticated by its own one-time token in the database, never by an agent scope.
-      const open = ROUTE_POLICY[k].auth === "public" || ROUTE_POLICY[k].auth === "genesis_attest";
+      const open = ROUTE_POLICY[k].auth === "public" || ROUTE_POLICY[k].auth === "genesis_attest" || ROUTE_POLICY[k].auth === "provider_webhook";
       expect(routeDecision(m, p, "observer"), k).toBe(open ? "allow" : "deny");
       expect(routeDecision(m, p, "witness"), k).toBe(open || ROUTE_POLICY[k].witness ? "allow" : "deny");
     }
@@ -427,10 +429,10 @@ describe.skipIf(!PG_BIN)("Fleet security financial: witness capability scope (Po
       [ulid(), `0x${randomBytes(20).toString("hex")}`],
     );
     // v8 (Operator API), v9 (D3 actions) v10 (Phase E ledger), v11 (Phase F Genesis) and v12 (F.1 founder runtimes), all additive, now follow v7 in the same migration run.
-    expect((await store.migrateCheck())).toEqual({ currentVersion: 6, resultingVersion: 25, wouldApply: [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25] });
-    expect(await store.migrate()).toEqual([7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]);
-    expect(FLEET_PG_SCHEMA_VERSION).toBe(25);
-    expect((await store.health()).schemaVersion).toBe(25);
+    expect((await store.migrateCheck())).toEqual({ currentVersion: 6, resultingVersion: FLEET_PG_SCHEMA_VERSION, wouldApply: Array.from({ length: FLEET_PG_SCHEMA_VERSION - 7 + 1 }, (_, i) => 7 + i) });
+    expect(await store.migrate()).toEqual(Array.from({ length: FLEET_PG_SCHEMA_VERSION - 7 + 1 }, (_, i) => 7 + i));
+    expect(FLEET_PG_SCHEMA_VERSION).toBe(FLEET_PG_SCHEMA_VERSION);
+    expect((await store.health()).schemaVersion).toBe(FLEET_PG_SCHEMA_VERSION);
     const scopes = await ownerRaw.query(`SELECT capability_scope FROM ${schema}.fleet_agents`);
     expect(scopes.rows.map((r) => r.capability_scope)).toEqual(["full"]);
     expect((await store.auditPrivileges()).problems).toEqual([]);
@@ -528,6 +530,23 @@ describe.skipIf(!PG_BIN)("Fleet security financial: witness capability scope (Po
     expect(r.status).toBe(401);
   });
 
+  // 2026-10-23 (run scen-89d7c21-b1): a cognition step carrying a view_image image is larger than 64 KB. A session the
+  // database accepted may send one (the economy's limit); without one the 64 KB limit stands.
+  it("a cognition step with an image is read in full from an accepted session, refused at 64 KB without one", async () => {
+    await reset(2);
+    const w = await enrollWitness();
+    const s = await openSession(w.token);
+    const big = { messages: [{ role: "user", content: "look" }, { role: "assistant", content: "", toolCalls: [{ id: "t1", name: "view_image", arguments: { path: "p.png" } }] },
+      { role: "tool", toolCallId: "t1", content: "shown", images: [{ mediaType: "image/png", dataB64: "A".repeat(400_000) }] }] };
+    // Refused unread: a 413, or the connection cut while the client is still sending (the server stops reading at the limit).
+    const refusedUnread = (p: Promise<{ status: number }>) => p.then((r) => r.status, (e: Error & { cause?: { code?: string } }) => (e.cause?.code === "ECONNRESET" || e.cause?.code === "EPIPE" ? 413 : Promise.reject(e)));
+    expect((await call(s, "POST", "/v1/heartbeat", {})).status).toBe(200);                                     // accepted (a founder heartbeats first)
+    expect(await call(s, "POST", "/v1/cognition/infer", big)).toMatchObject({ status: 403, json: { code: "FLEET_SCOPE_DENIED" } });   // read, then the witness's scope
+    const s2 = await openSession(w.token);
+    expect(await refusedUnread(call(s2, "POST", "/v1/cognition/infer", big))).toBe(413);                 // a session not yet accepted by the database
+    expect(await refusedUnread(fetch(`${url}/v1/cognition/infer`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(big) }))).toBe(413);
+  });
+
   // 9, 18, 19, 20, 25: every other route is denied before any side effect
   it("every other authenticated /v1 route is denied for the witness (403 FLEET_SCOPE_DENIED), with no side effect and an audit event without secrets", async () => {
     await reset(2);
@@ -568,11 +587,14 @@ describe.skipIf(!PG_BIN)("Fleet security financial: witness capability scope (Po
       "POST /v1/experiments/start": { experimentId: "00000000-0000-4000-8000-000000000000" },
       "POST /v1/experiments/record": { experimentId: "00000000-0000-4000-8000-000000000000", idempotencyKey: "witness:rec-00001", kind: "step" },
       "POST /v1/experiments/list": { limit: 5 },
-      "POST /v1/owner-requests/create": { idempotencyKey: "witness:own-00001", category: "other", goalRef: null, title: "x", detail: "x", blocking: false },
+      "POST /v1/owner-requests/create": { idempotencyKey: "witness:own-00001", kind: "kyc", action: "x", goalRef: null, title: "x", detail: "x" },
       "POST /v1/owner-requests/withdraw": { requestId: "00000000-0000-4000-8000-000000000000" },
       "POST /v1/owner-requests/list": {},
+      "POST /v1/economy": { op: "wallet", args: {} },
     };
-    const denied = Object.entries(ROUTE_POLICY).filter(([, p]) => p.auth !== "public" && p.auth !== "genesis_attest" && !p.witness).map(([k]) => k).sort();
+    // v48: the provider webhook names no agent (stored unverified, grants nothing), so no agent scope applies to it either.
+    const denied = Object.entries(ROUTE_POLICY).filter(([, p]) => p.auth !== "public" && p.auth !== "genesis_attest" && p.auth !== "provider_webhook" && !p.witness)
+      .map(([k]) => k).sort();
     // The founder attestation route accepts no session at all (the witness's signed session is simply unauthenticated there).
     const ga = await call(s, "POST", "/v1/genesis/runtime-evidence", {});
     expect(ga.status).toBe(401);

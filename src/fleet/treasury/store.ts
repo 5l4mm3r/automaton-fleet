@@ -174,15 +174,23 @@ export class PgTreasuryStore {
     );
   }
 
-  async addObligation(o: { agentId: string; description: string; amountCents: number; dueAt: Date }, approvedBy: string): Promise<string> {
+  /** Schema v27: a `tax_reserve` obligation is protected like any obligation and named precisely (FLEET_TAX_RESERVE) by custody. */
+  async addObligation(o: { agentId: string; description: string; amountCents: number; dueAt: Date; category?: "obligation" | "tax_reserve" }, approvedBy: string): Promise<string> {
     const id = ulid();
     await this.tx(async (c) => {
       await c.query("SELECT fleet_require_operator_approver($1, $2)", [approvedBy, o.agentId]);
-      await c.query(
-        "INSERT INTO fleet_obligations (obligation_id, agent_id, description, amount_cents, due_at, approved_by) VALUES ($1, $2, $3, $4, $5, $6)",
-        [id, o.agentId, o.description, o.amountCents, o.dueAt, approvedBy],
-      );
-      await this.event(c, "obligation_approved", o.agentId, approvedBy, { obligationId: id, amountCents: o.amountCents });
+      if (o.category === "tax_reserve") {
+        await c.query(
+          "INSERT INTO fleet_obligations (obligation_id, agent_id, description, amount_cents, due_at, approved_by, category) VALUES ($1, $2, $3, $4, $5, $6, 'tax_reserve')",
+          [id, o.agentId, o.description, o.amountCents, o.dueAt, approvedBy],
+        );
+      } else {
+        await c.query(
+          "INSERT INTO fleet_obligations (obligation_id, agent_id, description, amount_cents, due_at, approved_by) VALUES ($1, $2, $3, $4, $5, $6)",
+          [id, o.agentId, o.description, o.amountCents, o.dueAt, approvedBy],
+        );
+      }
+      await this.event(c, "obligation_approved", o.agentId, approvedBy, { obligationId: id, amountCents: o.amountCents, category: o.category ?? "obligation" });
     });
     return id;
   }

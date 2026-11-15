@@ -1,0 +1,83 @@
+# Automaton Fleet identity broker — schema v34 (agent operational identity + owner identity vault).
+#
+# NOT INSTALLED by default: provisioning needs an owner-approved host step (system user, DB role, keys; runbook
+# "Identity broker provisioning"). Runs dist/fleet/identity/main.js from the pinned release as its own system user
+# (automaton-fleet-identity, in no other group). It is the ONLY process holding agent account credentials (encrypted,
+# agent+account bound) and the owner identity vault (sealed to its key); it executes identity jobs agents queue and
+# reports statuses. Agents, FleetController, the custody executor, the operator API and the bridges cannot read its
+# state (0700 StateDirectory, own uid). Database: fleet_identity_login (ix_* only), from identity.env.
+#
+# Network (v36): outbound to the configured providers' public HTTPS APIs (mail, numbers/SMS) plus loopback PostgreSQL.
+# Private, link-local and metadata ranges are denied (no SSRF into the host or the provider's internal network). No
+# listener, no inbound webhook: the broker polls. v41: Proton Mail Bridge is reached on LOOPBACK only (IPAddressAllow=localhost).
+# Provider credentials: encrypted in <state>/provider-vault (main.js provider-secret-set <name>, from stdin).
+# Communications are DORMANT unless identity.env names a provider (owner decision 2026-10-02): no mailbox, no number.
+
+[Unit]
+Description=Automaton Fleet identity broker (agent account credentials and owner identity vault; no listener)
+Wants=postgresql.service
+After=postgresql.service automaton-fleet.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=automaton-fleet-identity
+Group=automaton-fleet-identity
+SupplementaryGroups=
+WorkingDirectory=/opt/automaton-fleet/current
+ExecStart=/opt/automaton-fleet/node/bin/node dist/fleet/identity/main.js
+EnvironmentFile=/etc/automaton-fleet/identity.env
+Environment=NODE_ENV=production
+Environment=FLEET_IDENTITY_EXPECTED_USER=automaton-fleet-identity
+Environment=FLEET_IDENTITY_STATE_DIR=/var/lib/automaton-fleet-identity
+# Providers (only when the owner activates them; unset = NOT CONFIGURED):
+#   FLEET_MAIL_PROVIDER=proton-bridge FLEET_MAIL_ADDRESS=<shared Proton address>  (deploy/proposed/proton-bridge/README.md)
+#   FLEET_SMS_PROVIDER=twilio                                                      (secret "twilio": a scoped API key)
+#   optional/future: FLEET_MAIL_PROVIDER=mailgun FLEET_MAIL_DOMAIN=… [FLEET_MAIL_API_BASE=https://api.eu.mailgun.net]
+StateDirectory=automaton-fleet-identity
+StateDirectoryMode=0700
+UMask=0077
+
+Restart=on-failure
+RestartSec=10s
+TimeoutStopSec=15s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=automaton-fleet-identity
+
+IPAddressAllow=localhost
+IPAddressDeny=0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 169.254.0.0/16 172.16.0.0/12 192.0.0.0/24 192.168.0.0/16 198.18.0.0/15 224.0.0.0/4 240.0.0.0/4
+IPAddressDeny=fc00::/7 fe80::/10 ff00::/8
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+InaccessiblePaths=-/etc/automaton-fleet/admin.env -/etc/automaton-fleet/service.env -/etc/automaton-fleet/operator.env -/etc/automaton-fleet/custody.env -/etc/automaton-fleet/tls -/etc/automaton-fleet/cognition.key
+InaccessiblePaths=-/home -/var/lib/automaton-fleet -/var/lib/automaton-fleet-custody -/var/lib/automaton-fleet-witness -/var/lib/private/automaton-founders -/var/log/automaton-fleet -/run/credentials -/var/lib/automaton-fleet-mailbridge
+# v52: the storefront gateway's database credential and token vault.
+InaccessiblePaths=-/etc/automaton-fleet/gumroad.env -/var/lib/automaton-fleet-gumroad
+
+[Install]
+WantedBy=multi-user.target

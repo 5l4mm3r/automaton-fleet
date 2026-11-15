@@ -34,6 +34,8 @@ ReadWritePaths=/home/automaton-agent
 ProtectHome=tmpfs
 BindPaths=/home/automaton-agent
 InaccessiblePaths=/etc/automaton-fleet -/var/log/automaton-fleet -/var/lib/automaton-fleet
+# v52: the storefront gateway's database credential and token vault.
+InaccessiblePaths=-/etc/automaton-fleet/gumroad.env -/var/lib/automaton-fleet-gumroad
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectKernelTunables=yes

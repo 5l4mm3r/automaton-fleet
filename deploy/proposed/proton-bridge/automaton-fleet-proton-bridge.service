@@ -1,0 +1,43 @@
+# Proton Mail Bridge for the Fleet's shared mailbox — PROPOSED, NOT INSTALLED (communications are dormant; see README.md).
+#
+# Bridge runs as its own system user with its own keychain (pass) in its own 0700 home. It listens on 127.0.0.1 only
+# (Bridge's default); nothing is exposed publicly. The identity broker connects to it on loopback with the
+# Bridge-generated credentials and Bridge's pinned certificate. The binary path and flags must be checked against
+# Proton's current documentation when this is installed.
+
+[Unit]
+Description=Proton Mail Bridge for the Automaton Fleet shared mailbox (loopback IMAP/SMTP only)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=automaton-fleet-mailbridge
+Group=automaton-fleet-mailbridge
+Environment=HOME=/var/lib/automaton-fleet-mailbridge
+WorkingDirectory=/var/lib/automaton-fleet-mailbridge
+ExecStart=/usr/bin/protonmail-bridge --noninteractive
+Restart=on-failure
+RestartSec=15s
+UMask=0077
+
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ReadWritePaths=/var/lib/automaton-fleet-mailbridge
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+InaccessiblePaths=-/etc/automaton-fleet -/var/lib/automaton-fleet -/var/lib/automaton-fleet-identity -/var/lib/automaton-fleet-custody -/var/lib/private/automaton-founders
+
+[Install]
+WantedBy=multi-user.target

@@ -25,12 +25,15 @@ import { PgAgentGateway } from "../../fleet/postgres/agent-gateway.js";
 import { auditPrivileges, ledgerSurfaceProblems } from "../../fleet/postgres/privileges.js";
 import { PgLedgerAdmin, sha256Hex } from "../../fleet/treasury/ledger.js";
 import { PgOperatorAdmin } from "../../fleet/operator/admin.js";
+import { PgHubAdmin } from "../../fleet/hub/admin.js";
 import { rawPublicKey } from "../../fleet/operator/canonical.js";
+import { unpinCustody, liveRail, attest, makeKeyless } from "./fixtures/custody-signer.js";
 import { findPgBin, startEphemeralPg, type EphemeralPg } from "./fixtures/ephemeral-pg.js";
 import { migrateUpTo } from "./fixtures/migrate-to.js";
 import { FleetApiClient } from "../../fleet/service/client.js";
 import { FleetService } from "../../fleet/service/server.js";
 import { UnsupportedSandboxTerminator } from "../../fleet/service/terminator.js";
+import { FLEET_PG_SCHEMA_VERSION } from "../../fleet/postgres/migrations.js";
 
 const PG_BIN = findPgBin();
 const PIN = { repo: "https://github.com/5l4mm3r/automaton-fleet", commit: "c".repeat(40) };
@@ -90,15 +93,15 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
     return e.destinationId;
   }
   const fund = async (cents: number) => ledger.recordOwnerFunding(cents, `bank:test-${++fundingN}-${crypto.randomUUID()}`, OWNER);
-  const spend = (a: Agent, amountCents: number, opts: { category?: string; dst?: string; idem?: string; recoverable?: number } = {}) =>
-    gw.spendRequest(a.agentId, a.token, {
-      idempotencyKey: opts.idem ?? key("spend"),
-      amountCents,
-      category: opts.category ?? "expense",
-      destinationId: opts.dst ?? payee,
-      purpose: "test spend",
-      recoverableCents: opts.recoverable ?? 0,
-    });
+  // v95: a further order to the same payee names the latest one (after); a repeat of the same request is answered from the record.
+  const spend = async (a: Agent, amountCents: number, opts: { category?: string; dst?: string; idem?: string; recoverable?: number } = {}) => {
+    const req = { idempotencyKey: opts.idem ?? key("spend"), amountCents, category: opts.category ?? "expense", destinationId: opts.dst ?? payee,
+      purpose: "test spend", recoverableCents: opts.recoverable ?? 0 };
+    const r = await gw.spendRequest(a.agentId, a.token, req);
+    if (r.code !== "FLEET_OPERATION_EXISTS") return r;
+    const latest = /after: "([0-9a-f-]{36})"/.exec(String(r.reason))?.[1];
+    return latest ? gw.spendRequest(a.agentId, a.token, { ...req, after: latest }) : r;
+  };
   const order = (r: Record<string, unknown>) => r.order as Record<string, unknown>;
 
   beforeAll(async () => {
@@ -109,7 +112,7 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
     await store.migrate();
     await store.setApprovedRuntime(PIN, "test", BUILD);
     await store.setMaxAgents(20, "test");
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 9; i++) {   // agents[8]: the concurrent distinct-requests test
       const reg = await store.registerRoot({ walletAddress: `0x${crypto.randomBytes(20).toString("hex")}`, name: `root-${i}` });
       if (!reg.ok) throw new Error(reg.reason);
       const cred = await store.issueCredential(reg.agent.agentId, "test");
@@ -143,18 +146,30 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
   // ── Schema, model and privileges ─────────────────────────────
 
   it("migrates to v10 with custody execution constitutionally pinned off and a clean privilege audit", async () => {
-    expect((await q(`SELECT max(version) AS v FROM fleet.fleet_schema_migrations`))[0].v).toBe(25);
+    expect((await q(`SELECT max(version) AS v FROM fleet.fleet_schema_migrations`))[0].v).toBe(FLEET_PG_SCHEMA_VERSION);
     const m = await ledger.model();
-    expect(m).toMatchObject({ ledgerAuthoritative: true, custodyExecutionEnabled: false, ownerApprovalThresholdCents: 10000, strongAuthThresholdCents: 50000 });
-    // Not an ordinary economic setting: even the owner cannot turn it on without a migration.
-    expect(await pgCode(owner.query(`UPDATE fleet.fleet_economic_model SET custody_execution_enabled = true`))).toMatch(/ERR:.*check constraint/);
+    expect(m).toMatchObject({ ledgerAuthoritative: true, custodyExecutionEnabled: false, strongAuthThresholdCents: 50000,
+      legacyRetired: { ownerApprovalThresholdCents: 10000, agentDailySpendCents: 5000 } }); // v27: inert history, never policy
+    // Not an ordinary economic setting: even the owner cannot flip it — only an owner custody activation (v48) can.
+    expect(await pgCode(owner.query(`UPDATE fleet.fleet_economic_model SET custody_execution_enabled = true`))).toMatch(/FLEET_CUSTODY_ACTIVATION_REQUIRED/);
     expect(await pgCode(owner.query(`UPDATE fleet.fleet_economic_model SET ledger_authoritative = false`))).toMatch(/ERR:.*check constraint/);
     expect(await pgCode(owner.query(`DELETE FROM fleet.fleet_economic_model`))).toBe("FLEET_HISTORY_IMMUTABLE");
     const audit = await auditPrivileges(owner);
     expect(audit.problems).toEqual([]);
     expect(audit.custodyRoles).toBe("provisioned");
     const cx = audit.roles.find((r) => r.role === "fleet_custody_login")!;
-    expect(cx.functions.sort()).toEqual(["cx_claim_instruction(text,text)", "cx_ping()", "cx_report_result(uuid,text,text,text,bigint,text)"]);
+    expect(cx.functions.sort()).toEqual(["cx_attest_signer(text,uuid,text,text,uuid)", "cx_claim_instruction(text,text)", "cx_credential_use(uuid,text,text,text,text)",
+      // v48: the PayPal treasury's receiving and reconciliation records (custody alone holds the PayPal credential).
+      "cx_paypal_balance_record(text,uuid,text,bigint,bigint)", "cx_paypal_buyer_record(text,uuid,jsonb)", "cx_paypal_buyer_work(text,integer)", "cx_paypal_capture_record(text,uuid,text,text,bigint,bigint,text,text)",
+      "cx_paypal_checkout_by_order(text,text)", "cx_paypal_checkout_update(text,uuid,text,text,text,text)",
+      "cx_paypal_clawback_evidence(text,text,text,text,text,bigint,text)", "cx_paypal_dispute_record(text,text,text,text,text,bigint,text)", "cx_paypal_inbox(text,integer)",
+      "cx_paypal_inbox_result(text,text,text,text)", "cx_paypal_rails(text)", "cx_paypal_refund_record(text,text,text,text,bigint,text)",
+      "cx_paypal_refund_result(text,uuid,text,text,bigint,text,text)", "cx_paypal_refund_unresolved(text,uuid,text)", "cx_paypal_refund_work(text,integer)",
+      // v76: payment detection without the webhook — custody reads open checkouts' order status.
+      "cx_paypal_status_checked(text,uuid,text)", "cx_paypal_status_work(text,integer)",
+      "cx_paypal_txn_counterparty(text,uuid,text,text,text)", "cx_paypal_txn_record(text,uuid,jsonb)", "cx_paypal_work(text,integer)",
+      // v49: the custody key and the PayPal credentials sealed to it from the dashboard.
+      "cx_ping()", "cx_publish_key(text,text,text)", "cx_report_result(uuid,text,text,text,bigint,text)", "cx_sealed_credentials(text)"]);
     expect(cx.tables).toEqual([]);
     expect((await ledger.verify()).ok).toBe(true);
   });
@@ -359,7 +374,10 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
     const again = await spend(a, 1200, { idem });
     expect(again).toMatchObject({ ok: true, replay: true });
     expect(order(again).orderId).toBe(order(r).orderId);
-    expect(await spend(a, 1300, { idem })).toMatchObject({ ok: false, code: "FLEET_IDEMPOTENCY_CONFLICT" });
+    // v95: a different order to the same payee without naming the latest is refused (FLEET_OPERATION_EXISTS); nothing is reserved.
+    expect(await gw.spendRequest(a.agentId, a.token, { idempotencyKey: idem, amountCents: 1300, category: "expense", destinationId: payee, purpose: "test spend" }))
+      .toMatchObject({ ok: false, code: "FLEET_OPERATION_EXISTS" });
+    expect(await bal(agentAcct(a, "reserved"))).toBe(1200);
     // More than the allocation: rejected, nothing reserved.
     expect(await spend(a, 5000)).toMatchObject({ ok: false, code: "FLEET_INSUFFICIENT_ALLOCATION" });
     // Owner destinations, pending/revoked/unknown destinations and other agents' payees are refused.
@@ -392,70 +410,183 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
     expect(s.economics).toMatchObject({ cash: 2900, reserved: 100, protectedPrincipal: 0 });
   });
 
-  it("concurrent spend requests never over-reserve an allocation", async () => {
-    const a = agents[4];
+  it("concurrent DISTINCT spend requests (twelve payees at once) never over-reserve an allocation", async () => {
+    const a = agents[8];
     await ledger.agentCapital({ agentId: a.agentId, amountCents: 1000, mode: "grant", actor: OWNER });
-    const rs = await Promise.all(Array.from({ length: 12 }, () => spend(a, 300)));
+    // Twelve different orders (each its own payee: twelve operations, none a duplicate of another) compete at once.
+    const payees = await Promise.all(Array.from({ length: 12 }, () => activeDestination("payee")));
+    const rs = await Promise.all(payees.map((dst, i) => gw.spendRequest(a.agentId, a.token, { idempotencyKey: key("spend"), amountCents: 300,
+      category: "expense", destinationId: dst, purpose: `distinct order ${i}`, recoverableCents: 0 })));
     const ok = rs.filter((r) => r.ok && order(r).status === "reserved");
     expect(ok.length).toBe(3);
-    expect(rs.filter((r) => !r.ok).every((r) => r.code === "FLEET_INSUFFICIENT_ALLOCATION")).toBe(true);
+    expect(new Set(ok.map((r) => order(r).orderId)).size).toBe(3);
+    expect(rs.filter((r) => !r.ok).map((r) => r.code)).toEqual(Array(9).fill("FLEET_INSUFFICIENT_ALLOCATION"));
     expect(await bal(agentAcct(a, "cash"))).toBe(100);
     expect(await bal(agentAcct(a, "reserved"))).toBe(900);
   });
 
-  it("policy limits route to the owner, who may override them with an audited acknowledgement", async () => {
-    const a = agents[5];
-    await ledger.agentCapital({ agentId: a.agentId, amountCents: 40_000, mode: "grant", actor: OWNER });
-    const r = await spend(a, 15_000); // above the 100.00 owner threshold
-    expect(order(r)).toMatchObject({ status: "awaiting_owner", decisionCode: "FLEET_OWNER_APPROVAL_REQUIRED" });
-    expect(await bal(agentAcct(a, "reserved"))).toBe(0);
-    const id = order(r).orderId as string;
-    // Warnings: the controller recommends against; it does not veto.
-    const w = await ledger.spendDecision(id, "approve", OWNER);
-    expect(w).toMatchObject({ status: "needs_acknowledgement", recommendation: "recommend_against" });
-    expect((w.warnings as string[]).sort()).toEqual(["above_agent_daily_policy", "above_owner_threshold"]);
-    const ok = await ledger.spendDecision(id, "approve", OWNER, { acknowledgeWarnings: true, note: "strategic purchase" });
-    expect(ok).toMatchObject({ status: "reserved", override: true });
-    expect(await bal(agentAcct(a, "reserved"))).toBe(15_000);
-    const ai = await q(`SELECT kind, recommendation, override, warnings_acknowledged, status, actor FROM fleet.fleet_admin_instructions WHERE instruction_id = $1`, [ok.instructionId]);
-    expect(ai[0]).toEqual({ kind: "spend_decision", recommendation: "recommend_against", override: true, warnings_acknowledged: true, status: "executed", actor: OWNER });
-    // Decided once.
-    expect(await pgCode(ledger.spendDecision(id, "approve", OWNER, { acknowledgeWarnings: true }))).toBe("FLEET_INVALID_STATE");
-    expect(await pgCode(owner.query(`UPDATE fleet.fleet_admin_instructions SET override = false WHERE instruction_id = $1`, [ok.instructionId]))).toBe("FLEET_HISTORY_IMMUTABLE");
-    // Reject path.
-    const r2 = await spend(a, 12_000);
-    expect(await ledger.spendDecision(order(r2).orderId as string, "reject", OWNER, { note: "no" })).toMatchObject({ status: "rejected" });
+  it("concurrent DUPLICATE spend requests are one operation; further orders still fit the allocation", async () => {
+    const a = agents[4];
+    await ledger.agentCapital({ agentId: a.agentId, amountCents: 1000, mode: "grant", actor: OWNER });
+    // v95: twelve identical requests at once are ONE operation (the rest wait for it and replay it): one order, reserved once.
+    const rs = await Promise.all(Array.from({ length: 12 }, () => gw.spendRequest(a.agentId, a.token, { idempotencyKey: key("spend"), amountCents: 300,
+      category: "expense", destinationId: payee, purpose: "test spend", recoverableCents: 0 })));
+    expect(new Set(rs.filter((r) => r.ok).map((r) => order(r).orderId)).size).toBe(1);
+    expect(rs.every((r) => r.ok)).toBe(true);
+    expect(await bal(agentAcct(a, "reserved"))).toBe(300);
+    // Further orders name the latest (after); the allocation still bounds them: two more fit, the next is refused.
+    const more: Array<Record<string, any>> = [];
+    let latest = (rs[0].operation as any)?.operationId ?? /after: "([0-9a-f-]{36})"/.exec(String((rs[0] as any).note ?? ""))?.[1];
+    for (let i = 0; i < 3; i++) {
+      const r = await gw.spendRequest(a.agentId, a.token, { idempotencyKey: key("spend"), amountCents: 300, category: "expense", destinationId: payee,
+        purpose: `test spend ${i + 2}`, recoverableCents: 0, after: latest });
+      more.push(r);
+      if (r.ok) latest = (r.operation as any)?.operationId ?? latest;
+    }
+    expect(more.map((r) => r.ok ? order(r).status : r.code), JSON.stringify(more.map((r) => [r.code, (r as any).operation]))).toEqual(["reserved", "reserved", "FLEET_INSUFFICIENT_ALLOCATION"]);
+    expect(new Set(more.filter((r) => r.ok).map((r) => order(r).orderId)).size).toBe(2);
+    expect(await bal(agentAcct(a, "cash"))).toBe(100);
+    expect(await bal(agentAcct(a, "reserved"))).toBe(900);
   });
 
-  it("the owner can never override a constitutional check, and neither agents nor operator principals can approve", async () => {
+  it("v27: own capital above the retired 100.00/order and 50.00/day lines is reserved on custody alone; the owner spend route is gone", async () => {
+    const a = agents[5];
+    await ledger.agentCapital({ agentId: a.agentId, amountCents: 40_000, mode: "grant", actor: OWNER });
+    // 150.00 in one order, then 120.00 more the same day: no owner, no fixed amount — the founder sized it, custody passes.
+    const r = await spend(a, 15_000);
+    expect(r).toMatchObject({ ok: true, order: { status: "reserved", decidedBy: "controller", decisionCode: "FLEET_CUSTODY_CLEARED", executed: false } });
+    const r2 = await spend(a, 12_000);
+    expect(order(r2)).toMatchObject({ status: "reserved", decisionCode: "FLEET_CUSTODY_CLEARED" });
+    expect(await bal(agentAcct(a, "reserved"))).toBe(27_000);
+    expect(await bal(agentAcct(a, "cash"))).toBe(13_000);
+    // No owner queue, no admin instruction, no owner-awaiting state anywhere.
+    expect(await q(`SELECT count(*)::int AS n FROM fleet.fleet_payment_orders WHERE status = 'awaiting_owner'`)).toEqual([{ n: 0 }]);
+    expect(await q(`SELECT count(*)::int AS n FROM fleet.fleet_admin_instructions WHERE kind = 'spend_decision'`)).toEqual([{ n: 0 }]);
+    expect(await q(`SELECT count(*)::int AS n FROM fleet.fleet_events WHERE event_type = 'payment_order_awaiting_owner'`)).toEqual([{ n: 0 }]);
+    // Wallet size, not a nominal line, is what custody sees: the same 150.00 from a smaller wallet is refused as insufficient own capital.
+    const small = agents[4];
+    expect(await spend(small, 15_000)).toMatchObject({ ok: false, code: "FLEET_INSUFFICIENT_ALLOCATION", custody: "INSUFFICIENT_OWN_CAPITAL" });
+    // The owner decision function is retired for every actor; the CLI command is retired too.
+    for (const actor of [OWNER, `operator:${a.agentId}`, "operator:claude-operator", "controller"]) {
+      expect(await pgCode(owner.query(`SELECT fleet.fleet_admin_spend_decision($1::uuid, 'approve', $2, NULL, true)`, [order(r).orderId, actor]))).toBe("FLEET_OWNER_ROUTE_RETIRED");
+    }
+    // The state is unreachable: a CHECK refuses it even for the schema owner.
+    const raw = crypto.randomUUID();
+    await q(`INSERT INTO fleet.fleet_payment_orders (order_id, order_type, agent_id, idempotency_key, amount_cents, category, destination_id, purpose,
+               requested_by, request_sha256, status, expires_at) VALUES ($1, 'agent_spend', $2, $3, 100, 'expense', $4, 'raw', $2, repeat('a', 64), 'requested', now() + interval '1 day')`,
+      [raw, a.agentId, key("raw"), payee]);
+    expect(await pgCode(owner.query(`UPDATE fleet.fleet_payment_orders SET status = 'awaiting_owner', decided_by = 'controller' WHERE order_id = $1`, [raw])))
+      .toMatch(/fleet_payment_orders_no_owner_route/);
+    // Neither an agent nor an operator principal can decide an order through a direct write (the order guard).
+    for (const actor of [a.agentId, "operator:claude-operator"]) {
+      expect(await pgCode(owner.query(`UPDATE fleet.fleet_payment_orders SET status = 'rejected', decided_by = $2 WHERE order_id = $1`, [raw, actor]))).toMatch(/FLEET_SELF_APPROVAL|FLEET_APPROVAL_REQUIRED/);
+    }
+    // The legacy columns are inert: set them to 1 and the next order is still decided on custody alone.
+    await q(`UPDATE fleet.fleet_economic_model SET owner_approval_threshold_cents = 1, agent_daily_spend_cents = 1`);
+    try {
+      expect(order(await spend(a, 5_000))).toMatchObject({ status: "reserved", decisionCode: "FLEET_CUSTODY_CLEARED" });
+    } finally {
+      await q(`UPDATE fleet.fleet_economic_model SET owner_approval_threshold_cents = 10000, agent_daily_spend_cents = 5000`);
+    }
+  });
+
+  it("v27 custody refusals are precise, final for the order and route nowhere; protected, tax-reserved, other agents' and Treasury money stay out of reach", async () => {
     const a = agents[6];
     await ledger.agentCapital({ agentId: a.agentId, amountCents: 20_000, mode: "grant", actor: OWNER });
-    const r = await spend(a, 15_000);
-    const id = order(r).orderId as string;
-    expect(order(r).status).toBe("awaiting_owner");
-    // Drain the allocation below the order: approval is now refused even with acknowledgement.
-    await owner.query(`SELECT fleet.fleet_ledger_post('agent_capital_return', $1, 'operator:owner', 'drain', 'owner', $2, NULL, NULL, NULL, NULL, now(), $3)`, [
-      key("drain"), a.agentId, JSON.stringify([{ account: "fleet:treasury:unallocated", side: "D", amount: 11_000 }, { account: agentAcct(a, "cash"), side: "C", amount: 11_000 }]),
-    ]);
-    const refused = await ledger.spendDecision(id, "approve", OWNER, { acknowledgeWarnings: true });
-    expect(refused).toMatchObject({ status: "refused", code: "FLEET_INSUFFICIENT_ALLOCATION", constitutional: true });
-    // Agents and operator principals (Claude/ChatGPT) are never approvers.
-    for (const actor of [`operator:${a.agentId}`, "operator:claude-operator", "claude-operator", a.agentId, "controller"]) {
-      expect(await pgCode(ledger.spendDecision(id, "approve", actor, { acknowledgeWarnings: true }))).toMatch(/FLEET_SELF_APPROVAL|FLEET_APPROVAL_REQUIRED/);
-    }
-    // A direct status write with an agent as decider is refused by the order guard.
-    expect(await pgCode(owner.query(`UPDATE fleet.fleet_payment_orders SET status = 'rejected', decided_by = $2 WHERE order_id = $1`, [id, a.agentId]))).toMatch(/FLEET_SELF_APPROVAL|FLEET_APPROVAL_REQUIRED/);
-    // A held agent can neither request nor have a pending order approved, even with enough allocation.
-    await ledger.agentCapital({ agentId: a.agentId, amountCents: 20_000, mode: "grant", actor: OWNER });
-    const pending = order(await spend(a, 12_000)).orderId as string;
+    const treasuryBefore = await bal("fleet:treasury:unallocated");
+    const otherBefore = await bal(agentAcct(agents[5], "cash"));
+    const ownerQueue = async () => (await q(`SELECT (SELECT count(*) FROM fleet.fleet_owner_requests WHERE agent_id = $1)::int AS deps,
+      (SELECT count(*) FROM fleet.fleet_admin_instructions WHERE kind = 'spend_decision')::int AS instr`, [a.agentId]))[0];
+    const queue0 = await ownerQueue();
+    // Tax reserve: an approved obligation of category tax_reserve is never spendable, and is named precisely.
+    const tax = "01" + crypto.randomBytes(12).toString("hex").toUpperCase().replace(/[ILOU]/g, "0").slice(0, 24);
+    await q(`INSERT INTO fleet.fleet_obligations (obligation_id, agent_id, description, amount_cents, due_at, approved_by, category)
+             VALUES ($1, $2, 'VAT reserve', 6000, now() + interval '30 days', 'operator:owner', 'tax_reserve')`, [tax, a.agentId]);
+    expect(await spend(a, 15_000)).toMatchObject({ ok: false, code: "FLEET_TAX_RESERVE", custody: "TAX_RESERVE", order: { status: "rejected", decidedBy: "controller" } });
+    expect(order(await spend(a, 14_000))).toMatchObject({ status: "reserved" }); // exactly the unreserved, untaxed remainder
+    expect(await spend(a, 1)).toMatchObject({ ok: false, code: "FLEET_TAX_RESERVE", custody: "TAX_RESERVE" });
+    // Another protected claim (an ordinary obligation) is PROTECTED_CAPITAL, not TAX_RESERVE.
+    const reg = await store.registerRoot({ walletAddress: `0x${crypto.randomBytes(20).toString("hex")}`, name: "custody-b" });
+    if (!reg.ok) throw new Error(reg.reason);
+    const b: Agent = { agentId: reg.agent.agentId, token: (await store.issueCredential(reg.agent.agentId, "test")).token };
+    await ledger.agentCapital({ agentId: b.agentId, amountCents: 600, mode: "grant", actor: OWNER });
+    await q(`INSERT INTO fleet.fleet_obligations (obligation_id, agent_id, description, amount_cents, due_at, approved_by) VALUES ($1, $2, 'rent', 2000, now() + interval '1 day', 'operator:owner')`,
+      ["01" + crypto.randomBytes(12).toString("hex").toUpperCase().replace(/[ILOU]/g, "0").slice(0, 24), b.agentId]);
+    expect(await spend(b, 100)).toMatchObject({ ok: false, code: "FLEET_PROTECTED_CAPITAL", custody: "PROTECTED_CAPITAL" });
+    // Hold and freeze are incident controls, named as such.
     await q(`SELECT fleet.fleet_agent_hold_set($1, 'investigation', 'operator:owner')`, [a.agentId]);
-    expect(await spend(a, 1)).toMatchObject({ ok: false, code: "FLEET_AGENT_HELD" });
-    expect(await ledger.spendDecision(pending, "approve", OWNER, { acknowledgeWarnings: true })).toMatchObject({ status: "refused", code: "FLEET_AGENT_HELD" });
+    expect(await spend(a, 1)).toMatchObject({ ok: false, code: "FLEET_AGENT_HELD", custody: "HOLD" });
     await q(`SELECT fleet.fleet_agent_hold_release($1, 'operator:owner')`, [a.agentId]);
-    // Frozen spending is also constitutional.
-    await q(`INSERT INTO fleet.fleet_wallet_custody (agent_id, wallet_address, spending_frozen, frozen_reason, frozen_at) VALUES ($1, $2, true, 'test', now())
-             ON CONFLICT (agent_id) DO UPDATE SET spending_frozen = true, frozen_reason = 'test', frozen_at = now()`, [a.agentId, `0x${"1".repeat(40)}`]);
-    expect(await spend(a, 1)).toMatchObject({ ok: false, code: "FLEET_SPENDING_FROZEN" });
+    // v32: a custody record always carries the agent's own identity address.
+    await q(`INSERT INTO fleet.fleet_wallet_custody (agent_id, wallet_address, spending_frozen, frozen_reason, frozen_at)
+             SELECT agent_id, wallet_address, true, 'test', now() FROM fleet.fleet_agents WHERE agent_id = $1
+             ON CONFLICT (agent_id) DO UPDATE SET spending_frozen = true, frozen_reason = 'test', frozen_at = now()`, [a.agentId]);
+    expect(await spend(a, 1)).toMatchObject({ ok: false, code: "FLEET_SPENDING_FROZEN", custody: "FROZEN" });
+    await q(`UPDATE fleet.fleet_wallet_custody SET spending_frozen = false, frozen_reason = NULL, frozen_at = NULL WHERE agent_id = $1`, [a.agentId]);
+    // Destinations: another agent's payee and an unknown destination are invalid destinations.
+    const theirs = await activeDestination("payee", agents[3].agentId);
+    expect(await spend(a, 1, { dst: theirs })).toMatchObject({ ok: false, code: "FLEET_DESTINATION_NOT_ALLOWED", custody: "INVALID_DESTINATION" });
+    expect(await spend(a, 1, { dst: `dst_${"0".repeat(26)}` })).toMatchObject({ ok: false, code: "FLEET_DESTINATION_NOT_ALLOWED", custody: "INVALID_DESTINATION" });
+    // A replay of a refused order reports the same custody reason; nothing was reserved by any refusal.
+    const idem = key("refused");
+    expect(await spend(a, 3_000, { idem })).toMatchObject({ ok: false, code: "FLEET_TAX_RESERVE" }); // within cash, but only the tax reserve is left
+    // v95: a refusal leaves no operation, so a repeat is decided again — with the same custody reason.
+    expect(await spend(a, 3_000, { idem })).toMatchObject({ ok: false, code: "FLEET_TAX_RESERVE", custody: "TAX_RESERVE" });
+    expect(await bal(agentAcct(a, "reserved"))).toBe(14_000);
+    // Only the agent's own cash moved: the Treasury and other agents are untouched; no refusal created anything for anyone to decide.
+    // (The Treasury moved only by the explicit 600 grant to `b` above.)
+    expect(await bal("fleet:treasury:unallocated")).toBe(treasuryBefore - 600);
+    expect(await bal(agentAcct(agents[5], "cash"))).toBe(otherBefore);
+    expect(await ownerQueue()).toEqual(queue0);
+    expect(await q(`SELECT count(*)::int AS n FROM fleet.fleet_payment_orders WHERE agent_id = $1 AND status NOT IN ('reserved','rejected')`, [a.agentId])).toEqual([{ n: 0 }]);
+  });
+
+  it("v27 infrastructure circuit breaker: relative signals only, unset by default, a refusal names no threshold, and the owner control is audited", async () => {
+    const a = agents[2];
+    const breaker = async () => (await q(`SELECT to_jsonb(b) - 'updated_at' AS r FROM fleet.fleet_spend_circuit_breaker b`))[0].r;
+    expect(await breaker()).toEqual({ id: 1, tripped: false, trip_reason: null, order_wallet_bp: null, velocity_window_s: null, velocity_wallet_bp: null,
+      new_destination_age_s: null, new_destination_wallet_bp: null, updated_by: "migration" });
+    // No column can hold a nominal amount; the table cannot be emptied (fail-closed otherwise).
+    const cols = (await q(`SELECT column_name AS c FROM information_schema.columns WHERE table_schema = 'fleet' AND table_name = 'fleet_spend_circuit_breaker' ORDER BY ordinal_position`)).map((r) => r.c);
+    expect(cols).toEqual(["id", "tripped", "trip_reason", "order_wallet_bp", "velocity_window_s", "velocity_wallet_bp", "updated_at", "updated_by",
+      "new_destination_age_s", "new_destination_wallet_bp"]); // v29: the destination-novelty signal (relative, unset)
+    expect(await pgCode(owner.query(`DELETE FROM fleet.fleet_spend_circuit_breaker`))).toBe("FLEET_HISTORY_IMMUTABLE");
+    expect(await pgCode(owner.query(`UPDATE fleet.fleet_spend_circuit_breaker SET order_wallet_bp = 20000`))).toMatch(/check constraint/);
+    expect(await pgCode(owner.query(`UPDATE fleet.fleet_spend_circuit_breaker SET velocity_wallet_bp = 100`))).toMatch(/check constraint/); // a share needs its window
+    // Only an owner approver configures it (an operator principal or an agent cannot).
+    for (const actor of ["operator:claude-operator", `operator:${a.agentId}`, "nobody"]) {
+      expect(await pgCode(owner.query(`SELECT fleet.fleet_admin_spend_circuit_breaker($1, false, NULL, 5000, NULL, NULL)`, [actor]))).toMatch(/FLEET_SELF_APPROVAL|FLEET_APPROVAL_REQUIRED/);
+    }
+    await ledger.agentCapital({ agentId: a.agentId, amountCents: 10_000, mode: "grant", actor: OWNER });
+    const cash = await bal(agentAcct(a, "cash"));
+    try {
+      // A relative signal (here: one order above half the wallet), configured by the owner for a test only.
+      await q(`SELECT fleet.fleet_admin_spend_circuit_breaker($1, false, NULL, 5000, NULL, NULL)`, [OWNER]);
+      const r = await spend(a, Math.floor(cash / 2) + 1);
+      expect(r).toMatchObject({ ok: false, code: "FLEET_INFRASTRUCTURE_CIRCUIT_BREAKER", custody: "INFRASTRUCTURE_CIRCUIT_BREAKER",
+        order: { status: "rejected", decisionReason: "infrastructure circuit breaker: order_wallet_share" } });
+      expect(JSON.stringify(r).replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, "<uuid>")).not.toMatch(/5000|order_wallet_bp|velocity_wallet_bp/); // the configuration never reaches the agent
+      expect(order(await spend(a, Math.floor(cash / 2)))).toMatchObject({ status: "reserved" }); // proportionate, not nominal
+      // A manual trip (an incident) refuses every own-capital order, names only "tripped", and is audited.
+      await q(`SELECT fleet.fleet_admin_spend_circuit_breaker($1, true, 'provider anomaly under investigation', NULL, NULL, NULL)`, [OWNER]);
+      const t = await spend(a, 1);
+      expect(t).toMatchObject({ ok: false, code: "FLEET_INFRASTRUCTURE_CIRCUIT_BREAKER", order: { decisionReason: "infrastructure circuit breaker: tripped" } });
+      expect(JSON.stringify(t)).not.toMatch(/provider anomaly/);
+      expect(await pgCode(owner.query(`SELECT fleet.fleet_admin_spend_circuit_breaker($1, true, NULL, NULL, NULL, NULL)`, [OWNER]))).toMatch(/check constraint/); // a trip needs a reason
+      expect((await q(`SELECT count(*)::int AS n FROM fleet.fleet_events WHERE event_type = 'spend_circuit_breaker_set' AND actor = $1`, [OWNER]))[0].n).toBeGreaterThanOrEqual(2);
+      // 2026-10-20: the owner command (economy-spend-breaker) trips and resets it and keeps the owner's thresholds as they are.
+      const hub = new PgHubAdmin({ connectionString: pgc.ownerUrl });
+      try {
+        await q(`SELECT fleet.fleet_admin_spend_circuit_breaker($1, false, NULL, 5000, NULL, NULL)`, [OWNER]);
+        expect(await hub.spendBreaker(true, "purchase proof rerun: purchases are excluded from this run", OWNER)).toMatchObject({ tripped: true, order_wallet_bp: 5000 });
+        expect(await spend(a, 1)).toMatchObject({ ok: false, code: "FLEET_INFRASTRUCTURE_CIRCUIT_BREAKER", order: { status: "rejected" } });   // nothing reserved
+        expect(await hub.spendBreaker(false, null, OWNER)).toMatchObject({ tripped: false, trip_reason: null, order_wallet_bp: 5000 });
+      } finally { await hub.close(); }
+    } finally {
+      await q(`SELECT fleet.fleet_admin_spend_circuit_breaker($1, false, NULL, NULL, NULL, NULL)`, [OWNER]);
+    }
+    expect(await breaker()).toMatchObject({ tripped: false, order_wallet_bp: null, velocity_window_s: null, velocity_wallet_bp: null, updated_by: OWNER });
+    expect(order(await spend(a, 1))).toMatchObject({ status: "reserved" });
   });
 
   it("protected principal: borrowed capital funds recoverable assets only, and the agent dies before principal is consumed", async () => {
@@ -522,8 +653,10 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
       expect(r).toMatchObject({ ok: true, executed: false, replay: false, order: { status: "reserved", amountCents: 700 } });
       expect(await c.spendOrder({ idempotencyKey: idem, amountCents: 700, category: "expense", destinationId: payee, purpose: "api credits" })).toMatchObject({ replay: true });
       expect(await c.ledger()).toMatchObject({ cash: 19_300, protectedPrincipal: 0 });
-      const big = await c.spendOrder({ idempotencyKey: key("http"), amountCents: 12_000, category: "expense", destinationId: payee, purpose: "x" });
-      expect(big).toMatchObject({ ok: true, order: { status: "awaiting_owner" } }); // above the owner threshold: the owner decides
+      // v95: a further order to the same payee names the latest one.
+      const big = await c.spendOrder({ idempotencyKey: key("http"), amountCents: 12_000, category: "expense", destinationId: payee, purpose: "x",
+        after: (r as any).operation?.operationId });
+      expect(big).toMatchObject({ ok: true, custody: null, order: { status: "reserved", decisionCode: "FLEET_CUSTODY_CLEARED" } }); // v27: own capital, custody only — no owner
       expect(await c.cancelSpendOrder(r.order!.orderId as string)).toMatchObject({ status: "cancelled" });
       await expect(c.cancelSpendOrder(r.order!.orderId as string)).rejects.toMatchObject({ status: 403, code: "FLEET_INVALID_STATE" });
       await expect(c.cancelSpendOrder(crypto.randomUUID())).rejects.toMatchObject({ status: 404 });
@@ -553,7 +686,7 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
     expect(order(r).status).toBe("reserved");
     expect((await svc.query(`SELECT fleet.svc_issue_payment_instruction($1) AS r`, [order(r).orderId])).rows[0].r).toEqual({ ok: false, code: "FLEET_CUSTODY_EXECUTION_DISABLED" });
     expect((await custody.query(`SELECT fleet.cx_claim_instruction('executor', $1) AS r`, [sha256Hex("lease")])).rows[0].r).toEqual({ ok: false, code: "FLEET_CUSTODY_EXECUTION_DISABLED" });
-    expect((await custody.query(`SELECT fleet.cx_ping() AS r`)).rows[0].r).toMatchObject({ schemaVersion: 25, executionEnabled: false, issued: 0, claimed: 0 });
+    expect((await custody.query(`SELECT fleet.cx_ping() AS r`)).rows[0].r).toMatchObject({ schemaVersion: FLEET_PG_SCHEMA_VERSION, executionEnabled: false, issued: 0, claimed: 0 });
     expect(await pgCode(owner.query(
       `INSERT INTO fleet.fleet_payment_instructions (instruction_id, order_id, amount_cents, destination_id, rail, instruction_sha256, issued_by)
        VALUES (gen_random_uuid(), $1, 50, $2, 'evm_usdc', repeat('a',64), 'owner')`, [order(r).orderId, payee],
@@ -561,7 +694,7 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
     expect((await q(`SELECT count(*)::int AS n FROM fleet.fleet_payment_orders WHERE status IN ('executing','settled')`))[0].n).toBe(0);
   });
 
-  it("the executor protocol (pin removed in a separate test schema) is lease-bound, exact and idempotent", async () => {
+  it("the executor protocol (owner activation in a separate test schema) is lease-bound, exact and idempotent", async () => {
     const X = "fleet_cx";
     const xs = new PgFleetStore({ connectionString: pgc.ownerUrl, schema: X });
     const xl = new PgLedgerAdmin({ connectionString: pgc.ownerUrl, schema: X });
@@ -574,23 +707,31 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
       const reg = await xs.registerRoot({ walletAddress: `0x${crypto.randomBytes(20).toString("hex")}`, name: "cx" });
       if (!reg.ok) throw new Error(reg.reason);
       const a = { agentId: reg.agent.agentId, token: (await xs.issueCredential(reg.agent.agentId, "t")).token };
-      // Test-only constitutional change (the production path would be a reviewed migration).
-      const cname = (await owner.query(`SELECT conname FROM pg_constraint WHERE conrelid = '${X}.fleet_economic_model'::regclass AND pg_get_constraintdef(oid) ~ 'NOT custody_execution_enabled'`)).rows[0].conname;
+      // v48: custody execution under an owner activation (the production path); the surface stays clean.
       expect((await ledgerSurfaceProblems(owner, X))).toEqual([]);
-      await owner.query(`ALTER TABLE ${X}.fleet_economic_model DROP CONSTRAINT ${cname}`);
-      expect(await ledgerSurfaceProblems(owner, X)).toContain("custody surface: custody execution is not pinned off by a CHECK constraint (constitutional invariant)");
-      await owner.query(`UPDATE ${X}.fleet_economic_model SET custody_execution_enabled = true`);
+      await unpinCustody(owner, X);
+      expect(await ledgerSurfaceProblems(owner, X)).toEqual([]);
+      // v32: a live payout rail whose signer the custody role attests.
+      const armed = await liveRail(owner, X, OWNER);
       await xl.recordOwnerFunding(10_000, "bank:cx-1", OWNER);
       await xl.agentCapital({ agentId: a.agentId, amountCents: 5000, mode: "grant", actor: OWNER });
-      const e = await xl.enrollDestination({ kind: "payee", rail: "evm_usdc", label: "vendor", reference: "0xabc", actor: OWNER });
+      const e = await xl.enrollDestination({ kind: "payee", rail: "provider_account", label: "vendor", reference: "paypal:vendor@example.com", actor: OWNER });
       const su2 = await su.connect();
       await su2.query("SET session_replication_role = replica");
       await su2.query(`UPDATE ${X}.fleet_payment_destinations SET activatable_at = now() - interval '1 second', enrolled_at = now() - interval '4 days'`);
       su2.release();
       await xl.activateDestination(e.destinationId, e.activationCode, OWNER);
+      await xl.destinationReferenceSet(e.destinationId, "paypal:vendor@example.com", OWNER);
+      expect((await attest(xc, X, armed)).ok).toBe(true);
+      // v76: real outflows fit the PayPal cash actually available — custody has read the treasury's balance.
+      expect((await xc.query(`SELECT ${X}.cx_paypal_balance_record('custody-executor', $1, 'GBP', 1000000, 1000000) AS r`, [armed.railId])).rows[0].r.ok).toBe(true);
       const s1 = await xg.spendRequest(a.agentId, a.token, { idempotencyKey: key(), amountCents: 700, category: "expense", destinationId: e.destinationId, purpose: "api" });
-      const s2 = await xg.spendRequest(a.agentId, a.token, { idempotencyKey: key(), amountCents: 400, category: "asset_acquisition", destinationId: e.destinationId, purpose: "domain", recoverableCents: 100 });
+      const s2 = await xg.spendRequest(a.agentId, a.token, { idempotencyKey: key(), amountCents: 400, category: "asset_acquisition", destinationId: e.destinationId, purpose: "domain", recoverableCents: 100,
+        after: (s1 as any).operation?.operationId });   // v95: the next order to the same payee
       const xsvc = new pg.Pool({ connectionString: pgc.serviceUrl, max: 1, options: `-c search_path=${X}` });
+      // v32: a root whose runtime holds its own key is never paid by the custody signer; a keyless identity is.
+      expect((await xsvc.query(`SELECT ${X}.svc_issue_payment_instruction($1) AS r`, [order(s1).orderId])).rows[0].r).toEqual({ ok: false, code: "FLEET_CUSTODY_AGENT_HELD_KEY" });
+      await makeKeyless(su, X, a.agentId);
       for (const o of [s1, s2]) expect((await xsvc.query(`SELECT ${X}.svc_issue_payment_instruction($1) AS r`, [order(o).orderId])).rows[0].r.ok).toBe(true);
       expect((await xsvc.query(`SELECT ${X}.svc_issue_payment_instruction($1) AS r`, [order(s1).orderId])).rows[0].r).toEqual({ ok: false, code: "FLEET_INVALID_STATE" });
       await xsvc.end();
@@ -598,7 +739,9 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
       const report = async (id: string, lease: string, outcome: string, ref: string | null, amt: number | null) =>
         (await xc.query(`SELECT ${X}.cx_report_result($1, $2, $3, $4, $5, $6) AS r`, [id, lease, outcome, ref, amt, outcome === "failed" ? "provider_down" : null])).rows[0].r;
       const i1 = (await claim("lease-1")).instruction;
-      expect(i1).toMatchObject({ amountCents: 700, rail: "evm_usdc", referenceSha256: sha256Hex("0xabc") });
+      expect(i1).toMatchObject({ amountCents: 700, rail: "provider_account", referenceSha256: sha256Hex("paypal:vendor@example.com"),
+        reference: "paypal:vendor@example.com", paymentRailId: armed.railId, provider: "paypal", railMode: "live", credentialId: armed.credentialId,
+        vaultRef: armed.vaultRef, capability: "payouts", currency: "GBP" });
       expect(await report(i1.instructionId, "wrong-lease", "settled", "tx:0001", 700)).toEqual({ ok: false, code: "FLEET_LEASE_INVALID" });
       expect(await report(i1.instructionId, "lease-1", "settled", "tx:0001", 701)).toEqual({ ok: false, code: "FLEET_SETTLEMENT_MISMATCH" });
       expect(await report(i1.instructionId, "lease-1", "settled", null, 700)).toEqual({ ok: false, code: "FLEET_SETTLEMENT_MISMATCH" });
@@ -677,14 +820,17 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
     expect(await ledger.ownerWithdrawal({ amountCents: 100, destinationId: e.destinationId, actor: OWNER })).toMatchObject({ status: "refused", code: "FLEET_DESTINATION_NOT_ACTIVE" });
   });
 
-  it("owner withdrawals: hard limits refuse, warnings need acknowledgement, large ones need a second confirmation, nothing executes", async () => {
+  // Schema v31 (owner decision): no nominal cap; EVERY withdrawal needs the second confirmation, whatever the amount.
+  it("owner withdrawals: ownership/availability limits refuse, warnings need acknowledgement, every one needs a second confirmation, nothing executes", async () => {
     expect(await ledger.ownerWithdrawal({ amountCents: 100, destinationId: payee, actor: OWNER })).toMatchObject({ status: "refused", code: "FLEET_DESTINATION_NOT_ALLOWED" });
     const avail = await bal("fleet:treasury:unallocated");
     expect(await ledger.ownerWithdrawal({ amountCents: avail + 1, destinationId: ownerDst, actor: OWNER })).toMatchObject({ status: "refused", code: "FLEET_INSUFFICIENT_TREASURY" });
     const small = await ledger.ownerWithdrawal({ amountCents: 1000, destinationId: ownerDst, actor: OWNER });
-    expect(small).toMatchObject({ status: "reserved", executed: false });
+    expect(small).toMatchObject({ status: "pending_confirmation" });
+    expect(await bal("fleet:custody:withdrawal_clearing")).toBe(0); // nothing reserved before the confirmation
+    expect(await ledger.confirm(small.instructionId as string, small.confirmationCode!, OWNER)).toMatchObject({ status: "reserved", executed: false });
     expect(await bal("fleet:custody:withdrawal_clearing")).toBe(1000);
-    // Above the strong-auth threshold: two steps.
+    // A larger amount: the same two steps (security does not depend on the amount).
     await fund(200_000);
     const big = await ledger.ownerWithdrawal({ amountCents: 60_000, destinationId: ownerDst, actor: OWNER });
     expect(big.status).toBe("pending_confirmation");
@@ -709,7 +855,10 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
     }
     const warn = await ledger.ownerWithdrawal({ amountCents: 1000, destinationId: ownerDst, actor: OWNER });
     expect(warn).toMatchObject({ status: "needs_acknowledgement", recommendation: "recommend_against" });
-    expect(await ledger.ownerWithdrawal({ amountCents: 1000, destinationId: ownerDst, actor: OWNER, acknowledgeWarnings: true })).toMatchObject({ status: "reserved" });
+    expect(warn.warnings).toContain("below_reserve_target");
+    const acked = await ledger.ownerWithdrawal({ amountCents: 1000, destinationId: ownerDst, actor: OWNER, acknowledgeWarnings: true });
+    expect(acked).toMatchObject({ status: "pending_confirmation" });
+    expect(await ledger.confirm(acked.instructionId as string, acked.confirmationCode!, OWNER)).toMatchObject({ status: "reserved" });
     await q(`UPDATE fleet.fleet_treasury_policy SET reserve_target_months = 3 WHERE id = 1`);
     // Operator principals and agents cannot instruct withdrawals.
     expect(await pgCode(ledger.ownerWithdrawal({ amountCents: 10, destinationId: ownerDst, actor: "operator:claude-operator" }))).toBe("FLEET_SELF_APPROVAL");
@@ -744,6 +893,12 @@ describe.skipIf(!PG_BIN)("Phase E treasury ledger and custody boundary (schema v
     for (const cls of ["cash", "reserved", "assets", "principal"]) expect(await bal(agentAcct(a, cls))).toBe(0);
     const asset = (await q(`SELECT economic_owner_account, authority_agent_id FROM fleet.fleet_assets WHERE asset_id = $1`, [assetId]))[0];
     expect(asset).toEqual({ economic_owner_account: "fleet:assets", authority_agent_id: null });
+    // Schema v51: the HTTP test's reaper pass also ended an agent whose wallet was exhausted (a custody fixture with negative
+    // survival equity); its estate is settled the same way before nothing is left to attend to.
+    for (const d of await q(`SELECT agent_id FROM fleet.fleet_agents WHERE status = 'dead' AND status_reason LIKE 'wallet exhausted%'`)) {
+      await ledger.estateOpen(d.agent_id, OWNER).catch(() => undefined);
+      await ledger.estateSettle(d.agent_id, OWNER);
+    }
     expect(await ledger.estateAttention()).toEqual({ assetsUnderDeadAgents: 0, deadAgentsWithBalances: 0, assetsWithoutOwner: 0 });
     expect(await pgCode(ledger.estateSettle(a.agentId, OWNER))).toBe("FLEET_ESTATE_INVALID");
     // A dead agent cannot spend.
@@ -864,9 +1019,9 @@ describe.skipIf(!PG_BIN)("schema v9 -> v10 on a production-shaped v9 registry", 
       await owner.query(`INSERT INTO fleet.fleet_treasury_ledger (kind, amount_cents, status, recorded_by) VALUES ('owner_funding_in', 1000, 'recorded', 'operator:x')`);
       const legacyBefore = (await owner.query(`SELECT string_agg(row_to_json(x)::text, E'\\n' ORDER BY x.entry_id) AS s, count(*)::int AS n FROM fleet.fleet_agent_ledger x`)).rows[0];
       const eventsBefore = (await owner.query(`SELECT count(*)::int AS n FROM fleet.fleet_events`)).rows[0].n;
-      expect(await store.migrateCheck()).toEqual({ currentVersion: 9, resultingVersion: 25, wouldApply: [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25] });
+      expect(await store.migrateCheck()).toEqual({ currentVersion: 9, resultingVersion: FLEET_PG_SCHEMA_VERSION, wouldApply: Array.from({ length: FLEET_PG_SCHEMA_VERSION - 10 + 1 }, (_, i) => 10 + i) });
       expect((await owner.query(`SELECT to_regclass('fleet.fleet_ledger_journal') AS r`)).rows[0].r).toBeNull(); // rolled back
-      expect(await store.migrate()).toEqual([10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]);
+      expect(await store.migrate()).toEqual(Array.from({ length: FLEET_PG_SCHEMA_VERSION - 9 }, (_, i) => 10 + i));
       expect(await store.migrate()).toEqual([]);
       const digest = (await owner.query(`SELECT row_count, rows_sha256 FROM fleet.fleet_legacy_economics WHERE table_name = 'fleet_agent_ledger'`)).rows[0];
       expect(Number(digest.row_count)).toBe(legacyBefore.n);

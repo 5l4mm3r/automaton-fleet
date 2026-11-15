@@ -25,6 +25,23 @@ export interface EphemeralPg {
   operatorUrl: string;
   /** Schema v10 custody executor login (cx_* only). */
   custodyUrl: string;
+  /** Schema v34 identity broker login (ix_* only). */
+  identityUrl: string;
+  /** Schema v37 browser worker login (bx_* only). */
+  browserUrl: string;
+  /** Schema v52 Gumroad storefront gateway login (gx_* only) and bank-feed connector login (rx_* only). */
+  providerUrl: string;
+  bankfeedUrl: string;
+  channelsUrl: string;
+  /** Schema v83: the phone-push sender (px_* only). */
+  pushUrl: string;
+  /** Schema v85: the media provider gateway (mx_* only). */
+  mediaUrl: string;
+  /** Schema v89: the code gateway (cgx_* only) and the build environment (bbx_* only). */
+  codeUrl: string;
+  buildUrl: string;
+  /** Schema v38 Admin dashboard login (dash_* only). */
+  dashboardUrl: string;
   superUrl: string;
   /** Re-run scripts/fleet-db-roles.sql (idempotency tests). */
   applyRoles(): void;
@@ -71,6 +88,16 @@ export async function startEphemeralPg(bin: string): Promise<EphemeralPg> {
   const servicePw = randomBytes(12).toString("hex");
   const operatorPw = randomBytes(12).toString("hex");
   const custodyPw = randomBytes(12).toString("hex");
+  const identityPw = randomBytes(12).toString("hex");
+  const browserPw = randomBytes(12).toString("hex");
+  const dashboardPw = randomBytes(12).toString("hex");
+  const providerPw = randomBytes(12).toString("hex");
+  const bankfeedPw = randomBytes(12).toString("hex");
+  const channelsPw = randomBytes(12).toString("hex");
+  const pushPw = randomBytes(12).toString("hex");
+  const mediaPw = randomBytes(12).toString("hex");
+  const codePw = randomBytes(12).toString("hex");
+  const buildPw = randomBytes(12).toString("hex");
   const pwfile = path.join(dir, "pw");
   fs.writeFileSync(pwfile, superPw + "\n", { mode: 0o600 });
   execFileSync(path.join(bin, "initdb"), ["-D", data, "-U", "postgres", "--pwfile", pwfile, "--auth=scram-sha-256", "-E", "UTF8"], {
@@ -104,7 +131,7 @@ export async function startEphemeralPg(bin: string): Promise<EphemeralPg> {
       psql(
         superUrl,
         ["-v", `dbname=${dbname}`, "-v", "owner=fleet_owner", "-f", "-"],
-        `\\set agent_password ${agentPw}\n\\set service_password ${servicePw}\n\\set operator_password ${operatorPw}\n\\set custody_password ${custodyPw}\n` +
+        `\\set agent_password ${agentPw}\n\\set service_password ${servicePw}\n\\set operator_password ${operatorPw}\n\\set custody_password ${custodyPw}\n\\set identity_password ${identityPw}\n\\set browser_password ${browserPw}\n\\set dashboard_password ${dashboardPw}\n\\set provider_password ${providerPw}\n\\set bankfeed_password ${bankfeedPw}\n\\set channels_password ${channelsPw}\n\\set push_password ${pushPw}\n\\set media_password ${mediaPw}\n\\set code_password ${codePw}\n\\set build_password ${buildPw}\n` +
           fs.readFileSync(path.resolve("scripts/fleet-db-roles.sql"), "utf8"),
       );
     // Owner: like production fleetadmin — not a superuser, cannot create roles.
@@ -120,6 +147,16 @@ export async function startEphemeralPg(bin: string): Promise<EphemeralPg> {
       serviceUrl: `postgresql://fleet_service_login:${servicePw}@127.0.0.1:${port}/${dbname}`,
       operatorUrl: `postgresql://fleet_operator_login:${operatorPw}@127.0.0.1:${port}/${dbname}`,
       custodyUrl: `postgresql://fleet_custody_login:${custodyPw}@127.0.0.1:${port}/${dbname}`,
+      identityUrl: `postgresql://fleet_identity_login:${identityPw}@127.0.0.1:${port}/${dbname}`,
+      browserUrl: `postgresql://fleet_browser_login:${browserPw}@127.0.0.1:${port}/${dbname}`,
+      dashboardUrl: `postgresql://fleet_dashboard_login:${dashboardPw}@127.0.0.1:${port}/${dbname}`,
+      providerUrl: `postgresql://fleet_provider_login:${providerPw}@127.0.0.1:${port}/${dbname}`,
+      bankfeedUrl: `postgresql://fleet_bankfeed_login:${bankfeedPw}@127.0.0.1:${port}/${dbname}`,
+      channelsUrl: `postgresql://fleet_channels_login:${channelsPw}@127.0.0.1:${port}/${dbname}`,
+      pushUrl: `postgresql://fleet_push_login:${pushPw}@127.0.0.1:${port}/${dbname}`,
+      mediaUrl: `postgresql://fleet_media_login:${mediaPw}@127.0.0.1:${port}/${dbname}`,
+      codeUrl: `postgresql://fleet_code_login:${codePw}@127.0.0.1:${port}/${dbname}`,
+      buildUrl: `postgresql://fleet_build_login:${buildPw}@127.0.0.1:${port}/${dbname}`,
       applyRoles,
       stop,
     };

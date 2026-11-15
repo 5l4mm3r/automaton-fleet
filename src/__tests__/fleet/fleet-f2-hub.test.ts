@@ -1,0 +1,98 @@
+/**
+ * F2 Fleet Hub (unit): the static dashboard escapes every value, carries no script or external asset, formats minor
+ * units as money and basis points as percentages; the CLI maps commands onto the owner functions with the invoking
+ * operator as actor and validates its arguments before touching the database.
+ */
+import { describe, it, expect } from "vitest";
+import fs from "fs";
+import os from "os";
+import path from "path";
+import { renderHub } from "../../fleet/hub/render.js";
+import { HUB_COMMANDS, runHubCommand } from "../../fleet/hub/cli.js";
+import type { PgHubAdmin } from "../../fleet/hub/admin.js";
+
+function fakeHub() {
+  const calls: Array<[string, unknown[]]> = [];
+  const h = new Proxy({}, { get: (_t, name: string) => async (...args: unknown[]) => { calls.push([name, args]); return { ok: true, name }; } }) as unknown as PgHubAdmin;
+  return { h, calls };
+}
+
+describe("F2 Fleet Hub", () => {
+  it("the dashboard is static, escaped and script-free; money and basis points are formatted", () => {
+    const html = renderHub({ overview: { treasuryMinor: 123456, rateBp: 2500, note: "<script>alert(1)</script>" },
+      agents: [{ agentId: "A", availableMinor: 999, name: "\"><img src=x onerror=alert(1)>" }] }, new Date("2026-10-01T00:00:00Z"));
+    // No raw tag from data and no external asset: injected markup survives only as escaped, inert text.
+    expect(html).not.toMatch(/<script|<img|<iframe|src=["']?http|href=["']?http/i);
+    expect(html).toContain("&quot;&gt;&lt;img src=x onerror=alert(1)&gt;");
+    expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+    expect(html).toContain("£1234.56");
+    expect(html).toContain("25.00%");
+    expect(html).toContain("£9.99");
+    expect(html).toMatch(/not a business approval queue/);
+  });
+
+  it("commands map onto owner functions with the operator as actor; arguments are validated first", async () => {
+    const { h, calls } = fakeHub();
+    const actor = "operator:alice";
+    await runHubCommand("hub", ["wallet", "AGENT1"], h, actor);
+    await runHubCommand("economy-rail-add", ["paypal", "shared", "receive_payments,refunds", "PayPal treasury@…", "--credential", "c1", "--mode", "sandbox", "Treasury", "PayPal"], h, actor);
+    await runHubCommand("economy-wallet-transfer", ["AGENT1", "1500", "operating_pool", "provider", "subscriptions"], h, actor);
+    await runHubCommand("economy-breaker-novelty", ["off"], h, actor);
+    expect(calls[0]).toEqual(["view", ["wallet", { agentId: "AGENT1" }]]);
+    expect(calls[1][0]).toBe("railAdd");
+    expect(calls[1][1]).toEqual([{ provider: "paypal", kind: "shared", capabilities: ["receive_payments", "refunds"], accountRef: "PayPal treasury@…", label: "Treasury PayPal",
+      entityId: null, credentialId: "c1", mode: "sandbox", dedicatedVentureId: null, maxVentures: null }, actor]);
+    expect(calls[2][0]).toBe("walletTransfer");
+    expect(calls[2][1].slice(0, 5)).toEqual(["AGENT1", 1500, "operating_pool", "provider subscriptions", actor]);
+    expect(calls[3]).toEqual(["breakerNovelty", [null, null, actor]]);
+    await expect(runHubCommand("economy-wallet-transfer", ["AGENT1", "15.00", "treasury", "x"], h, actor)).rejects.toThrow(/integer/);
+    await expect(runHubCommand("economy-wallet-transfer", ["AGENT1", "100", "owner", "x"], h, actor)).rejects.toThrow(/treasury or operating_pool/);
+    await expect(runHubCommand("economy-capital-policy", ["not json"], h, actor)).rejects.toThrow(/JSON object/);
+    expect(calls).toHaveLength(4);
+    // v34: owner identity vault commands are their own explicit family (owner-identity-*).
+    expect([...HUB_COMMANDS].every((c) => c === "hub" || c.startsWith("hub-") || c.startsWith("economy-") || c.startsWith("owner-identity-"))).toBe(true);
+  });
+
+  it("every command runHubCommand handles is routed from fleet:admin (HUB_COMMANDS), and nothing routed is unhandled", () => {
+    // 2026-10-12: the v66 – v72 capital-backing and AI-credit commands had cases but were never routed.
+    const src = fs.readFileSync(path.join(process.cwd(), "src", "fleet", "hub", "cli.ts"), "utf8");
+    const cases = [...src.matchAll(/case "([a-z0-9-]+)":/g)].map((m) => m[1]);
+    expect(cases.filter((c) => !HUB_COMMANDS.has(c))).toEqual([]);
+    expect([...HUB_COMMANDS].filter((c) => !cases.includes(c))).toEqual([]);
+  });
+
+  it("v46 readiness commands: evidence, readiness, assignment and an evidence-based dependency answer map onto owner functions", async () => {
+    const { h, calls } = fakeHub();
+    const actor = "operator:alice";
+    await runHubCommand("economy-rail-verify", ["R1", "storefront_publication", "verified", "owner_attested", "--expires", "2026-11-01T00:00:00Z", "email", "confirmed"], h, actor);
+    await runHubCommand("economy-rail-readiness", ["R1"], h, actor);
+    await runHubCommand("economy-rail-assign", ["R1", "V1", "storefront"], h, actor);
+    await runHubCommand("economy-dependency-answer", ["Q1", "R1", "storefront"], h, actor);
+    expect(calls).toEqual([
+      ["railVerify", ["R1", "storefront_publication", "verified", "owner_attested", "email confirmed", "2026-11-01T00:00:00Z", actor]],
+      ["railReadiness", ["R1"]],
+      ["railAssign", ["R1", "V1", "storefront", actor]],
+      ["dependencyAnswerFromCapability", ["Q1", "R1", "storefront", actor]],
+    ]);
+    calls.length = 0;
+    await runHubCommand("economy-provider-product-assign", ["A1", "P1", "V1", "--effective-from", "2026-01-01T00:00:00Z", "first", "owner"], h, actor);
+    await runHubCommand("economy-destination-add", ["fleet_treasury", "GBP", "Treasury ••12", "--visual", "••12", "--descriptor", "GUMROAD", "Fleet", "treasury"], h, actor);
+    await runHubCommand("economy-receipt-attest", ["D1", "A1", "PO1", "1003", "GBP", "2026-10-08"], h, actor);
+    await expect(runHubCommand("economy-receipt-attest", ["D1", "A1", "PO1", "10.03", "GBP", "2026-10-08"], h, actor)).rejects.toThrow(/integer/);
+    expect(calls).toEqual([
+      ["providerProductAssign", ["A1", "P1", "V1", "2026-01-01T00:00:00Z", "first owner", actor]],
+      ["destinationAdd", [{ kind: "fleet_treasury", currency: "GBP", maskedRef: "Treasury ••12", label: "Fleet treasury", payoutVisual: "••12", descriptorPattern: "GUMROAD",
+        entityId: null, bankfeedCredentialId: null }, actor]],
+      ["receiptAttest", ["D1", "A1", "PO1", 1003, "GBP", "2026-10-08", actor]],
+    ]);
+  });
+
+  it("hub-render writes one 0600 file with every section and the doctor findings", async () => {
+    const { h } = fakeHub();
+    const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "hub-")), "hub.html");
+    const r = (await runHubCommand("hub-render", [out], h, "operator:alice")) as { sections: string[] };
+    expect(r.sections).toEqual(expect.arrayContaining(["overview", "treasury", "rails", "tax", "capital", "profit", "credentials", "audit", "reconcile", "health"]));
+    expect(fs.statSync(out).mode & 0o777).toBe(0o600);
+    expect(fs.readFileSync(out, "utf8")).toMatch(/^<!doctype html>/);
+  });
+});

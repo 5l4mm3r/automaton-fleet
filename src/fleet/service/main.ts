@@ -21,6 +21,10 @@
  *   FLEET_PUBLIC_HOSTNAME          DNS name children connect to; the certificate must cover it
  *   FLEET_PUBLIC_LISTEN            HTTPS bind address, e.g. 0.0.0.0:8443. FLEET_API_LISTEN then
  *                                  stays a loopback plain-HTTP listener for local administration
+ *   FLEET_PUBLIC_PROXY_PROTOCOL    R36: "true" when the host's nginx fronts :443 (stream SNI routing,
+ *                                  `proxy_protocol on`). FLEET_PUBLIC_LISTEN must then be a loopback
+ *                                  address (e.g. 127.0.0.1:8443); every connection must open with a
+ *                                  PROXY v1 line naming the real client, and is never treated as local
  *   FLEET_ALLOWED_ORIGINS          comma-separated browser origins (default: none)
  *   FLEET_SERVICE_EXPECTED_USER    OS user the service must run as (systemd: automaton-fleet-service)
  *   FLEET_REAPER_INTERVAL_MS       reaper period (default 15000; 0 = off)
@@ -36,8 +40,12 @@
  * registry-approved runtime.
  */
 
+import { LocalProvider } from "../cognition/local.js";
 import crypto from "crypto";
 import fs from "fs";
+import { RELEASES_DIR } from "../founder/host.js";
+import { releaseDoctrines } from "../founder/field-guide.js";
+import { PublicPages } from "./public-pages.js";
 import net from "net";
 import os from "os";
 import path from "path";
@@ -54,7 +62,7 @@ import {
   type SystemdCredentialHost,
 } from "../secret-files.js";
 import { loadRuntimeRelease, runtimeReleaseProblem, sameRelease } from "../runtime.js";
-import { FleetService, type AuditEntry, type ReadinessCheck } from "./server.js";
+import { FleetService, isLoopbackHost, type AuditEntry, type ReadinessCheck } from "./server.js";
 import { OpenAICompatibleProvider, ScriptedProvider } from "../cognition/providers.js";
 import { AnthropicProvider, parseEffort, parsePromptCache, parseThinking } from "../cognition/anthropic.js";
 import type { ProviderFactory } from "../cognition/routed-gateway.js";
@@ -152,6 +160,8 @@ const HOSTNAME_RE = /^(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]
 export interface RemoteConfig {
   hostname: string;
   publicListen: { host: string; port: number } | null;
+  /** R36: the public listener sits behind the local nginx and reads PROXY v1 headers (loopback bind only). */
+  proxyProtocol: boolean;
   allowedOrigins: string[];
 }
 
@@ -163,8 +173,12 @@ export function loadRemoteConfig(e: Record<string, string | undefined>, tls: { c
   for (const o of origins) {
     if (!/^https:\/\/[^/\s]+$/.test(o)) throw new Error(`FLEET_ALLOWED_ORIGINS entries must be https origins (got ${o}).`);
   }
+  const proxyRaw = e.FLEET_PUBLIC_PROXY_PROTOCOL?.trim().toLowerCase() ?? "";
+  if (proxyRaw !== "" && proxyRaw !== "true" && proxyRaw !== "false") throw new Error(`FLEET_PUBLIC_PROXY_PROTOCOL must be true or false (got ${proxyRaw}).`);
+  const proxyProtocol = proxyRaw === "true";
   if (!remote) {
     if (publicListenRaw) throw new Error("FLEET_PUBLIC_LISTEN requires FLEET_REMOTE_LISTEN_ENABLED=true.");
+    if (proxyProtocol) throw new Error("FLEET_PUBLIC_PROXY_PROTOCOL requires FLEET_REMOTE_LISTEN_ENABLED=true.");
     return null;
   }
   if (!tls) throw new Error("FLEET_REMOTE_LISTEN_ENABLED=true requires FLEET_TLS_CERT_FILE and FLEET_TLS_KEY_FILE.");
@@ -172,7 +186,15 @@ export function loadRemoteConfig(e: Record<string, string | undefined>, tls: { c
   if (!HOSTNAME_RE.test(hostname)) throw new Error("FLEET_REMOTE_LISTEN_ENABLED=true requires FLEET_PUBLIC_HOSTNAME (a DNS name).");
   const problems = tlsProblemsForHost(tls, hostname);
   if (problems.length) throw new Error(`Refusing remote listener: ${problems.join("; ")}`);
-  return { hostname, publicListen: publicListenRaw ? parseListen(publicListenRaw, { remoteAllowed: true }) : null, allowedOrigins: origins };
+  const publicListen = publicListenRaw ? parseListen(publicListenRaw, { remoteAllowed: true }) : null;
+  if (proxyProtocol) {
+    if (!publicListen) throw new Error("FLEET_PUBLIC_PROXY_PROTOCOL=true requires FLEET_PUBLIC_LISTEN (a loopback address the local nginx forwards to).");
+    // A PROXY header is trusted only because nothing but the local nginx can reach the listener.
+    if (!isLoopbackHost(publicListen.host)) {
+      throw new Error(`FLEET_PUBLIC_PROXY_PROTOCOL=true requires a loopback FLEET_PUBLIC_LISTEN (got ${publicListen.host}): PROXY headers from the network would be forgeable.`);
+    }
+  }
+  return { hostname, publicListen, proxyProtocol, allowedOrigins: origins };
 }
 
 /**
@@ -220,6 +242,11 @@ export function readCognitionKey(file: string, uid: number | null = process.getu
  * model/thinking/effort the owner's verified mapping names (T1: no thinking, no effort). Used by the controller and
  * by the routing verification runner, so both exercise the same code.
  */
+/** Every routed tier, the relevance scorer and the spend reviewer use the one local model (no tier settings apply). */
+export function localProviderFactory(base: LocalProvider): ProviderFactory {
+  return () => Object.assign(base.with(), { promptCache: "off" as const });
+}
+
 export function routedProviderFactory(base: AnthropicProvider): ProviderFactory {
   // Schema v23: the prompt-cache mode is decided per routed call (tier policy × scope × evidenced reuse), never taken
   // from this controller's FLEET_COGNITION_PROMPT_CACHE, which governs the legacy single-model path only.
@@ -229,12 +256,37 @@ export function routedProviderFactory(base: AnthropicProvider): ProviderFactory 
   };
 }
 
+/**
+ * 2026-10-23 (owner directive: a self-contained machine): the inference profile. "local_only" (the default) admits only
+ * none, scripted (tests) or local (a model server on this machine); a cloud provider needs FLEET_INFERENCE_PROFILE=cloud_allowed
+ * set explicitly — nothing falls back to one. The registry keeps its own profile too (v112).
+ */
+export function inferenceProfile(e: Record<string, string | undefined>): "local_only" | "cloud_allowed" {
+  const p = e.FLEET_INFERENCE_PROFILE?.trim() || "local_only";
+  if (p !== "local_only" && p !== "cloud_allowed") throw new Error(`FLEET_INFERENCE_PROFILE must be local_only or cloud_allowed (got ${p}).`);
+  return p;
+}
+
 export function loadCognitionProvider(e: Record<string, string | undefined>, uid: number | null = process.getuid?.() ?? null): CognitionConfig {
   const id = e.FLEET_COGNITION_PROVIDER?.trim() || "none";
   const deadlineMs = boundedInt(e, "FLEET_COGNITION_DEADLINE_MS", 10_000, 240_000, 120_000);
+  const profile = inferenceProfile(e);
   if (id === "none") return { provider: null, deadlineMs };
   if (id === "scripted") return { provider: new ScriptedProvider(e.FLEET_COGNITION_MODEL?.trim() || undefined), deadlineMs };
-  if (id !== "openai_compatible" && id !== "anthropic") throw new Error(`FLEET_COGNITION_PROVIDER must be none, scripted, openai_compatible or anthropic (got ${id}).`);
+  if (id === "local") {
+    const model = e.FLEET_COGNITION_MODEL?.trim() ?? "";
+    const baseUrl = e.FLEET_COGNITION_BASE_URL?.trim() || "http://127.0.0.1:8090/v1";
+    if (!model) throw new Error("FLEET_COGNITION_PROVIDER=local requires FLEET_COGNITION_MODEL (the local server's model alias).");
+    const keyFile = e.FLEET_COGNITION_API_KEY_FILE?.trim();
+    return {
+      provider: new LocalProvider({ baseUrl, model, ...(keyFile ? { apiKey: readCognitionKey(keyFile, uid) } : {}),
+        attemptTimeoutMs: boundedInt(e, "FLEET_COGNITION_ATTEMPT_TIMEOUT_MS", 5_000, 240_000, 240_000), maxAttempts: boundedInt(e, "FLEET_COGNITION_MAX_ATTEMPTS", 1, 3, 2),
+        thinking: e.FLEET_LOCAL_THINKING?.trim() === "on" }),
+      deadlineMs,
+    };
+  }
+  if (id !== "openai_compatible" && id !== "anthropic") throw new Error(`FLEET_COGNITION_PROVIDER must be none, scripted, local, openai_compatible or anthropic (got ${id}).`);
+  if (profile === "local_only") throw new Error(`FLEET_COGNITION_PROVIDER=${id} is a cloud provider: the inference profile is local_only (set FLEET_INFERENCE_PROFILE=cloud_allowed explicitly to permit it).`);
   const baseUrl = e.FLEET_COGNITION_BASE_URL?.trim() || (id === "anthropic" ? "https://api.anthropic.com/v1" : "");
   const model = e.FLEET_COGNITION_MODEL?.trim() ?? "";
   const keyFile = e.FLEET_COGNITION_API_KEY_FILE?.trim() ?? "";
@@ -379,14 +431,20 @@ export async function startFleetServiceFromEnv(
     const research = researchConfig(e);
     // Schema v22: routed tiers reuse this controller's credential and settings; only model/thinking/effort differ, and
     // only as the owner's verified mapping says. Inert unless the owner enables routing (global and per founder).
-    const cognitionProviderFactory: ProviderFactory | null = cognitionProvider instanceof AnthropicProvider ? routedProviderFactory(cognitionProvider) : null;
+    // 2026-10-23: a local provider serves every routed tier itself (one local model; nothing routes elsewhere).
+    const cognitionProviderFactory: ProviderFactory | null = cognitionProvider instanceof AnthropicProvider ? routedProviderFactory(cognitionProvider)
+      : cognitionProvider instanceof LocalProvider ? localProviderFactory(cognitionProvider) : null;
     const service = new FleetService({
       cognitionProvider,
       cognitionProviderFactory,
+      // R41.1: founder-v5 only for founders whose attested release contains the v5 runtime code.
+      runtimeDoctrines: releaseDoctrines(RELEASES_DIR, (p) => fs.existsSync(p)),
       researchFetcher: unixFetcher(research.socket),
       researchDenyDomains: research.denyDomains,
       cognitionDeadlineMs: cognition.deadlineMs,
       admin: controller,
+      // v76: the public offer and order pages (each answer comes from a validating service-role function).
+      publicPages: new PublicPages(controller, { log: (event, detail) => console.log(JSON.stringify({ level: "warn", event, ...detail, ts: new Date().toISOString() })) }),
       agent,
       realReplicationEnabled,
       reaperIntervalMs: e.FLEET_REAPER_INTERVAL_MS ? Number(e.FLEET_REAPER_INTERVAL_MS) : undefined,
@@ -407,8 +465,14 @@ export async function startFleetServiceFromEnv(
     let publicUrl: string | null = null;
     if (remote?.publicListen) {
       url = (await service.listenAdmin(listen.port, listen.host)).url;
-      const pub = await service.listen(remote.publicListen.port, remote.publicListen.host);
-      publicUrl = `https://${remote.hostname}:${pub.port}`;
+      if (remote.proxyProtocol) {
+        // R36: clients reach https://<hostname> (:443) through the local nginx; this listener is loopback only.
+        await service.listenProxied(remote.publicListen.port, remote.publicListen.host);
+        publicUrl = `https://${remote.hostname}`;
+      } else {
+        const pub = await service.listen(remote.publicListen.port, remote.publicListen.host);
+        publicUrl = `https://${remote.hostname}:${pub.port}`;
+      }
     } else {
       url = (await service.listen(listen.port, listen.host)).url;
     }

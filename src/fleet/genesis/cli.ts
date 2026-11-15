@@ -21,14 +21,18 @@
  *   reproduction-eligibility <agentId>                             inert assessment (never executable)
  *   knowledge-review <proposalId> promote|reject [note…]
  *   identity-claim-decide <claimId> approve|reject [--ttl S] [--max-reads N]
- *   owner-queue [all]                                              v25: founders' owner requests + knowledge proposals awaiting review (oldest first)
- *   owner-request-decide <requestId> approved|declined|answered <response…>   v25: record the answer (grants nothing)
- *   owner-request-import <proposalId> <category> blocking|non-blocking [--goal gN]   v25: a legacy knowledge proposal that is
- *                                                                  really an owner request becomes an UNRESOLVED one (decides nothing)
+ *   owner-queue [all]                                              v26: founders' open external dependencies + knowledge proposals for review (oldest first)
+ *   owner-request-decide <requestId> approved|declined|answered <response…>   resolve an identity/legal/constitutional dependency (records the answer; grants nothing)
+ *   cognition-run <agentId> start <ceilingMinor> <hours> <note…> | end <reason…> | status   v94: one bounded run's total AI ceiling
+ *   owner-request-supersede <requestId> <decision…>   v94: a resolved request replaced by the owner's current decision (once; Fleet Control tells the agent)
+ *   operations-uncertain                                           v95: operations whose outcome is not known, and what to check for each
+ *   operation-resolve <operationId> happened|not_happened <what you checked…>   v95: record it after checking the provider's own account
+ *   owner-request-import <proposalId> <kind> <action…> [--goal gN]   v26: a legacy proposal that is really an identity/legal
+ *                                                                  dependency becomes an action-scoped one (decides nothing; blocks only that action)
  *
  * Schema v13 founder cognition (owner controls; never run by an AI operator):
  *   cognition-policy                                                  show the global policy
- *   cognition-enable <scripted|openai_compatible|anthropic> <model> [--max-output N] [--in-microcents N] [--out-microcents N]
+ *   cognition-enable <local|scripted|openai_compatible|anthropic> <model> [--max-output N] [--in-microcents N] [--out-microcents N]
  *                    [--cache-write-microcents N] [--cache-read-microcents N] [--daily-budget N] [--turns-per-hour N]   OWNER GATE
  *   cognition-disable                                                 global kill switch (immediate)
  *   founder-cognition <agentId> enable|disable|pause|resume [--daily-budget N] [--turns-per-hour N] <reason…>
@@ -38,13 +42,20 @@
  *                                                                     schema v18 web research (OWNER GATE)
  *   founder-research <agentId> pause|resume [--hourly N] [--daily N] <reason…>
  *   research-log [agentId] [--limit N]                                the research audit (attempts + results)
+ *   F2-A: --daily-budget / --turns-per-hour and the research --*-hourly / --*-daily figures are INFRASTRUCTURE SAFETY
+ *   CEILINGS (runaway loops, bugs, provider abuse, accidental catastrophic burn) — never research budgets, targets or
+ *   entitlements. Set them well above professional use; founders never see them unless a ceiling is actually hit.
  *   founders-report                                                   per founder: status, cash, cognition, 24 h usage,
- *                                                                     forbidden tool requests (refused), orders awaiting you
+ *                                                                     forbidden tool requests (refused), reserved orders
+ *                                                                     (v27: no spend order ever awaits the owner)
  *
  * Schema v22 neutral cognition routing (owner controls; inert until enabled; never run by an AI operator):
  *   cognition-routing                                                 routing switch, thresholds and tier mappings
  *   cognition-tier-set <T1|T2|T3> <model> --max-output N --in-microcents N --out-microcents N --cache-write-microcents N
  *                      --cache-read-microcents N [--thinking adaptive] [--effort low|medium|high|max]   (voids verification)
+ *   cognition-tier-set-local <T1|T2|T3> <alias> --max-output N         (v112) map a tier to the LOCAL model (zero provider prices; voids verification)
+ *   inference-profile                                                 (v112) the registry's inference profile, tiers and policy
+ *   inference-profile-set <local_only|cloud_allowed> <reason…>        (v112) OWNER GATE: cloud only by this explicit, recorded choice
  *   cognition-tier-verify <tier> <model> <verification reference…>    after checking the model on the provider account
  *   cognition-tier-enable <tier> | cognition-tier-disable <tier>      a tier can only be enabled once verified
  *   cognition-tier-cache <T2|T3> <off|prefix|prefix+tail>             v23 prompt-cache policy of a tier (T1 is always off; a
@@ -56,9 +67,9 @@
  * Schema v24 opportunity → experiment pipeline (owner controls; FINANCIALLY INERT: simulated capital only):
  *   experiment-policy                                                  switch, caps and the Evidence Ladder
  *   experiment-enable [--hard-cap N] | experiment-disable              OWNER GATE (founders may propose only while enabled)
- *   evidence-ladder-set <level 0..4> <autoCapMinor|owner>              auto-approval cap of a level ("owner" = owner decides)
+ *   evidence-ladder-set <level 0..4> <autoCapMinor|owner>              LEGACY since schema v30: stored only; no ladder cap and no owner level is applied
  *   experiment-list [agentId] | experiment-show <experimentId> | strategy-registry [agentId]
- *   experiment-decide <experimentId> approved|partially_approved|watch|rejected [--approved N] [--max-loss N] <reason…>
+ *   experiment-decide <experimentId> approved|rejected [--approved N] <reason…>   legacy proposed/WATCH only; approve = the founder's requested budget in full (own capital is sized by the founder)
  *   experiment-relevance <experimentId> <attemptId> relevant|irrelevant|uncertain <reason…>   audited override of the controller's relevance verdict (optional)
  *   experiment-attribute-revenue <revenueJournalId> <experimentId> <reason…>        E4 lineage: link realized revenue to its experiment
  *   experiment-observe <experimentId> <metric> <value> <source…>       a controller-recorded observation (the synthetic executor)
@@ -76,10 +87,10 @@ import { GENESIS_FOUNDERS, parseFxMicro, type AttestationEvidence, type PgGenesi
 export const GENESIS_COMMANDS = new Set([
   "genesis-policy", "genesis-bootstrap", "genesis-list", "genesis-status", "genesis-dry-run", "genesis-enable", "genesis-disable", "genesis-propose",
   "genesis-approve", "genesis-provision", "genesis-attest", "genesis-fail", "genesis-fund", "genesis-activate", "genesis-abort",
-  "reproduction-eligibility", "knowledge-review", "identity-claim-decide", "owner-queue", "owner-request-decide", "owner-request-import",
+  "reproduction-eligibility", "knowledge-review", "identity-claim-decide", "owner-queue", "owner-request-decide", "owner-request-supersede", "operations-uncertain", "operation-resolve", "cognition-run", "owner-request-import",
   "cognition-policy", "cognition-enable", "cognition-disable", "founder-cognition", "cognition-status", "cognition-log", "founders-report",
   "research-policy", "research-enable", "research-disable", "founder-research", "research-log",
-  "cognition-routing", "cognition-tier-set", "cognition-tier-verify", "cognition-tier-enable", "cognition-tier-disable",
+  "cognition-routing", "cognition-tier-set", "cognition-tier-set-local", "inference-profile", "inference-profile-set", "cognition-tier-verify", "cognition-tier-enable", "cognition-tier-disable",
   "cognition-routing-enable", "cognition-routing-disable", "founder-routing", "cognition-report", "cognition-tier-cache",
   "experiment-policy", "experiment-enable", "experiment-disable", "evidence-ladder-set", "experiment-list", "experiment-show", "strategy-registry",
   "experiment-decide", "experiment-relevance", "experiment-attribute-revenue", "experiment-observe", "experiment-stop", "experiment-conclude", "relevance-calls", "relevance-reconcile",
@@ -161,7 +172,7 @@ export async function runGenesisCommand(
     case "cognition-policy":
       return ok(await g.cognitionPolicy());
     case "cognition-enable": {
-      if (p[0] !== "scripted" && p[0] !== "openai_compatible" && p[0] !== "anthropic") throw new Error("usage: cognition-enable <scripted|openai_compatible|anthropic> <model> [...]");
+      if (p[0] !== "scripted" && p[0] !== "openai_compatible" && p[0] !== "anthropic" && p[0] !== "local") throw new Error("usage: cognition-enable <local|scripted|openai_compatible|anthropic> <model> [...]");
       if (!p[1]) throw new Error("usage: cognition-enable <provider> <model> [...]");
       return ok(await g.setCognitionPolicy({
         enabled: true, provider: p[0], model: p[1], maxOutputTokens: optInt("--max-output", 16), inputMicrocents: optInt("--in-microcents"),
@@ -217,6 +228,20 @@ export async function runGenesisCommand(
       return ok(await g.cognitionTierSet({ tier, model, thinking, effort, maxOutputTokens: need("--max-output"), inputMicrocents: need("--in-microcents"),
         outputMicrocents: need("--out-microcents"), cacheWriteMicrocents: need("--cache-write-microcents"), cacheReadMicrocents: need("--cache-read-microcents"), actor }));
     }
+    case "cognition-tier-set-local": {
+      const [tier, model] = p;
+      const max = optInt("--max-output");
+      if (!/^T[123]$/.test(tier ?? "") || !model || !max) throw new Error("usage: cognition-tier-set-local <T1|T2|T3> <alias> --max-output N");
+      return ok(await g.cognitionTierSetLocal(tier, model, max, actor));
+    }
+    case "inference-profile":
+      return ok(await g.inferenceProfileState());
+    case "inference-profile-set": {
+      const [profile] = p;
+      const reason = p.slice(1).join(" ");
+      if ((profile !== "local_only" && profile !== "cloud_allowed") || reason.length < 3) throw new Error("usage: inference-profile-set <local_only|cloud_allowed> <reason…>");
+      return ok(await g.inferenceProfileSet(profile, reason, actor));
+    }
     case "cognition-tier-verify": {
       const [tier, model] = p;
       const ref = p.slice(2).join(" ");
@@ -249,8 +274,8 @@ export async function runGenesisCommand(
     case "experiment-decide": {
       const [id, decision] = p;
       const reason = p.slice(2).join(" ");
-      if (!UUID.test(id ?? "") || !["approved", "partially_approved", "watch", "rejected"].includes(decision ?? "") || reason.length < 3) {
-        throw new Error("usage: experiment-decide <experimentId> approved|partially_approved|watch|rejected [--approved N] [--max-loss N] <reason…>");
+      if (!UUID.test(id ?? "") || !["approved", "rejected"].includes(decision ?? "") || reason.length < 3) {
+        throw new Error("usage: experiment-decide <experimentId> approved|rejected [--approved N] <reason…> (approve = the requested budget in full)");
       }
       return ok(await g.experimentDecide(id, decision, optInt("--approved", 0) ?? null, optInt("--max-loss", 0) ?? null, actor, reason));
     }
@@ -377,10 +402,32 @@ export async function runGenesisCommand(
       if (d !== "approved" && d !== "declined" && d !== "answered") throw new Error("usage: owner-request-decide <requestId> approved|declined|answered <response…>");
       return ok(await g.decideOwnerRequest(uuid(p[0], "owner-request-decide"), d, p.slice(2).join(" ") || null, actor));
     }
+    case "cognition-run": {
+      const agentId = p[0], action = p[1];
+      if (!agentId || !ULID.test(agentId) || !["start", "end", "status"].includes(action ?? "")) {
+        throw new Error("usage: cognition-run <agentId> start <ceilingMinor> <hours> <what the run is…> | end <reason…> | status");
+      }
+      if (action === "status") return ok(await g.cognitionRun(agentId));
+      if (action === "end") return ok(await g.cognitionRunEnd(agentId, p.slice(2).join(" ") || "ended by the owner", actor));
+      const ceiling = Number(p[2]), hours = Number(p[3]);
+      if (!Number.isSafeInteger(ceiling) || !Number.isFinite(hours) || p.length < 5) throw new Error("usage: cognition-run <agentId> start <ceilingMinor> <hours> <what the run is…>");
+      return ok(await g.cognitionRunStart(agentId, ceiling, hours, p.slice(4).join(" "), actor));
+    }
+    case "operations-uncertain": return ok(await g.operationsUncertain());
+    case "operation-resolve": {
+      if (!p[0] || !["happened", "not_happened"].includes(p[1] ?? "") || p.length < 3) {
+        throw new Error("usage: operation-resolve <operationId> happened|not_happened <what you checked…>  (e.g. Proton Sent folder: no message with Message-ID fleet-…)");
+      }
+      return ok(await g.operationResolve(uuid(p[0], "operation-resolve"), p[1], p.slice(2).join(" "), actor));
+    }
+    case "owner-request-supersede": {
+      if (!p[0] || p.length < 2) throw new Error("usage: owner-request-supersede <requestId> <the current decision…>  (an answered request stays on record; the agent is told the current decision)");
+      return ok(await g.supersedeOwnerRequest(uuid(p[0], "owner-request-supersede"), p.slice(1).join(" "), actor));
+    }
     case "owner-request-import": {
-      const usage = "usage: owner-request-import <proposalId> sales_channel|account_or_identity|capital_or_spend|policy_exception|information|other blocking|non-blocking [--goal gN]";
-      if (!p[1] || (p[2] !== "blocking" && p[2] !== "non-blocking")) throw new Error(usage);
-      return ok(await g.importOwnerRequest(uuid(p[0], "owner-request-import"), p[1], p[2] === "blocking", flag(a, "--goal") ?? null, actor));
+      const usage = "usage: owner-request-import <proposalId> human_identity|kyc|legal_signature|constitutional_change|non_delegable_credential <unavailable action…> [--goal gN]";
+      if (!p[1] || p.length < 3) throw new Error(usage);
+      return ok(await g.importOwnerRequest(uuid(p[0], "owner-request-import"), p[1], p.slice(2).join(" "), flag(a, "--goal") ?? null, actor));
     }
     case "identity-claim-decide": {
       if (p[1] !== "approve" && p[1] !== "reject") throw new Error("usage: identity-claim-decide <claimId> approve|reject [--ttl S] [--max-reads N]");

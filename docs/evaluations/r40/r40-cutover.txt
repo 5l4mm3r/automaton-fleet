@@ -1,0 +1,16 @@
+== rollout cutover 136c4bd (schema 44 -> 45) from 7f65cd1 start 2026-10-07T20:51:47Z
+also cycled with the controller: automaton-fleet-dashboard.service automaton-fleet-identity.service
+Verified build 9823d0a39d61b01b721ee5ede9b99ffd51fa446f33a7cca3a26318ec6676be0a staged at /home/ubuntu/.cache/automaton-fleet/stage/136c4bd72f8ef00cd4556ac33df7a5c3c3f9cf89
+Installed release 136c4bd72f8ef00cd4556ac33df7a5c3c3f9cf89 (build 9823d0a39d61b01b721ee5ede9b99ffd51fa446f33a7cca3a26318ec6676be0a). Restart the service to pick it up: systemctl restart automaton-fleet
+OUTAGE START 2026-10-07T20:52:30Z
+pre-migration dump /home/ubuntu/automaton_fleet-v44-pre-v45-20261007T205230Z.dump sha 03a218f96fb6af9e
+migrate-check: {"currentVersion":44,"resultingVersion":45,"wouldApply":[45],"requiredVersion":45,"rolledBack":true}
+reconciliation: OK (/home/ubuntu/rollout-136c4bd-cutover-reconcile.json: events 2869 before, purged {"notification":2,"session_opened":1700,"operator_action":9,"runtime_approved":44,"credential_issued":1,"agent_role_granted":33,"custody_role_granted":28,"service_role_granted":33,"identity_role_granted":8,"ledger_journal_posted":526,"notifications_deleted":7,"operator_role_granted":30,"dashboard_role_granted":8,"genesis_runtime_issued":1,"genesis_runtime_evidence":1,"founder_runtime_upgrade_prepared":8,"founder_runtime_upgrade_committed":8}, preserved 422)
+OUTAGE END 2026-10-07T20:52:49Z
+DEPLOYMENT:        OK
+SAFE FOR DRY RUN:           YES
+SAFE FOR REAL REPLICATION:  NO (3 blockers)
+SAFE FOR REAL PAYMENTS:     NO (1 blocker)
+  [PASS] public :443 served by the TLS edge (PROXY protocol to the loopback controller)
+rollback point: /etc/automaton-fleet/runtime.env.pre-136c4bd; releases/7f65cd1; dump /home/ubuntu/automaton_fleet-v44-pre-v45-20261007T205230Z.dump
+== ROLLOUT 136c4bd DEPLOYED 2026-10-07T20:52:55Z: schema 45, readyz 200

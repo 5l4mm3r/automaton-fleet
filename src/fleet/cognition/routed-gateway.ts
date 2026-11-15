@@ -20,8 +20,8 @@
  */
 
 import crypto from "crypto";
-import { FOUNDER_CHARTER, FOUNDER_ROUTED_ADDENDUM, FOUNDER_ROUTINE_CHARTER, ProviderError, type ChatMessage, type ChatResult, type CognitionProvider, type ThinkingBlock } from "./types.js";
-import { CognitionError, DEFAULT_COGNITION_DEADLINE_MS, MAX_COGNITION_DEADLINE_MS, validateMessages } from "./gateway.js";
+import { FOUNDER_ROUTED_ADDENDUM, FOUNDER_ROUTINE_CHARTER, ProviderError, compactTools, imageTokens, charterFor, parseDoctrine, toolsetForDoctrine, type ChatMessage, type ChatResult, type CognitionProvider, type ThinkingBlock } from "./types.js";
+import { CognitionError, DEFAULT_COGNITION_DEADLINE_MS, MAX_COGNITION_DEADLINE_MS, promptMaterial, validateMessages } from "./gateway.js";
 import { founderStepTools } from "./capability-signature.js";
 import { RouteError, actionDigest, candidateFor, parseRouteRequest, route, type RouteDecision, type TierCandidate } from "./router.js";
 import { DECISION_PACKET_VERSION, TASK_PACKET_VERSION, taskPacketProblems } from "./task-packet.js";
@@ -31,8 +31,17 @@ export interface RoutedCognitionPorts {
   capabilities(agentId: string, token: string): Promise<Record<string, unknown> & { ok: boolean }>;
   cognitionStatus(agentId: string, token: string): Promise<Record<string, unknown> & { ok: boolean }>;
   routingState(agentId: string): Promise<Record<string, unknown> | null>;
-  authorize(agentId: string, estimateUsdCents: number, route: Record<string, unknown>, promptSha256: string): Promise<Record<string, unknown> & { ok: boolean }>;
+  /**
+   * v62: `conversationTurn` set = a call inside an owner conversation turn (the controller's SQL decides who pays: the
+   * treasury while the turn is this founder's, open and within its bound; otherwise the founder, exactly as without it).
+   */
+  authorize(agentId: string, estimateUsdCents: number, route: Record<string, unknown>, promptSha256: string, conversationTurn?: string | null): Promise<Record<string, unknown> & { ok: boolean }>;
   record(agentId: string, requestId: string, r: CognitionRecord, obs: { packetBytes: number | null; thinkingTokens: number | null; promptCache: string | null; cacheReason?: string | null }): Promise<Record<string, unknown> & { ok: boolean }>;
+  /**
+   * R41.1: the doctrines the founder's ATTESTED runtime release implements (absent = not checked, e.g. tests and
+   * development). A doctrine beyond founder-v4 is served only when its release contains the matching runtime code.
+   */
+  runtimeDoctrines?(agentId: string): Promise<readonly string[]>;
 }
 
 export type PromptCachePolicy = "off" | "prefix" | "prefix+tail";
@@ -67,6 +76,26 @@ export function cachePolicy(d: Pick<RouteDecision, "tier" | "scope">, c: Pick<Ti
   if (loop.continuing === true) return { mode: configured, reason: `${d.tier} tool loop: reuse expected` };
   if (warm) return { mode: configured, reason: `${d.tier} same model within the cache lifetime` };
   return { mode: "off", reason: `${d.tier} no evidenced reuse` };
+}
+
+/** Tokens the provider adds around a request (its tool-use instructions and message framing): an allowance, not a measure. */
+export const PROVIDER_FRAMING_TOKENS = 2_000;
+
+/**
+ * 2026-10-20: a call's reservation is a true upper bound of what it can cost (owner: the run's all-inclusive maximum must
+ * hold through the enforcement and posting code). A call is charged min(reservation, actual cost); before, the reservation
+ * counted the prompt at ~4 characters a token and the tools by name only, so a call could cost more than it reserved —
+ * the credit drawn (and the tax/fee on it) exceeded the charge. Now: every UTF-8 byte of the request — the prompt and the
+ * full tool definitions — as a token (a token is never shorter than a byte), each image at the provider's own maximum,
+ * the provider's framing, all at the dearer of the input and cache-write prices; plus the whole output allowance (thinking
+ * included) at the output price.
+ */
+export function costBoundMicro(promptText: string, tools: readonly unknown[], imageTokenCount: number, maxTokens: number,
+  p: { inputMicrocentsPerToken: number; outputMicrocentsPerToken: number; cacheWriteMicrocentsPerToken?: number | null }): number {
+  // 2026-10-23: images by their own bound (imageTokens: w·h/750, at least IMAGE_TOKEN_ESTIMATE each), not a flat estimate.
+  const inputTokens = Buffer.byteLength(promptText, "utf8") + Buffer.byteLength(JSON.stringify(tools), "utf8") + imageTokenCount + PROVIDER_FRAMING_TOKENS;
+  const inputPrice = Math.max(p.inputMicrocentsPerToken, p.cacheWriteMicrocentsPerToken ?? p.outputMicrocentsPerToken);
+  return inputTokens * inputPrice + maxTokens * p.outputMicrocentsPerToken;
 }
 
 const sha = (s: string) => crypto.createHash("sha256").update(s, "utf8").digest("hex");
@@ -112,6 +141,15 @@ export async function inferRouted(
   if (!status.policyEnabled || status.provider === "none") throw new CognitionError(403, "FLEET_COGNITION_DISABLED", "cognition is disabled by the owner");
   const rs = await ports.routingState(agentId);
   if (!rs || rs.routingEnabled !== true) throw new CognitionError(409, "FLEET_ROUTING_DISABLED", "routing is not enabled for this founder");
+  // R41.1: the doctrine the founder's runtime implements (absent = founder-v4, every pre-R41.1 runtime). It selects the
+  // charter text and the v5 tool vocabulary only: never the tier, the price, a permission or any capability class.
+  const doctrine = parseDoctrine(body.doctrine);
+  if (!doctrine) throw new CognitionError(400, "FLEET_DOCTRINE_UNKNOWN", "unknown founder doctrine");
+  // A request string is not proof: the founder's registered (attested) release must implement the doctrine's tools and
+  // continuity. A mismatch is refused, never silently downgraded (it means the running code is not the pinned code).
+  if (doctrine !== "founder-v4" && ports.runtimeDoctrines && !(await ports.runtimeDoctrines(agentId)).includes(doctrine)) {
+    throw new CognitionError(409, "FLEET_DOCTRINE_INCOMPATIBLE", "this founder's attested runtime release does not implement that doctrine");
+  }
 
   // 2. The router decides from the task alone.
   let decision: RouteDecision;
@@ -156,30 +194,38 @@ export async function inferRouted(
   }
   // A question-scoped escalation answers; it does not act: the charter's rules and priors, no toolbox.
   const question = decision.scope === "question";
-  const system = routine ? FOUNDER_ROUTINE_CHARTER : question ? FOUNDER_CHARTER : `${FOUNDER_CHARTER}\n${FOUNDER_ROUTED_ADDENDUM}`;
+  const charter = charterFor(doctrine);
+  const system = routine ? FOUNDER_ROUTINE_CHARTER : question ? charter : `${charter}\n${FOUNDER_ROUTED_ADDENDUM}`;
   // Reuse is evidenced inside an active tool loop on the SAME model: the request already carries an assistant turn and
   // this conversation's previous step ran on this model (a T3 action step inside a T2 loop is not reuse: it returns to T2).
   const cache = cachePolicy(decision, candidate, rs, { continuing: messages.some((m) => m.role === "assistant") && producer === candidate.model });
   const provider = providerFor(candidate, decision.effort, cache.mode);
   // Ordinary routed steps also get the cognition tools (delegate a routine chore, escalate one question); R24: the
   // experiment tools only while the owner has the pipeline on. One function builds this list and the capability signature.
-  const tools = routine || question ? [] : founderStepTools(caps, true);
+  const fullTools = routine || question ? [] : founderStepTools(caps, true, doctrine, toolsetForDoctrine(doctrine));
+  // 2026-10-23: a local model gets the compact tool list (full docs through tool_help); a cloud tier keeps the full one.
+  const tools = candidate.provider === "local" && fullTools.length ? compactTools(fullTools) : fullTools;
   const maxTokens = candidate.maxOutputTokens;
-  const promptText = JSON.stringify({ system, messages, tools: tools.map((t) => t.name) });
+  const prompt = promptMaterial(system, messages, tools.map((t) => t.name));
+  const promptText = prompt.text;
   const promptSha = sha(promptText);
-  const estimateMicro = approxTokens(promptText) * candidate.prices.inputMicrocentsPerToken + maxTokens * candidate.prices.outputMicrocentsPerToken;
+  const estimateMicro = costBoundMicro(promptText, tools, imageTokens(messages), maxTokens, candidate.prices);
   const req = parseRouteRequest(body.route ?? { taskClass: "agent_step" });
   const snapshot = {
     tier: decision.tier, provider: candidate.provider, model: candidate.model, taskClass: decision.taskClass, ...(req.taskId ? { taskId: req.taskId } : {}),
     requestedTier: decision.requestedTier, escalationReason: decision.escalationReason, ...(req.escalation?.parentRequestId ? { parentRequestId: req.escalation.parentRequestId } : {}),
     source: decision.source, scope: decision.scope, minTier: decision.minTier, maxTier: decision.maxTier,
     ...(req.actionClass ? { actionClass: req.actionClass } : {}),
+    // v82: the helper call's own record (kind and stated purpose), kept with the reservation and the log — never routing input.
+    ...(req.helper ? { helper: req.helper } : {}),
     thinking: candidate.thinking, effort: decision.effort ?? candidate.effort,
   };
-  const auth = await ports.authorize(agentId, Math.max(1, Math.ceil(estimateMicro / 1_000_000)), snapshot, promptSha);
+  const turn = typeof body.conversationTurn === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(body.conversationTurn) ? body.conversationTurn : null;
+  const auth = await ports.authorize(agentId, Math.max(1, Math.ceil(estimateMicro / 1_000_000)), snapshot, promptSha, turn);
   if (!auth.ok) {
     const code = String(auth.code);
-    throw new CognitionError(code === "FLEET_COGNITION_BUSY" || code === "FLEET_COGNITION_RATE_LIMITED" ? 429 : code === "FLEET_COGNITION_DUPLICATE_FAILURE" ? 409 : 403, code, "inference not authorized");
+    throw new CognitionError(code === "FLEET_COGNITION_BUSY" || code === "FLEET_COGNITION_RATE_LIMITED" ? 429 : code === "FLEET_COGNITION_DUPLICATE_FAILURE" ? 409 : 403, code,
+      code === "FLEET_TREASURY_INSUFFICIENT" ? `the treasury cannot pay for this owner conversation turn (available ${auth.availableMinor ?? "?"}, needed ${auth.neededMinor ?? "?"})` : "inference not authorized");
   }
   const requestId = String(auth.requestId);
   const deadlineMs = Math.min(MAX_COGNITION_DEADLINE_MS, Math.max(1_000, opts.deadlineMs ?? DEFAULT_COGNITION_DEADLINE_MS));
@@ -213,7 +259,8 @@ export async function inferRouted(
   // Per tool call: id + argument digest + (for consequential actions) the canonical action digest the boundary checks.
   const loggedCalls = result.toolCalls.slice(0, 10).map((t) => {
     const a = actionDigest(t.name, t.arguments);
-    return { id: t.id, name: t.name, argsSha256: sha(JSON.stringify(t.arguments)), ...(a ? { actionSha256: a } : {}) };
+    const refs = businessRefs(t.arguments);
+    return { id: t.id, name: t.name, argsSha256: sha(JSON.stringify(t.arguments)), ...(a ? { actionSha256: a } : {}), ...(refs.length ? { refs } : {}) };
   });
   const rec = await ports.record(agentId, requestId, {
     outcome: "ok", inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens,
@@ -232,3 +279,24 @@ export async function inferRouted(
 }
 
 export { TASK_PACKET_VERSION, DECISION_PACKET_VERSION };
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const VENTURE_RE = /^[a-z0-9][a-z0-9._-]{1,47}$/;
+/**
+ * v90: which business objects a tool call acted on (order, enquiry, offer, venture, repository access), for unit economics
+ * (the cost of the AI call is shared among them). Only these ids are kept — never the arguments themselves.
+ */
+export function businessRefs(args: unknown): string[] {
+  const out = new Set<string>();
+  const scan = (o: unknown, depth: number) => {
+    if (!o || typeof o !== "object" || Array.isArray(o) || depth > 1) return;
+    const x = o as Record<string, unknown>;
+    for (const [k, kind] of [["orderId", "order"], ["enquiryId", "enquiry"], ["offerId", "offer"], ["authorizationId", "repo"]] as const) {
+      if (typeof x[k] === "string" && UUID_RE.test(x[k] as string)) out.add(`${kind}:${x[k]}`);
+    }
+    for (const k of ["venture", "ventureKey"]) if (typeof x[k] === "string" && VENTURE_RE.test(x[k] as string)) out.add(`venture:${x[k]}`);
+    scan(x.args, depth + 1);
+  };
+  scan(args, 0);
+  return [...out].slice(0, 6);
+}

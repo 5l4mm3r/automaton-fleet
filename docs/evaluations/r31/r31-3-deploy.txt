@@ -1,0 +1,77 @@
+founder before: pid 349284 restarts 0 pin-sha bd018340eb13a6dc facts bed022a8099eb296f6e70f7954c05cbcd148689184d86369b557a44afb9952e9
+pins before: FLEET_RUNTIME_COMMIT=f07261464ec208a11b8d904adf6baa0e9460f47c FLEET_RUNTIME_BUILD_ID=9bf9ae2241f25d8f97354c9969806b44eb22f60fc6abc9b4edcfc42f1bf66091  current releases/f07261464ec208a11b8d904adf6baa0e9460f47c
+pins: FLEET_RUNTIME_COMMIT=3aebcc22107a0dfebe9123f58df004ccdc1d155b FLEET_RUNTIME_BUILD_ID=055e80765edf48186f1a7076c4687a77f05b2175e6ab3f6bf9dca6aabfe01729 FLEET_RUNTIME_LOCKFILE_SHA256=eee9dc2f24b389bd00f8d5d617391ce34d04c612bc8f7fca201bb9f7c1a3a811  (pre-r31 sha dfdbdf39a1873b02)
+Verified build 055e80765edf48186f1a7076c4687a77f05b2175e6ab3f6bf9dca6aabfe01729 staged at /home/ubuntu/.cache/automaton-fleet/stage/3aebcc22107a0dfebe9123f58df004ccdc1d155b
+Installed release 3aebcc22107a0dfebe9123f58df004ccdc1d155b (build 055e80765edf48186f1a7076c4687a77f05b2175e6ab3f6bf9dca6aabfe01729). Restart the service to pick it up: systemctl restart automaton-fleet
+inflight: 0
+OUTAGE START 2026-10-02T12:05:18Z
+dump /home/ubuntu/automaton_fleet-v32-pre-v33-20261002T120518Z.dump 3972048 B mode 600 owner ubuntu sha 396586354bb6bbe56788df7b513ebf13ec09fa9fdedd2259e9e8b3102fed2de3
+dump readable: 123 tables with data, 826 functions
+dump sha verified
+ledger head at cutover: 540 1d3e56f717f130e4758f4feccb7f13016184b987dc9d43ea0439780df566cd3c journals 503
+migrate-check: {"currentVersion":32,"resultingVersion":33,"wouldApply":[33],"requiredVersion":33,"rolledBack":true}
+Applied migrations: 33
+{"ok":true,"latencyMs":2,"schemaVersion":33,"countersConsistent":true}
+migrated 2026-10-02T12:05:22Z: schema 33
+audit PASS
+approved
+RUNTIME IDENTITY: VERIFIED
+OUTAGE END 2026-10-02T12:05:29Z
+readyz 200
+controller cwd /opt/automaton-fleet/releases/3aebcc22107a0dfebe9123f58df004ccdc1d155b
+founder after: pid 349284 restarts 0 pin-sha bd018340eb13a6dc facts bed022a8099eb296f6e70f7954c05cbcd148689184d86369b557a44afb9952e9
+automaton-fleet: active
+automaton-fleet-operator-api: active
+automaton-fleet-custody: active
+automaton-fleet-fetcher.socket: active
+automaton-fleet-chatgpt-adapter.socket: active
+automaton-fleet-chatgpt-tunnel: active
+automaton-fleet-founder@01M3F50SH7PNX2E3GST13J52AS.service: active
+  [WARN] sandbox termination                not supported by the Conway API; dead agents' sandboxes may keep running
+DEPLOYMENT:        OK
+SAFE FOR DRY RUN:           YES
+SAFE FOR REAL REPLICATION:  NO (3 blockers)
+SAFE FOR REAL PAYMENTS:     NO (1 blocker)
+  [PASS] no stuck reservation           0 expired-unreaped, 0 uncertain provisioning
+SAFE FOR DRY RUN:           YES
+SAFE FOR REAL REPLICATION:  NO (3 blockers)
+SAFE FOR REAL PAYMENTS:     NO (1 blocker)
+  [PASS] port 6379 loopback-only (or closed)
+  [PASS] port 8787 loopback-only (or closed)
+  [PASS] remote HTTPS listener enabled by runtime.env
+  "journals": 503,
+  "unbalanced": 0
+}
+hub-health ok=true LEDGER_VERIFY:INFO SETTLEMENT_JOURNALS:INFO ENVELOPE_LEDGER:INFO DEPENDENCIES_ACTION_SCOPED:INFO RAILS_NOT_LIVE_PINNED:INFO
+{
+  "at": "2026-10-02T12:05:41.820101+00:00",
+  "ok": true,
+  "findings": [
+    {
+      "code": "LEDGER_VERIFY",
+      "detail": {
+        "ok": true,
+        "headHash": "1d3e56f717f130e4758f4feccb7f13016184b987dc9d43ea0439780df566cd3c",
+        "journals": 503,
+        "unbalanced": 0
+      },
+      "severity": "INFO"
+    },
+    {
+      "code": "SETTLEMENT_JOURNALS",
+      "detail": {
+        "mismatched": 0
+      },
+      "severity": "INFO"
+    },
+    {
+      "code": "TREASURY",
+      "detail": {
+        "unallocatedMinor": 0,
+        "operatingPoolMinor": 0
+      },
+      "severity": "INFO
+custody: {"liveSigners":0,"instructions":{"failed":0,"issued":0,"claimed":0,"settled":0,"claimedStale":0},"livingAgents":1,"agentHeldKeys":0,"attestedRails":0,"keylessAgents":1,"attestationTtlS":900,"executionEnabled":false}
+v33: tax fallback 0, sale tax without profile 0
+flags: REAL_REPLICATION_ENABLED=false REAL_PAYMENTS_ENABLED=false OWNER_SWEEP_ENABLED=false FLEET_DRY_RUN_CHILD=false 
+== R31-3 end 2026-10-02T12:05:44Z

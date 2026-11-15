@@ -2,6 +2,8 @@ node_modules
 dist
 .env
 *.log
+# Sealed evaluation evidence: the driver logs are part of each run's SHA256SUMS and must be committed.
+!docs/evaluations/**/driver*.log
 .DS_Store
 *.db
 *.db-journal

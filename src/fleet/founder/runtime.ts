@@ -48,7 +48,7 @@ import { MANIFESTS, NON_GRANTABLE, TOOL_CAPABILITIES, createCapabilityManifestRu
 import { getForbiddenCommandMatch } from "../../agent/policy-rules/command-safety.js";
 import { DRY_RUN_FORBIDDEN_ENV } from "../dry-run/child.js";
 import { FounderToolbox } from "./toolbox.js";
-import { FounderMind } from "./mind.js";
+import { FOUNDER_STEPS_PER_TURN, FounderMind } from "./mind.js";
 import { LoopGuard } from "./loop-guard.js";
 import { sandboxSelfTest, type SandboxSelfTest } from "./exec-sandbox.js";
 import {
@@ -399,7 +399,7 @@ export async function runFounderRuntime(opts: FounderRuntimeOptions = {}): Promi
     throw new FounderRefusedError("Refusing to run as a Genesis founder: the registry record does not match this runtime.");
   }
   const caps = (await untilAvailable(() => client.capabilities())) as { origin?: string; manifestId?: string; manifestSha256?: string; reproductionExecutable?: boolean; paymentExecutable?: boolean };
-  if (caps.origin !== "genesis_founder" || caps.manifestId !== ctx.manifest.manifestId || caps.manifestSha256 !== manifestSha256(ctx.manifest)) {
+  if ((caps.origin !== "genesis_founder" && caps.origin !== "reseed_founder") || caps.manifestId !== ctx.manifest.manifestId || caps.manifestSha256 !== manifestSha256(ctx.manifest)) {
     throw new FounderRejectedError("The registry capability manifest differs from this runtime's compiled manifest.");
   }
   const result: FounderRuntimeResult = { mode: "active", agentId: ctx.agentId, instanceId: ctx.instanceId, heartbeats: 0, challengesPassed: 0, mindTurns: 0, mindRefusals: 0 };
@@ -407,17 +407,29 @@ export async function runFounderRuntime(opts: FounderRuntimeOptions = {}): Promi
   // question-scoped escalation, action linkage) is used only while FleetController reports routing active for this
   // founder — until then the mind runs its legacy turn with its existing history, exactly as before.
   const memoryDir = path.join(stateNsDir, "memory");
-  const loopGuard = new LoopGuard();
+  const loopGuard = new LoopGuard({ stateDir: stateNsDir, workspaceDir });   // failed calls remembered across restarts (bounded, 24 h)
   const mind =
     ctx.env.FLEET_FOUNDER_AGENT_LOOP === "controller"
       ? new FounderMind({
           ports: client,
           stateDir: stateNsDir,
           log,
-          toolbox: new FounderToolbox({ manifest: ctx.manifest, workspaceDir, memoryDir, ports: client, loopGuard,
+          // F2-A: professional self-governance (decisions.ts): research serves an open decision within the founder's own stop;
+          // own capital is committed only within the founder's own risk sizing. FleetController approves none of it.
+          toolbox: new FounderToolbox({ manifest: ctx.manifest, workspaceDir, memoryDir, ports: client, loopGuard, selfGovernance: true,
+            runtime: { commit: ctx.release.commit, buildId: ctx.release.buildId },
             // F1-FRESH-02: counts and codes only (MemoryTelemetry), through the same redacted line logger as every event.
             memoryTelemetry: (m) => log("founder_memory_write", { ...m, runtimeCommit: ctx.release.commit, buildId: ctx.release.buildId }) }),
           routed: { memoryDir, workspaceDir, manifest: ctx.manifest, loopGuard },
+          maxStepsPerTurn: FOUNDER_STEPS_PER_TURN,
+          // 2026-10-18 (owner): continuity across cut-off turns, progress by new results, and waiting without inference once
+          // work has stalled; a waiting founder is woken only by a change, an owner message or its own review time.
+          workContinuity: true,
+          // 2026-10-22: a stop (deploy, restart) ends a turn between steps with its working record saved.
+          ...(opts.signal ? { stopSignal: opts.signal } : {}),
+          hibernationSafetyMs: Number.POSITIVE_INFINITY,
+          // A waiting founder whose runtime changed wakes once and is told (mind.ts upgradeLine).
+          runtimeCommit: ctx.release.commit,
         })
       : null;
   const thinkEvery = Math.max(1, opts.thinkEvery ?? (Number(ctx.env.FLEET_FOUNDER_THINK_EVERY) || 1));
@@ -431,6 +443,9 @@ export async function runFounderRuntime(opts: FounderRuntimeOptions = {}): Promi
   }
   const interval = Math.min(60_000, Math.max(1_000, Number(ctx.env.FLEET_FOUNDER_INTERVAL_MS) || 30_000));
   const target = opts.heartbeats ?? 0;
+  /** While a turn runs, a keep-alive heartbeat at most this often (and never more often than the configured interval). */
+  const KEEPALIVE_MIN_MS = 15_000;
+  let keepalives = 0;
   log("founder_started", { agentId: ctx.agentId, instanceId: ctx.instanceId, commit: ctx.release.commit, manifest: ctx.manifest.manifestId });
   while (!opts.signal?.aborted && (target === 0 || result.heartbeats < target)) {
     const before = client.lastChallenge;
@@ -450,7 +465,22 @@ export async function runFounderRuntime(opts: FounderRuntimeOptions = {}): Promi
     result.heartbeats++;
     if (client.lastChallenge && client.lastChallenge !== before && client.lastChallenge.passed) result.challengesPassed++;
     if (mind && result.heartbeats % thinkEvery === 0) {
-      const t = await mind.turn(`Heartbeat ${result.heartbeats} (thinking slot ${result.heartbeats / thinkEvery}) at ${new Date().toISOString()}. Decide your next step.`);
+      // 2026-10-23 (local inference: a turn can take minutes on local hardware): the founder reports itself active before it
+      // thinks, and keeps heartbeating while a turn runs — a slow model is never mistaken for a dead founder.
+      report({ mode: "active", heartbeats: result.heartbeats, challengesPassed: result.challengesPassed, thinking: true });
+      const keepalive = setInterval(() => {
+        const b = client.lastChallenge;
+        void client.heartbeat(cred.agentId).then((ok) => {
+          if (!ok) return;
+          keepalives++;                                                        // not a heartbeat slot: the thinking cadence is unchanged
+          if (client.lastChallenge && client.lastChallenge !== b && client.lastChallenge.passed) result.challengesPassed++;
+        }).catch(() => undefined);
+      }, Math.max(interval, KEEPALIVE_MIN_MS));
+      keepalive.unref?.();
+      let t: Awaited<ReturnType<typeof mind.turn>>;
+      try {
+        t = await mind.turn(`Heartbeat ${result.heartbeats} (thinking slot ${result.heartbeats / thinkEvery}) at ${new Date().toISOString()}. Decide your next step.`);
+      } finally { clearInterval(keepalive); }
       if (t.ran) result.mindTurns!++;
       result.mindRefusals! += t.refusals.length;
       lastMind = { ran: t.ran, reason: t.reason ?? null, steps: t.steps, tools: t.toolCalls, refusals: t.refusals, chargedCents: t.chargedCents };
@@ -462,6 +492,7 @@ export async function runFounderRuntime(opts: FounderRuntimeOptions = {}): Promi
       challengesPassed: result.challengesPassed,
       capabilities: { manifestSha256: caps.manifestSha256, matchesCompiled: true, reproductionExecutable: caps.reproductionExecutable, paymentExecutable: caps.paymentExecutable },
       ledger: ledger ? { cash: ledger.cash, genesisAllocation: ledger.genesisAllocation, externalCustomerRevenue: ledger.externalCustomerRevenue, lifetimeContribution: ledger.lifetimeContribution } : null,
+      keepalives,
       agentLoop: mind ? { mode: "controller", turns: result.mindTurns, refusals: result.mindRefusals, last: lastMind, execSandbox, routing: mind.routing, loopGuard: loopGuard.stats } : "disabled",
       home: os.homedir() === ctx.stateDir,
     });

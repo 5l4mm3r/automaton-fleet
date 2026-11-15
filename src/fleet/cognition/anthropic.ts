@@ -183,7 +183,11 @@ export function toAnthropicMessages(messages: ChatMessage[]): Array<{ role: "use
   for (const m of messages) {
     if (m.role === "user") push("user", [{ type: "text", text: m.content || "(no observation)" }]);
     else if (m.role === "tool") {
-      push("user", [{ type: "tool_result", tool_use_id: m.toolCallId ?? "unknown", content: m.content, ...(m.isError ? { is_error: true } : {}) }]);
+      // v79: a tool result may carry images (view_image): text first, then the images, inside the same tool_result.
+      const content = m.images?.length
+        ? [{ type: "text", text: m.content }, ...m.images.map((i) => ({ type: "image", source: { type: "base64", media_type: i.mediaType, data: i.dataB64 } }))]
+        : m.content;
+      push("user", [{ type: "tool_result", tool_use_id: m.toolCallId ?? "unknown", content, ...(m.isError ? { is_error: true } : {}) }]);
     } else {
       const thinking: Block[] = (m.thinking ?? []).map((t) => ({ ...t }));
       const text: Block[] = m.content ? [{ type: "text", text: m.content }] : [];

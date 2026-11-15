@@ -61,6 +61,8 @@ IPAddressDeny=localhost link-local multicast 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 
 InaccessiblePaths=-/etc/automaton-fleet -/var/lib/automaton-fleet -/var/lib/automaton-fleet-witness -/var/lib/automaton-fleet-custody -/var/lib/automaton-fleet-operator-api -/var/lib/automaton-fleet-chatgpt-adapter -/var/lib/automaton-fleet-chatgpt-tunnel
 InaccessiblePaths=-/var/lib/private -/var/lib/automaton-founders -/var/lib/postgresql -/etc/postgresql -/var/log/automaton-fleet -/var/log/automaton-fleet-operator -/var/log/automaton-fleet-chatgpt-adapter
 InaccessiblePaths=-/run/credentials -/root -/etc/ssh -/opt/automaton-fleet/chatgpt-adapter -/opt/automaton-fleet/tunnel-client -/run/automaton-fleet-chatgpt
+# v52: the storefront gateway's database credential and token vault.
+InaccessiblePaths=-/etc/automaton-fleet/gumroad.env -/var/lib/automaton-fleet-gumroad
 
 [Install]
 WantedBy=multi-user.target

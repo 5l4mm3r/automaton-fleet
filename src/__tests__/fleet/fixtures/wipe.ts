@@ -10,14 +10,37 @@ import type { PoolClient } from "pg";
  * ledger head reset (journals, postings and agent accounts are emptied).
  * Must run inside the caller's transaction.
  */
+/** v35 singleton rows (economy-engine policies and the replication high-water state): reset to migration defaults. */
+const V35_SINGLETONS = ["fleet_replication_policy", "fleet_replication_state", "fleet_mission_policy", "fleet_risk_policy",
+  "fleet_notification_policy", "fleet_estate_policy"];
+
 export async function wipeRegistry(c: PoolClient, schema: string): Promise<void> {
   const keep = new Set([
     "fleet_state", "fleet_schema_migrations", "fleet_treasury_policy",
     "fleet_economic_model", "fleet_ledger_classes", "fleet_ledger_kinds", "fleet_ledger_rules", "fleet_ledger_head", "fleet_legacy_economics",
     "fleet_capability_classes", "fleet_capability_manifests", "fleet_genesis_policy", "fleet_reproduction_policy",
-    "fleet_operator_state", "fleet_operator_routes", "fleet_cognition_policy", "fleet_research_policy",
+    "fleet_operator_state", "fleet_operator_routes", "fleet_cognition_policy", "fleet_inference_profile", "fleet_research_policy",
     "fleet_cognition_routing", "fleet_cognition_tiers", "fleet_action_min_tier",
-    "fleet_experiment_policy", "fleet_evidence_ladder",
+    "fleet_experiment_policy", "fleet_evidence_ladder", "fleet_spend_circuit_breaker",
+    "fleet_economy_policy", "fleet_venture_transition_rules", "fleet_tax_policy", "fleet_transfer_policy",
+    "fleet_capital_policy", "fleet_sweep_policy", "fleet_cognition_depth_policy", "fleet_admin_withdrawal_policy", "fleet_custody_policy",
+    // v49 / v50 singleton policies (defaults: standing identity authority off; dormancy on, no automatic death); the v50 library.
+    "fleet_identity_autonomy", "fleet_insolvency_policy", "fleet_knowledge_library",
+    // v53: the weekly card statement schedule (a singleton; tests that change it restore it).
+    "fleet_card_statement_policy", "fleet_card_request_policy",
+    // v55: the survival protection switch (on by default; tests of the death rule turn it off).
+    "fleet_survival_protection",
+    // v64: the spend review policy and its cost accrual (singletons).
+    "fleet_spend_review_policy", "fleet_spend_review_accrual",
+    // v65: Fleet Control review costs per kind (singleton rows).
+    "fleet_control_accrual",
+    // v82: the buyer-consent wordings (immutable reference rows the orders point to).
+    "fleet_buyer_consent_wordings",
+    // v87: the deliverable formats a capability check can name (immutable reference rows).
+    "fleet_deliverable_formats",
+    // v96: Fleet Control's daily AI budget (a singleton; tests that change it restore it).
+    "fleet_control_ai_budget",
+    ...V35_SINGLETONS,
   ]);
   const r = await c.query<{ t: string }>(
     "SELECT tablename AS t FROM pg_tables WHERE schemaname = $1 ORDER BY tablename",
@@ -65,7 +88,7 @@ export async function wipeRegistry(c: PoolClient, schema: string): Promise<void>
         cache_read_microcents_per_token = s.cr, enabled = false, verified_at = NULL, verified_ref = NULL, updated_by = 'migration'
       FROM (VALUES ('T1', 'claude-haiku-4-5-20251001', NULL, NULL, 2000, 100, 500, 125, 10),
                    ('T2', 'claude-sonnet-5-5', 'adaptive', 'medium', 8000, 200, 1000, 250, 20),
-                   ('T3', 'claude-opus-5-5', 'adaptive', 'medium', 8000, 400, 2000, 500, 20)) AS s(tier, model, thinking, effort, max_out, i, o, cw, cr)
+                   ('T3', 'claude-opus-5-5', 'adaptive', 'medium', 16000, 400, 2000, 500, 20)) /* v102: 16000 */ AS s(tier, model, thinking, effort, max_out, i, o, cw, cr)
       WHERE t.tier = s.tier`);
   }
   // v23: tier prompt-cache policy back to its migration default (T1 off; T2/T3 prefix).
@@ -81,6 +104,51 @@ export async function wipeRegistry(c: PoolClient, schema: string): Promise<void>
   if (r.rows.some((x) => x.t === "fleet_research_policy")) {
     await c.query(`UPDATE "${schema}".fleet_research_policy SET research_enabled = false, founder_hourly = 60, founder_daily = 300,
       fleet_hourly = 120, fleet_daily = 600, updated_by = 'migration'`);
+  }
+  // v27: the spend circuit breaker is a singleton infrastructure row (a missing row fails closed): back to every signal unset.
+  if (r.rows.some((x) => x.t === "fleet_spend_circuit_breaker")) {
+    await c.query(`UPDATE "${schema}".fleet_spend_circuit_breaker SET tripped = false, trip_reason = NULL, order_wallet_bp = NULL,
+      velocity_window_s = NULL, velocity_wallet_bp = NULL, updated_by = 'migration'`);
+  }
+  // v28: the economy policy back to its migration defaults (the transition rules are grammar and are kept as is).
+  if (r.rows.some((x) => x.t === "fleet_economy_policy")) {
+    await c.query(`UPDATE "${schema}".fleet_economy_policy SET shortlist_max = 5, evidence_fresh_days = 30, knowledge_fresh_days = 180, forecast_tolerance_bp = 2500,
+      failsafe_open_opportunities = 60, failsafe_active_ventures = 25, failsafe_records_per_day = 400, failsafe_vendors_per_day = 20, research_loop_fetches = 40, research_loop_window_h = 24,
+      no_route_hours = 72, updated_by = 'migration'`);
+  }
+  // v29: tax fallback and safe-transfer policy back to their defaults; the circuit-breaker novelty signal unset.
+  if (r.rows.some((x) => x.t === "fleet_tax_policy")) {
+    // v33 pins the retired unprofiled reserve to 0 (no synthetic tax); before v33 its default was 2500.
+    const v33 = (await c.query(`SELECT 1 FROM pg_constraint WHERE conname = 'fleet_tax_policy_no_synthetic_tax' AND connamespace = '"${schema}"'::regnamespace`)).rows.length > 0;
+    await c.query(`UPDATE "${schema}".fleet_tax_policy SET unprofiled_reserve_bp = ${v33 ? 0 : 2500}, updated_by = 'migration'`);
+    await c.query(`UPDATE "${schema}".fleet_transfer_policy SET cushion_bp = 1000, horizon_days = 30, burn_window_days = 30, updated_by = 'migration'`);
+    await c.query(`UPDATE "${schema}".fleet_spend_circuit_breaker SET new_destination_age_s = NULL, new_destination_wallet_bp = NULL`);
+  }
+  // v30: capital, sweep and cognition-depth policy back to their migration defaults (sweeps disabled).
+  if (r.rows.some((x) => x.t === "fleet_capital_policy")) {
+    await c.query(`UPDATE "${schema}".fleet_capital_policy SET version = 1, enabled = true, treasury_reserve_bp = 5000, max_request_treasury_bp = 1000,
+      max_agent_exposure_bp = 2500, partial_tranche_bp = 5000, min_confidence_bp = 3000, min_evidence_items = 2, min_track_record = 3, limited_stop_loss_bp = 5000,
+      envelope_days = 30, limited_envelope_days = 14, high_roi_bp = 5000, reinvestment_reduction_bp = 2500, reapply_cooldown_s = 3600,
+      limited_max_single_bp = 5000, calibration_floor_bp = 2500, updated_by = 'migration'`);
+    await c.query(`UPDATE "${schema}".fleet_sweep_policy SET enabled = false, mature_fleet_bp = 4500, max_bp = 7000, maturity_days = 180, surplus_multiple = 4,
+      population_bands = '[{"maxAgents":10,"rateBp":1000},{"maxAgents":20,"rateBp":1250},{"maxAgents":30,"rateBp":1500},{"maxAgents":40,"rateBp":1750},{"maxAgents":49,"rateBp":2000}]', updated_by = 'migration'`);
+    await c.query(`UPDATE "${schema}".fleet_cognition_depth_policy SET major_exposure_bp = 2500, updated_by = 'migration'`);
+  }
+  // v31: admin-withdrawal risk advice back to its default (10 % cushion, 30-day horizon).
+  if (r.rows.some((x) => x.t === "fleet_admin_withdrawal_policy")) {
+    await c.query(`UPDATE "${schema}".fleet_admin_withdrawal_policy SET cushion_bp = 1000, horizon_days = 30, updated_by = 'migration'`);
+  }
+  // v32: custody signer heartbeat window back to its default.
+  if (r.rows.some((x) => x.t === "fleet_custody_policy")) {
+    await c.query(`UPDATE "${schema}".fleet_custody_policy SET attestation_ttl_s = 900, updated_by = 'migration'`);
+  }
+  for (const t of V35_SINGLETONS) {
+    if (r.rows.some((x) => x.t === t)) await c.query(`DELETE FROM "${schema}".${t}; INSERT INTO "${schema}".${t} (id) VALUES (1)`);
+  }
+  // v108: the owner's supported geography back to its migration seed (the owner's decision: no exclusions).
+  if (r.rows.some((x) => x.t === "fleet_sales_geography")) {
+    await c.query(`INSERT INTO "${schema}".fleet_sales_geography (id, unsupported, reason, set_by) VALUES (1, '{}', 'migration seed (test fixture)', 'migration:v108')
+      ON CONFLICT (id) DO UPDATE SET unsupported = EXCLUDED.unsupported, reason = EXCLUDED.reason, set_by = EXCLUDED.set_by`);
   }
   for (const t of all) await c.query(`ALTER TABLE ${t} ENABLE TRIGGER USER`);
   // v21 fixtures: an identity USD→GBP rate (so historical accounting expectations keep their numbers) and generous

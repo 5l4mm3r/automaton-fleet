@@ -26,6 +26,7 @@ import { runBridgeCommand } from "../../fleet/bridge/cli.js";
 import { UNTRUSTED_NOTICE } from "../../fleet/bridge/validate.js";
 import { findPgBin, startEphemeralPg, type EphemeralPg } from "./fixtures/ephemeral-pg.js";
 import { bridgeFixture, privateTmp, writeFakeSsh } from "./fixtures/fake-ssh.js";
+import { FLEET_PG_SCHEMA_VERSION } from "../../fleet/postgres/migrations.js";
 
 const PG_BIN = findPgBin();
 const PIN = { repo: "https://github.com/5l4mm3r/automaton-fleet", commit: "c".repeat(40) };
@@ -127,7 +128,7 @@ describe.skipIf(!PG_BIN)("Claude bridge against the real Operator API (ephemeral
     const w = await c.whoami();
     expect(w.data).toMatchObject({ principal: { id: claude.principalId, name: "bridge-claude", kind: "bridge_claude" }, key: { id: claude.keyId } });
     const s = await c.fleetStatus();
-    expect(s.data).toMatchObject({ fleet: { living: 0, mode: "DEVELOPMENT" }, schema: { version: 25 }, operatorApi: { enabled: true } });
+    expect(s.data).toMatchObject({ fleet: { living: 0, mode: "DEVELOPMENT" }, schema: { version: FLEET_PG_SCHEMA_VERSION }, operatorApi: { enabled: true } });
     const p1 = await c.listAgents({ limit: 2 });
     expect(p1.data.items).toHaveLength(2);
     expect(p1.data.next).not.toBeNull();
@@ -199,7 +200,7 @@ describe.skipIf(!PG_BIN)("Claude bridge against the real Operator API (ephemeral
     const a = await cli(["agents", "--limit", "10"]);
     expect(a.rc).toBe(0);
     expect(a.out.data.items[0].name).toMatchObject({ kind: "untrusted_text" });
-    expect((await cli(["status"])).out.data.schema.version).toBe(25);
+    expect((await cli(["status"])).out.data.schema.version).toBe(FLEET_PG_SCHEMA_VERSION);
     expect((await cli(["events", "--limit", "3", "--type", "cap_set"])).rc).toBe(0);
     expect((await cli(["agent", a.out.data.items[0].agentId])).out.data.item.agentId).toBe(a.out.data.items[0].agentId);
     expect((await cli(["agents", "--limit", "0"])).out.error.code).toBe("UNSUPPORTED_REQUEST");

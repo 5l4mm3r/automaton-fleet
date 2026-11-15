@@ -10,6 +10,7 @@
  *      (wrong pin/build) — each leaves the SAME founder healthy on its previous runtime;
  *   4. upgrade → the same founder on the target runtime (identity, credential, memory, workspace, ledger preserved);
  *   5. rollback → the same founder on the previous runtime; then upgrade again;
+ *   7. (R41.1) rollback AFTER founder-v5 use: the previous runtime keeps the v5-written journal and goals; upgrade again;
  *   6. routed cognition through fake provider paths on the upgraded runtime: tiers verified and enabled, routing on,
  *      the founder opted in — T1/T2/T3 selection, question-scoped escalation and return to T2, consequential-action
  *      linkage, tier/scope-aware caching, no thinking across model boundaries, memory and ledger continuity.
@@ -32,6 +33,7 @@ import { AnthropicProvider } from "../cognition/anthropic.js";
 import { REHEARSAL_AGENT_HEADER } from "../cognition/fake-openai.js";
 import { startFakeAnthropic, type FakeAnthropic } from "../cognition/fake-anthropic.js";
 import type { ProviderFactory } from "../cognition/routed-gateway.js";
+import { releaseDoctrines } from "./field-guide.js";
 import { REHEARSAL_DONE_FACT, REHEARSAL_TRIAGE_FACT, RoutedRehearsalModel, routedRehearsalToolless } from "../eval/routed-rehearsal-model.js";
 import type { RuntimeRelease } from "../runtime.js";
 import { FOUNDER_CREDENTIAL_FILE, FOUNDER_IDENTITY_FILE, type FounderIdentityFile } from "./evidence.js";
@@ -62,6 +64,8 @@ export interface UpgradeRehearsalOptions {
   healthTimeoutMs?: number;
   pollMs?: number;
   log?: (event: string, detail?: Record<string, unknown>) => void;
+  /** R41.1: the installed releases (as the production controller checks doctrine compatibility). Absent = not checked. */
+  releasesDir?: string;
 }
 
 export interface UpgradeRehearsalReport {
@@ -71,7 +75,7 @@ export interface UpgradeRehearsalReport {
   from: RuntimeRelease;
   to: RuntimeRelease;
   checks: RehearsalCheck[];
-  receipts: { failedStart?: UpgradeReceipt; upgrade?: UpgradeReceipt; second?: UpgradeReceipt };
+  receipts: { failedStart?: UpgradeReceipt; upgrade?: UpgradeReceipt; second?: UpgradeReceipt; third?: UpgradeReceipt };
   routed: Array<Record<string, unknown>>;
 }
 
@@ -105,9 +109,10 @@ export async function runUpgradeRehearsal(o: UpgradeRehearsalOptions): Promise<U
   const genesis = new PgGenesisAdmin({ connectionString: o.registry.ownerUrl });
   const owner = new pg.Pool({ connectionString: o.registry.ownerUrl, max: 2, options: "-c search_path=fleet" });
   const audit: Array<Record<string, unknown>> = [];
+  const scripted = new RoutedRehearsalModel(UPGRADE_REHEARSAL_MODEL);
   const fake: FakeAnthropic = await startFakeAnthropic({
     apiKey: FAKE_KEY, model: UPGRADE_REHEARSAL_MODEL, models: [HAIKU, SONNET, OPUS], thinking: true, fault: () => null,
-    script: new RoutedRehearsalModel(UPGRADE_REHEARSAL_MODEL), toolless: routedRehearsalToolless, cacheMinTokens: 1024,
+    script: scripted, toolless: routedRehearsalToolless, cacheMinTokens: 1024,
   });
   const base = new AnthropicProvider({ baseUrl: fake.url, apiKey: FAKE_KEY, model: UPGRADE_REHEARSAL_MODEL, attemptTimeoutMs: 5_000, maxAttempts: 2, backoffMs: 100,
     extraHeaders: (agentId) => ({ [REHEARSAL_AGENT_HEADER]: agentId }) });
@@ -125,6 +130,7 @@ export async function runUpgradeRehearsal(o: UpgradeRehearsalOptions): Promise<U
       admin: svcStore, agent: gw, realReplicationEnabled: false, reaperIntervalMs: 0, release,
       audit: (e) => audit.push(e as unknown as Record<string, unknown>), terminator: new UnsupportedSandboxTerminator(),
       cognitionProvider: base, cognitionProviderFactory: factory, cognitionDeadlineMs: 12_000,
+      ...(o.releasesDir ? { runtimeDoctrines: releaseDoctrines(o.releasesDir, (p) => fs.existsSync(p)) } : {}),
     });
     const l = await service.listen(port, "127.0.0.1");
     port = Number(new URL(l.url).port);
@@ -168,6 +174,8 @@ export async function runUpgradeRehearsal(o: UpgradeRehearsalOptions): Promise<U
     const today = new Date().toISOString().slice(0, 10);
     if (acct !== "USD") await ledger.recordFxRate("USD", acct, 750_000, "synthetic rehearsal rate (throwaway registry)", today, o.actor);
     await ledger.recordProviderCredits("anthropic", "purchase", 5_000, `rehearsal:synthetic-${crypto.randomUUID()}`, o.actor);
+    // v112: a new registry is local_only; this throwaway one speaks the Messages API to the FAKE provider (no real one): allowed explicitly.
+    await genesis.inferenceProfileSet("cloud_allowed", "upgrade rehearsal: fake Messages API, throwaway registry", o.actor);
     await genesis.setCognitionPolicy({ enabled: true, provider: "anthropic", model: UPGRADE_REHEARSAL_MODEL, inputMicrocents: 1_000, outputMicrocents: 4_000, maxOutputTokens: 4_000, actor: o.actor });
     await genesis.setFounderCognition(a, { enabled: true, maxTurnsPerHour: 2_000, dailyBudgetCents: 5_000, reason: "rehearsal registry only", actor: o.actor });
     const ident = JSON.parse(fs.readFileSync(path.join(o.host.stateDir(a), FOUNDER_IDENTITY_FILE), "utf8")) as FounderIdentityFile;
@@ -325,27 +333,28 @@ export async function runUpgradeRehearsal(o: UpgradeRehearsalOptions): Promise<U
       costMicrocents: Number(r.cost_microcents), outcome: r.outcome, tools: (r.tool_calls as Array<{ name: string }>).map((t) => t.name) }));
     const ok = routed.filter((r) => r.outcome === "ok");
     const t1 = ok.filter((r) => r.tier === "T1");
-    const t2 = ok.filter((r) => r.tier === "T2");
+    // 2026-10-20 (owner): every step of the founder's own work runs on the critical tier (founder_work, Opus).
+    const t2 = ok.filter((r) => r.task_class === "founder_work");
     const question = ok.filter((r) => r.tier === "T3" && r.router_decision?.scope === "question");
     const action = ok.filter((r) => r.tier === "T3" && r.router_decision?.source === "action_boundary");
-    check("routed: the opted-in founder's calls are routed by task — T1 routine chore (Haiku), T2 ordinary steps (Sonnet), T3 critical (Opus)",
+    check("routed: the opted-in founder's calls are routed by task — T1 routine chore (Haiku), its own work and a critical question on the most capable tier (Opus)",
       Boolean(walked) && all.slice(before).filter((r) => r.tier === null).length <= 1 && t1.length >= 1 && t1.every((r) => r.model === HAIKU && r.task_class === "extraction")
-        && t2.length >= 3 && t2.every((r) => r.model === SONNET && r.task_class === "agent_step") && [...question, ...action].every((r) => r.model === OPUS),
-      `${t1.length} T1, ${t2.length} T2, ${question.length + action.length} T3 call(s) after opt-in${walked ? "" : `; the routed walk did not complete — last stops: ${mindStops().join(", ") || "none"}; agent loop ${JSON.stringify((await rep())?.agentLoop?.last ?? null)}`}`);
+        && t2.length >= 3 && t2.every((r) => r.model === OPUS && r.tier === "T3") && !ok.some((r) => r.model === SONNET) && [...question, ...action].every((r) => r.model === OPUS),
+      `${t1.length} T1, ${t2.length} founder_work (T3), ${question.length} question(s) after opt-in${walked ? "" : `; the routed walk did not complete — last stops: ${mindStops().join(", ") || "none"}; agent loop ${JSON.stringify((await rep())?.agentLoop?.last ?? null)}`}`);
     const parent = question[0] ? t2.find((r) => r.request_id === question[0].parent_request_id) : null;
     const afterQuestion = question[0] ? ok.find((r) => Number(r.seq) > Number(question[0].seq)) : null;
-    check("routed: one question escalated as a Critical Decision Packet (reason code, parent call), then control returned to T2",
+    check("routed: one question escalated as a Critical Decision Packet in a fresh context (reason code, parent call), then the founder's own work continued",
       question.length === 1 && question[0].escalation_reason === "HIGH_CONSEQUENCE" && question[0].requested_tier === "T3" && Number(question[0].packet_bytes) > 0 && Boolean(parent)
-        && afterQuestion?.tier === "T2" && Object.keys(facts()).some((k) => k.startsWith("decision:")),
-      question[0] ? `reason ${question[0].escalation_reason}, packet ${question[0].packet_bytes} B, parent ${String(question[0].parent_request_id).slice(0, 8)} (T2); next call ${afterQuestion?.tier}` : "no escalation recorded");
+        && afterQuestion?.task_class === "founder_work" && Object.keys(facts()).some((k) => k.startsWith("decision:")),
+      question[0] ? `reason ${question[0].escalation_reason}, packet ${question[0].packet_bytes} B, parent ${String(question[0].parent_request_id).slice(0, 8)}; next call ${afterQuestion?.task_class}` : "no escalation recorded");
     const links = (await owner.query(`SELECT action_class, tier FROM fleet_action_cognition_links WHERE agent_id = $1 ORDER BY linked_at`, [a])).rows as Array<{ action_class: string; tier: string }>;
     const refusedTier = audit.filter((e) => e.type === "action_cognition_refused" || e.event === "action_cognition_refused").length
       || (await owner.query(`SELECT count(*)::int AS n FROM fleet_events WHERE agent_id = $1 AND event_type = 'action_cognition_refused'`, [a]).then((r) => r.rows[0].n as number, () => 0));
     const afterAction = action[0] ? ok.find((r) => Number(r.seq) > Number(action[0].seq)) : null;
-    check("routed: consequential actions are linked to the cognition that produced them — a small spend at T2, a major spend only from a T3 step",
-      links.some((l) => l.action_class === "spend_request" && l.tier === "T2") && links.some((l) => l.action_class === "major_spend_request" && l.tier === "T3")
-        && !links.some((l) => l.action_class === "major_spend_request" && l.tier !== "T3") && action.length >= 1 && action[0].router_decision?.actionClass === "major_spend_request" && afterAction?.tier === "T2",
-      `links ${links.map((l) => `${l.action_class}@${l.tier}`).join(", ") || "none"}; ${refusedTier} tier refusal(s) audited; T3 action step then ${afterAction?.tier}`);
+    check("routed: consequential actions are linked to the cognition that produced them — a small and a major spend, both from the founder's critical-tier steps",
+      links.some((l) => l.action_class === "spend_request" && l.tier === "T3") && links.some((l) => l.action_class === "major_spend_request" && l.tier === "T3")
+        && !links.some((l) => l.action_class === "major_spend_request" && l.tier !== "T3"),
+      `links ${links.map((l) => `${l.action_class}@${l.tier}`).join(", ") || "none"}; ${refusedTier} tier refusal(s) audited; next after an action step ${afterAction?.task_class ?? "—"}`);
     const saving = t2.reduce((n, r) => n + Number(r.cache_saving_microcents ?? 0), 0);
     // R23.1: the prefix is cached only on evidenced reuse — inside the tool loop on the same model — never on a turn's
     // first step after a gap, a T1 chore, the T3 question or the T3 action step; uncached rows carry no cache tokens.
@@ -359,32 +368,73 @@ export async function runUpgradeRehearsal(o: UpgradeRehearsalOptions): Promise<U
         + `uncached: ${[...t1, ...t2, ...question, ...action].filter((r) => r.cache_policy === "off").length} call(s) (first step, T1, T3)`);
     check("routed: provider protocol holds through real founder loops — signed thinking never crosses a model boundary, nothing is edited mid-loop",
       fake.violations.length === 0 && routed.every((r) => r.outcome === "ok"), fake.violations.length ? fake.violations.slice(0, 3).join("; ") : `0 protocol violations over ${routed.length} routed call(s)`);
-    // R23.1: after the walk the founder only sleeps; its next bare wake-up starts from the slim packet (the exact call is
-    // matched by its request id in the founder's own decision log) and pays no cache write unless reuse is evidenced.
-    const slimLog = () => {
-      try {
-        return fs.readFileSync(path.join(stateNs, "mind-log.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l) as Record<string, unknown>).filter((e) => e.packet === "slim" && e.requestId);
-      } catch {
-        return [] as Array<Record<string, unknown>>;
-      }
-    };
-    const slimRow = await waitFor(async () => {
-      const ids = new Set(slimLog().map((e) => String(e.requestId)));
-      return (await logRows()).find((r) => ids.has(String(r.request_id))) ?? null;
-    }, timeout * 2, poll);
-    const lastFull = slimRow ? [...(await logRows())].filter((r) => r.tier === "T2" && Number(r.packet_bytes) > 0 && Number(r.seq) < Number(slimRow.seq)
-      && !slimLog().some((e) => String(e.requestId) === String(r.request_id))).at(-1) : undefined;
-    const why = String(slimRow?.reasoning?.cacheReason ?? "");
-    check("routed: a bare wake-up after a sleep-only turn uses the slim packet — still T2, one message, smaller than the full packet of the same state, no cache write without evidenced reuse",
-      Boolean(slimRow) && slimRow!.tier === "T2" && slimRow!.task_class === "agent_step" && Number(slimRow!.packet_bytes) > 0 && Boolean(lastFull)
-        && Number(slimRow!.packet_bytes) < Number(lastFull!.packet_bytes)
-        && (slimRow!.cache_policy === "off" ? Number(slimRow!.cache_write_tokens) === 0 : /within the cache lifetime/.test(why)),
-      slimRow ? `slim packet ${slimRow.packet_bytes} B vs the previous full packet ${lastFull?.packet_bytes ?? "?"} B; cache ${slimRow.cache_policy} (${why}); cost ${slimRow.cost_microcents} µ¢` : "no slim wake-up observed");
+    // R41.1: the upgraded founder asks for founder-v5; the controller serves it (its attested release implements it), and the
+    // v5 tools dispatch end to end through the real gateway and runtime: guide read, journal written, hibernation declared.
+    const journalFile = path.join(stateNs, "memory", "field-journal.jsonl");
+    const countJournal = () => (fs.existsSync(journalFile) ? fs.readFileSync(journalFile, "utf8").trim().split("\n").filter(Boolean).length : 0);
+    // The v5 close (guide read, journal entry, declared hibernation) runs on the founder's own schedule: wait for it.
+    const continuity = () => { try { return JSON.parse(fs.readFileSync(path.join(stateNs, "mind-continuity.json"), "utf8")) as Record<string, unknown>; } catch { return {}; } };
+    await waitFor(async () => (countJournal() >= 1 && typeof continuity().wakeOn === "string" ? true : null), timeout, poll);
+    // 2026-10-18 (work continuity; replaces the R23.1 slim wake-up check): a hibernating founder makes NO model call while
+    // nothing it can act on changes — measured over three thinking slots by its own heartbeats — and a Fleet Control notice
+    // (a v94 wake event) wakes it within a slot.
+    const quietFrom = (await logRows()).length;
+    const hbFrom = Number((await rep())?.heartbeats ?? 0);
+    await waitFor(async () => (Number((await rep())?.heartbeats ?? 0) >= hbFrom + 6 ? true : null), timeout * 2, poll);
+    const quietCalls = (await logRows()).length - quietFrom;
+    await owner.query(`SELECT fleet_spend_review_notice($1, $2)`, [a, "Fleet Control: rehearsal notice — something changed that you can act on."]);
+    const wokeOnNotice = await waitFor(async () => ((await logRows()).length > quietFrom + quietCalls ? true : null), timeout, poll);
+    check("work continuity: a hibernating founder makes no model call while nothing changes (three thinking slots), and a Fleet Control notice wakes it",
+      quietCalls === 0 && Boolean(wokeOnNotice),
+      `${quietCalls} call(s) over ${Number((await rep())?.heartbeats ?? 0) - hbFrom} heartbeat(s) of unchanged waiting; ${wokeOnNotice ? "woke on the notice" : "did not wake on the notice"}`);
+    const journalLines = countJournal();
+    const v5Tools = (() => { try {
+      return fs.readFileSync(path.join(stateNs, "mind-log.jsonl"), "utf8").trim().split("\n").flatMap((l) => ((JSON.parse(l) as { tools?: Array<{ name: string; ok: boolean }> }).tools ?? []))
+        .filter((t) => (t.name === "field_guide" || t.name === "field_journal") && t.ok).map((t) => t.name);
+    } catch { return [] as string[]; } })();
+    const cont = continuity();
+    check("R41.1 / v6: the upgraded founder is served its attested doctrine (founder-v6: charter v6 + the v5 tools) and its tools run end to end — field guide read, field journal written, hibernation declared with a wake condition",
+      scripted.doctrineSeen.v5 > 0 && scripted.doctrineSeen.v6 > 0 && v5Tools.includes("field_guide") && v5Tools.includes("field_journal") && journalLines >= 1 && typeof cont.wakeOn === "string",
+      `${scripted.doctrineSeen.v5} v5-lineage (${scripted.doctrineSeen.v6} v6) / ${scripted.doctrineSeen.v4} v4 routed step(s); tools ok: ${[...new Set(v5Tools)].join(", ") || "none"}; journal ${journalLines} entr${journalLines === 1 ? "y" : "ies"}; wake condition ${cont.wakeOn ? "declared" : "absent"}`);
     const booksEnd = await booksOk();
     const sumCost = routed.reduce((n, r) => n + Number(r.cost_microcents), 0);
     check("routed: memory and ledger continuity — pre-upgrade facts, goals and notes are still the founder's; every call is charged once to the same books",
       kept() && Boolean(facts()[REHEARSAL_TRIAGE_FACT]) && booksEnd.ok && same(await identityOf(), id0) && sumCost > 0,
       `fact "area" = ${facts().area}; ${goals().length} goal(s); cash ${booksEnd.cash} = ${alloc} − ${booksEnd.charged}; routed provider cost ${sumCost} µ¢; ledger verifies`);
+
+    // ── 7. Rollback AFTER v5 use (R41.1 amendment): the previous runtime takes over state the v5 runtime wrote — journal,
+    // marked goals, declared hibernation — and keeps it; nothing is restored over it. Then the founder is upgraded again.
+    const sha5 = fs.existsSync(journalFile) ? sha(journalFile) : null;
+    // 2026-10-18: what the v5 runtime wrote must still be there, byte for byte, at the start of the journal — nothing restored
+    // over it. A previous runtime that is itself alive and v5-capable (94dce86 onwards) may APPEND its own entries afterwards.
+    const journal5 = fs.existsSync(journalFile) ? fs.readFileSync(journalFile, "utf8") : null;
+    const goals5 = goals();
+    /** Every goal the v5 runtime wrote is still there with its v5 marks (blockedBy / awaiting / reviewAt) intact. */
+    const goalsKept = () => { const now = new Map(goals().map((x) => [String(x.id), x])); return goals5.every((x) => same(now.get(String(x.id)), x) || same({ ...now.get(String(x.id)), status: x.status }, x)); };
+    const rb5 = await rollbackFounderRuntime({ agentId: a, host: o.host, registry: genesis, upgradeId: again.upgradeId!, reason: "rehearsal: rollback after founder-v5 use", actor: o.actor, healthTimeoutMs: health, pollMs: poll, log });
+    const v4Before = scripted.doctrineSeen.v4;
+    const turnsRb = await turnsOf();
+    // 2026-10-18 (work continuity): the state the v5 runtime left may be a DECLARED hibernation, which the previous runtime
+    // also honours (it waits for an event). Give it one — a Fleet Control notice — so "it keeps living" is observable.
+    await owner.query(`SELECT fleet_spend_review_notice($1, $2)`, [a, "Fleet Control: rehearsal notice after the rollback."]);
+    // The previous runtime keeps living on the v5-written state; routed calls it makes carry no doctrine and are served v4.
+    const livedOn = await waitFor(async () => ((await turnsOf()) > turnsRb || scripted.doctrineSeen.v4 > v4Before ? true : null), timeout, poll);
+    const journalNow = fs.existsSync(journalFile) ? fs.readFileSync(journalFile, "utf8") : null;
+    const journalKept = journal5 !== null && journalNow !== null && journalNow.startsWith(journal5);
+    const appended = journalKept ? journalNow!.slice(journal5!.length).split("\n").filter(Boolean).length : 0;
+    const conds = { rolledBack: rb5.ok, commit: rb5.health?.commit === o.from.commit, registry: (await registryCommit()) === o.from.commit, durable: rb5.state?.durableLost === 0,
+      identity: same(await identityOf(), id0), kept: kept(), journal: journalKept, goals: goalsKept(), books: (await booksOk()).ok, lived: Boolean(livedOn) };
+    check("rollback after v5 use: the previous runtime runs healthy on the v5-written state — journal, marked goals and memory kept byte for byte, nothing restored over them",
+      Object.values(conds).every(Boolean),
+      `${rb5.ok ? "rolled back" : rb5.why}; pid ${rb5.health?.pid} on ${o.from.commit.slice(0, 7)}; journal ${journalKept ? `${String(sha5).slice(0, 12)}… kept${appended ? ` (+${appended} entr${appended === 1 ? "y" : "ies"} appended by the living runtime)` : ""}` : "CHANGED or missing"}; ${goals().length} goal(s); `
+        + `${livedOn ? "kept working" : "no turn observed"} (${scripted.doctrineSeen.v4 - v4Before} v4 step(s) after the rollback)`
+        + (Object.values(conds).every(Boolean) ? "" : `; failed: ${Object.entries(conds).filter(([, v]) => !v).map(([k]) => k).join(", ")}`));
+    const third = await upgrade();
+    report.receipts.third = third;
+    check("upgrade again after the v5 rollback: verified, same founder, the journal written before the rollback is still there",
+      third.outcome === "verified" && same(await identityOf(), id0) && kept() && (await booksOk()).ok && fs.existsSync(journalFile)
+        && fs.readFileSync(journalFile, "utf8").trim().split("\n").filter(Boolean).length >= journalLines && third.state.diff?.durableLost === 0,
+      `${third.outcome}${third.why ? `: ${third.why}` : ""}; upgrade history ${(await genesis.founderRuntimeUpgrades(a)).map((u) => u.status).reverse().join(" → ")}`);
     const secrets = [JSON.parse(fs.readFileSync(path.join(o.host.stateDir(a), FOUNDER_CREDENTIAL_FILE), "utf8")).token as string, FAKE_KEY];
     const hay = [await o.host.logText(a), JSON.stringify(audit), JSON.stringify(report.receipts), JSON.stringify((await owner.query(`SELECT before, after, rollback FROM fleet_founder_runtime_upgrades`)).rows)].join("\n");
     check("no credential in logs, audit, receipts or upgrade records", secrets.every((s) => !hay.includes(s)), `${secrets.length} secrets checked`);

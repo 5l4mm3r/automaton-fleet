@@ -1,0 +1,18 @@
+== rollout rehearse f4be395 (schema 33 -> 41) from 3aebcc2 start 2026-10-02T19:02:39Z
+Note: switching to 'f4be395393d332b1bc35d25c07603f571d1182f3'.
+
+
+
+
+
+
+
+dump /home/ubuntu/automaton_fleet-v33-rollout-f4be395-20261002T190243Z.dump sha 68c750c2462d48f4
+restore: row counts identical
+migrate-check: {"currentVersion":33,"resultingVersion":41,"wouldApply":[34,35,36,37,38,39,40,41],"requiredVersion":41,"rolledBack":true}
+{"ok":true,"latencyMs":3,"schemaVersion":41,"countersConsistent":true}
+ledger verify: true
+re-run: {"currentVersion":41,"resultingVersion":41,"wouldApply":[],"requiredVersion":41,"rolledBack":true}
+rollback proof: the dump restores to schema 33 with the same ledger head
+== REHEARSAL PASSED 2026-10-02T19:02:55Z — live untouched (schema 33)
+

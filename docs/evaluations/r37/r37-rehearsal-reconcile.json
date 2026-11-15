@@ -1,0 +1,115 @@
+{
+  "ok": true,
+  "from": 41,
+  "to": 42,
+  "migrationsApplied": [
+    42
+  ],
+  "population": {
+    "mode": "DEVELOPMENT",
+    "living": 1,
+    "reserved": 0,
+    "maxAgents": 2,
+    "runtimeCommit": "29cde7d6d938fd489c76edc531f7c932aefc459f"
+  },
+  "agents": [
+    {
+      "agentId": "01M3F50SH7PNX2E3GST13J52AS",
+      "name": "founder-1",
+      "status": "active"
+    }
+  ],
+  "ledger": {
+    "head": {
+      "seq": 540,
+      "hash": "1d3e56f717f130e4758f4feccb7f13016184b987dc9d43ea0439780df566cd3c"
+    },
+    "journals": 503,
+    "postings": 1006,
+    "debitsCents": 20875,
+    "creditsCents": 20875
+  },
+  "newAccounts": [
+    {
+      "account": "agent:01M3F50SH7PNX2E3GST13J52AS:project_escrow",
+      "class": "agent_project_escrow",
+      "balanceCents": 0
+    },
+    {
+      "account": "agent:01M3F50SH7PNX2E3GST13J52AS:project_income",
+      "class": "agent_project_income",
+      "balanceCents": 0
+    },
+    {
+      "account": "agent:01M3F50SH7PNX2E3GST13J52AS:distribution_in",
+      "class": "agent_distribution_in",
+      "balanceCents": 0
+    },
+    {
+      "account": "agent:01M3F50SH7PNX2E3GST13J52AS:project_expense",
+      "class": "agent_project_expense",
+      "balanceCents": 0
+    },
+    {
+      "account": "agent:01M3F50SH7PNX2E3GST13J52AS:distribution_out",
+      "class": "agent_distribution_out",
+      "balanceCents": 0
+    }
+  ],
+  "events": {
+    "preserved": 2729,
+    "appended": {
+      "agent_role_granted": 1,
+      "custody_role_granted": 1,
+      "service_role_granted": 1,
+      "identity_role_granted": 1,
+      "operator_role_granted": 1,
+      "dashboard_role_granted": 1
+    },
+    "unexpected": {}
+  },
+  "notifications": 6,
+  "failures": [],
+  "notes": [
+    {
+      "economicsKeyAdded": "projectEscrow",
+      "agent": "01M3F50SH7PNX2E3GST13J52AS",
+      "value": 0
+    },
+    {
+      "economicsKeyAdded": "profitDistributedOut",
+      "agent": "01M3F50SH7PNX2E3GST13J52AS",
+      "value": 0
+    },
+    {
+      "economicsKeyAdded": "internalProjectIncome",
+      "agent": "01M3F50SH7PNX2E3GST13J52AS",
+      "value": 0
+    },
+    {
+      "economicsKeyAdded": "netProfitInclInternal",
+      "agent": "01M3F50SH7PNX2E3GST13J52AS",
+      "value": -875
+    },
+    {
+      "economicsKeyAdded": "profitDistributionsIn",
+      "agent": "01M3F50SH7PNX2E3GST13J52AS",
+      "value": 0
+    },
+    {
+      "economicsKeyAdded": "internalProjectExpense",
+      "agent": "01M3F50SH7PNX2E3GST13J52AS",
+      "value": 0
+    },
+    {
+      "roleGrantAuditEvents": {
+        "agent_role_granted": 1,
+        "custody_role_granted": 1,
+        "service_role_granted": 1,
+        "identity_role_granted": 1,
+        "operator_role_granted": 1,
+        "dashboard_role_granted": 1
+      }
+    }
+  ]
+}

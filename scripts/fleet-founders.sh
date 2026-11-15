@@ -8,6 +8,8 @@
 #   sudo scripts/fleet-founders.sh activate <genesisId> <authSha256>   # OWNER GATE
 #   sudo scripts/fleet-founders.sh teardown <genesisId>
 #   sudo scripts/fleet-founders.sh pin <agentId>                 # (re)write a living founder's pin; no restart
+#   sudo scripts/fleet-founders.sh births                        # v40: queued birth orders
+#   sudo scripts/fleet-founders.sh birth <orderId>               # v40: a birth order → a running agent (authorize … activate)
 #
 # R23 — runtime upgrade of a LIVING founder (same founder id, memory, workspace, ledger and credential):
 #   sudo scripts/fleet-founders.sh upgrade-status <agentId>
@@ -15,6 +17,9 @@
 #   sudo scripts/fleet-founders.sh upgrade-rehearsal <fromCommit>  # synthetic founder, THROWAWAY registry, fake provider
 #   sudo scripts/fleet-founders.sh upgrade-runtime <agentId> [--health-timeout S]            # OWNER GATE
 #   sudo scripts/fleet-founders.sh rollback-runtime <agentId> <upgradeId> <reason...>        # OWNER GATE
+#   sudo scripts/fleet-founders.sh revision-rehearsal   # a buyer's revision end to end: synthetic founder, real unit, THROWAWAY registry
+#   sudo scripts/fleet-founders.sh scenario-suite <terms.json> <ceilingPence> --key-file <path> [--workbook <xlsx>] [--only …]
+#        # (2026-10-23) the Stage-1 scenario suite with the REAL model — SPENDS provider credit up to the frozen ceiling; owner approval first
 #
 # F1-FRESH-02 — memory retention health (read-only; counts and status only, never a fact key or value):
 #   sudo scripts/fleet-founders.sh memory-report <agentId>

@@ -23,6 +23,7 @@ import net from "net";
 import os from "os";
 import path from "path";
 import pg from "pg";
+import tls from "tls";
 import { PgFleetStore, hashAgentToken, mintAgentToken } from "../../fleet/postgres/store.js";
 import { PgAgentGateway } from "../../fleet/postgres/agent-gateway.js";
 import { PgLedgerAdmin } from "../../fleet/treasury/ledger.js";
@@ -86,6 +87,17 @@ describe("founder toolbox (unit)", () => {
     expect(fs.readFileSync(path.join(root, "outside.txt"), "utf8")).toBe("secret-outside");
     expect(fs.existsSync(path.join(root, "pwn.txt"))).toBe(false);
     expect(await call("list_files", { path: "escape" })).toMatchObject({ ok: false, refused: "FLEET_PATH_OUTSIDE_WORKSPACE" });
+    // 2026-10-23: "/workspace/…" and the workspace's own absolute path name the workspace; the escape checks still apply
+    // to what follows, and a refusal says which form works.
+    expect(await call("write_file", { path: "/workspace/order/check.txt", content: "ok" })).toMatchObject({ ok: true });
+    expect(fs.readFileSync(path.join(ws, "order", "check.txt"), "utf8")).toBe("ok");
+    expect(await call("read_file", { path: path.join(fs.realpathSync(ws), "order", "check.txt") })).toMatchObject({ ok: true, output: "ok" });
+    expect(await call("list_files", { path: "/workspace" })).toMatchObject({ ok: true });
+    for (const p of ["/workspace/../outside.txt", "/workspace/escape/outside.txt", "/workspace/link.txt", "/workspacex/a", "/etc/passwd"]) {
+      const r = await call("read_file", { path: p });
+      expect(r, p).toMatchObject({ ok: false, refused: "FLEET_PATH_OUTSIDE_WORKSPACE" });
+      expect(r.output, p).toContain("paths are relative to your workspace");
+    }
     fs.rmSync(root, { recursive: true, force: true });
   });
 
@@ -235,7 +247,7 @@ describe("cognition gateway, providers and egress (unit)", () => {
     // Advertised tools = compiled toolbox ∩ granted classes; nothing forbidden is ever advertised.
     const names = toolsFor(FOUNDER_MANIFEST_V1.allowed).map((t) => t.name);
     expect(names).toEqual(FOUNDER_TOOLS.filter((t) => t.capability !== "research.web").map((t) => t.name)); // founder-v1 has no research.web
-    expect(toolsFor(["planning"]).map((t) => t.name)).toEqual(["set_goal", "complete_goal", "list_goals", "request_owner_decision", "withdraw_owner_request"]); // F1-LIVE-01: owner requests are planning
+    expect(toolsFor(["planning"]).map((t) => t.name)).toEqual(["set_goal", "complete_goal", "list_goals", "open_decision", "resolve_decision", "review_decision", "record_external_dependency", "reply_to_owner", "withdraw_external_dependency", "opportunity", "venture", "identity", "fleet_services", "browser", "storefront", "project"]); // F2-A decisions and dependencies, F2 opportunities and ventures, v34 identity, v35 fleet_services, v37 browser, v52 storefront, v42 project are planning
     expect(toolsFor(["reproduction", "payment.execute"] as never)).toEqual([]);
   });
 
@@ -299,7 +311,7 @@ describe("cognition gateway, providers and egress (unit)", () => {
       expect(r).toEqual({ content: "ok", toolCalls: [{ id: "c1", name: "set_goal", arguments: { title: "t" } }, { id: "c2", name: "sleep", arguments: {} }], usage: { inputTokens: 12, outputTokens: 3 }, usageSource: "provider", attempts: 1, responseModel: null, providerRequestId: null, stopReason: null });
       expect(auth).toBe("Bearer k-test");
       expect(seen).toMatchObject({ model: "m1", max_tokens: 64, messages: [{ role: "system", content: "CHARTER" }, { role: "user", content: "hi" }] });
-      expect((seen as unknown as { tools: unknown[] }).tools).toHaveLength(5); // the planning tools (incl. F1-LIVE-01 owner requests)
+      expect((seen as unknown as { tools: unknown[] }).tools).toHaveLength(16); // the planning tools (v62 reply_to_owner; incl. F2-A decisions and dependencies, F2 opportunity and venture, v34 identity, v35 fleet_services, v37 browser, v52 storefront, v42 project)
     } finally {
       srv.close();
     }
@@ -313,12 +325,15 @@ describe("cognition gateway, providers and egress (unit)", () => {
     expect(() => loadCognitionProvider({ FLEET_COGNITION_DEADLINE_MS: "999999" })).toThrow(/between 10000 and 240000/);
     expect(loadCognitionProvider({ FLEET_COGNITION_PROVIDER: "scripted" }).provider?.id).toBe("scripted");
     expect(() => loadCognitionProvider({ FLEET_COGNITION_PROVIDER: "magic" })).toThrow(/must be none/);
-    expect(() => loadCognitionProvider({ FLEET_COGNITION_PROVIDER: "openai_compatible" })).toThrow(/requires/);
+    // 2026-10-23: local_only is the default profile — a cloud provider is refused unless cloud_allowed is set explicitly.
+    expect(() => loadCognitionProvider({ FLEET_COGNITION_PROVIDER: "openai_compatible" })).toThrow(/inference profile is local_only/);
+    expect(() => loadCognitionProvider({ FLEET_COGNITION_PROVIDER: "openai_compatible", FLEET_INFERENCE_PROFILE: "cloud_allowed" })).toThrow(/requires/);
+    expect(() => loadCognitionProvider({ FLEET_INFERENCE_PROFILE: "anything" })).toThrow(/local_only or cloud_allowed/);
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cogkey-"));
     const key = path.join(dir, "key");
     const secret = "k-secret-value-123";
     fs.writeFileSync(key, `${secret}\n`, { mode: 0o644 });
-    const env = { FLEET_COGNITION_PROVIDER: "openai_compatible", FLEET_COGNITION_BASE_URL: "https://api.example.com/v1", FLEET_COGNITION_MODEL: "m", FLEET_COGNITION_API_KEY_FILE: key };
+    const env = { FLEET_INFERENCE_PROFILE: "cloud_allowed", FLEET_COGNITION_PROVIDER: "openai_compatible", FLEET_COGNITION_BASE_URL: "https://api.example.com/v1", FLEET_COGNITION_MODEL: "m", FLEET_COGNITION_API_KEY_FILE: key };
     const errText = (f: () => unknown) => {
       try {
         f();
@@ -503,6 +518,9 @@ describe.skipIf(!PG_BIN)("Phase F.2 founder cognition (schema v13, HTTP + Postgr
     gw = new PgAgentGateway({ connectionString: pgc.agentUrl });
     ledger = new PgLedgerAdmin({ connectionString: pgc.ownerUrl });
     genesis = new PgGenesisAdmin({ connectionString: pgc.ownerUrl });
+    // v112: this cloud-era suite runs its scripted provider under the owner's explicit cloud_allowed profile (the local_only
+    // default and its refusals are proven in fleet-v112-local-inference-pg).
+    await genesis.inferenceProfileSet("cloud_allowed", "test fixture: cloud-era cognition gates", OWNER);
     service = new FleetService({
       admin: svcStore,
       agent: gw,
@@ -778,5 +796,111 @@ describe.skipIf(!PG_BIN)("Phase F.2 founder cognition (schema v13, HTTP + Postgr
     }
     const [ev] = await q(`SELECT count(*)::int AS n FROM fleet.fleet_events WHERE event_type = 'founder_remote_session_refused' AND agent_id = $1`, [a.agentId]);
     expect(ev.n).toBe(1);
+  });
+
+  // ── R36: the public listener behind the host's nginx (PROXY protocol v1, loopback only)
+
+  function proxyService(audit: (e: { event: string; detail?: Record<string, unknown> }) => void = () => {}, rateLimits?: ConstructorParameters<typeof FleetService>[0]["rateLimits"]) {
+    const dir = fs.mkdtempSync(path.join(root, "tls-"));
+    execFileSync("openssl", ["req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-days", "2", "-subj", "/CN=localhost",
+      "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1", "-keyout", path.join(dir, "k"), "-out", path.join(dir, "c")], { stdio: "ignore" });
+    return new FleetService({
+      admin: svcStore, agent: gw, realReplicationEnabled: false, reaperIntervalMs: 0, release: { ...PIN, ...BUILD }, audit: audit as never,
+      terminator: new UnsupportedSandboxTerminator(), cognitionProvider: new ScriptedProvider(), rateLimits,
+      tls: { cert: fs.readFileSync(path.join(dir, "c")), key: fs.readFileSync(path.join(dir, "k")) },
+    });
+  }
+
+  /** One HTTPS request as nginx would deliver it: PROXY line (or raw bytes), then the client's TLS. null = connection refused/closed. */
+  function viaProxy(port: number, header: string | Buffer | null, method: string, p: string, headers: Record<string, string> = {}, localAddress?: string) {
+    return new Promise<{ status: number; body: Record<string, unknown> } | null>((resolve) => {
+      const sock = net.connect({ port, host: "127.0.0.1", localAddress }, () => {
+        if (header !== null) sock.write(header);
+        const t = tls.connect({ socket: sock, rejectUnauthorized: false, servername: "localhost" });
+        t.on("error", () => resolve(null));
+        const req = https.request({ host: "localhost", path: p, method, headers, createConnection: () => t }, (res) => {
+          let b = "";
+          res.on("data", (d) => (b += d));
+          res.on("end", () => resolve({ status: res.statusCode ?? 0, body: b ? JSON.parse(b) : {} }));
+        });
+        req.on("error", () => resolve(null));
+        req.end();
+      });
+      sock.on("error", () => resolve(null));
+      setTimeout(() => { sock.destroy(); resolve(null); }, 8_000);
+    });
+  }
+
+  it("R36: the real client address survives the proxy; a proxied founder is never local, even if the header claims 127.0.0.1", async () => {
+    await reset();
+    const [a] = await founders();
+    const pub = proxyService();
+    const { port } = await pub.listenProxied(0, "127.0.0.1");
+    const direct = await pub.listenAdmin(0, "127.0.0.1");
+    try {
+      const auth = { authorization: `Bearer ${a.token}` };
+      for (const src of ["203.0.113.7", "127.0.0.1"]) {
+        const r = await viaProxy(port, `PROXY TCP4 ${src} 51.195.148.111 52144 443\r\n`, "POST", "/v1/session", auth);
+        expect(r, src).toMatchObject({ status: 403, body: { code: "FLEET_FOUNDER_LOOPBACK_ONLY" } });
+      }
+      const r6 = await viaProxy(port, "PROXY TCP6 ::1 2001:db8::1 52144 443\r\n", "POST", "/v1/session", auth);
+      expect(r6).toMatchObject({ status: 403, body: { code: "FLEET_FOUNDER_LOOPBACK_ONLY" } });
+      // The controller host's own direct listener keeps honouring the founder (Founder 1's path is unchanged).
+      const local = await fetch(`${direct.url}/v1/session`, { method: "POST", headers: auth });
+      expect(local.status).toBe(200);
+    } finally {
+      await pub.close();
+    }
+    const ev = await q(`SELECT detail->>'ip' AS ip FROM fleet.fleet_events WHERE event_type = 'founder_remote_session_refused' AND agent_id = $1 ORDER BY id`, [a.agentId]);
+    expect(ev.map((e) => e.ip)).toEqual(["203.0.113.7", "127.0.0.1", "::1"]);
+  });
+
+  it("R36: detailed /readyz stays private through the proxy; /healthz is served", async () => {
+    const pub = proxyService();
+    const { port } = await pub.listenProxied(0, "127.0.0.1");
+    const direct = await pub.listenAdmin(0, "127.0.0.1");
+    try {
+      for (const src of ["203.0.113.7", "127.0.0.1"]) {
+        expect(await viaProxy(port, `PROXY TCP4 ${src} 10.0.0.1 1 443\r\n`, "GET", "/readyz"), src).toMatchObject({ status: 404, body: { code: "FLEET_NOT_FOUND" } });
+      }
+      expect(await viaProxy(port, "PROXY TCP4 203.0.113.7 10.0.0.1 1 443\r\n", "GET", "/healthz")).toMatchObject({ status: 200, body: { ok: true } });
+      expect([200, 503]).toContain((await fetch(`${direct.url}/readyz`)).status);
+    } finally {
+      await pub.close();
+    }
+  });
+
+  it("R36: per-IP rate limits key on the real client; one client exhausting its budget does not block another", async () => {
+    const pub = proxyService(undefined, { unverifiedPerIp: { capacity: 2, refillPerSec: 0.001 } });
+    const { port } = await pub.listenProxied(0, "127.0.0.1");
+    const hdr = (ip: string) => `PROXY TCP4 ${ip} 10.0.0.1 40000 443\r\n`;
+    const auth = { authorization: `Bearer ${FAKE_TOKEN}` };
+    try {
+      for (let i = 0; i < 2; i++) expect((await viaProxy(port, hdr("198.51.100.1"), "POST", "/v1/session", auth))!.status).not.toBe(429);
+      expect(await viaProxy(port, hdr("198.51.100.1"), "POST", "/v1/session", auth)).toMatchObject({ status: 429, body: { code: "FLEET_RATE_LIMITED" } });
+      expect((await viaProxy(port, hdr("198.51.100.2"), "POST", "/v1/session", auth))!.status).not.toBe(429);
+    } finally {
+      await pub.close();
+    }
+  });
+
+  it("R36: no header, a malformed or UNKNOWN header, or a non-127.0.0.1 peer gets no HTTP service at all", async () => {
+    const audit: Array<{ event: string; detail?: Record<string, unknown> }> = [];
+    const pub = proxyService((e) => audit.push(e));
+    const { port } = await pub.listenProxied(0, "127.0.0.1");
+    try {
+      expect(await viaProxy(port, null, "GET", "/healthz")).toBeNull(); // TLS straight to the listener (no nginx)
+      expect(await viaProxy(port, "PROXY UNKNOWN\r\n", "GET", "/healthz")).toBeNull();
+      expect(await viaProxy(port, "PROXY TCP4 203.0.113.7 10.0.0.1 99999 443\r\n", "GET", "/healthz")).toBeNull();
+      expect(await viaProxy(port, "GET /healthz HTTP/1.1\r\n\r\n", "GET", "/healthz")).toBeNull();
+      // Another loopback-range source (not the local nginx's 127.0.0.1) is refused before any header is read.
+      expect(await viaProxy(port, "PROXY TCP4 203.0.113.7 10.0.0.1 1 443\r\n", "GET", "/healthz", {}, "127.0.0.2")).toBeNull();
+      // A well-formed header still works after all of that.
+      expect(await viaProxy(port, "PROXY TCP4 203.0.113.7 10.0.0.1 1 443\r\n", "GET", "/healthz")).toMatchObject({ status: 200 });
+    } finally {
+      await pub.close();
+    }
+    expect(audit.filter((e) => e.event === "proxy_header_refused").length).toBeGreaterThanOrEqual(4);
+    expect(audit.filter((e) => e.event === "proxy_peer_refused").map((e) => e.detail?.ip)).toEqual(["127.0.0.2"]);
   });
 });

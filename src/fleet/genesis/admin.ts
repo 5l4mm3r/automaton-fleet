@@ -181,6 +181,20 @@ export class GenesisOps {
     return this.one<Record<string, unknown>>(`SELECT fleet_cognition_tier_verify($1, $2, $3, $4) AS r`, [tier, model, ref, actor]);
   }
 
+  /** v112: map a tier to the LOCAL model (zero provider prices; verification voided until re-verified). */
+  cognitionTierSetLocal(tier: string, model: string, maxOutputTokens: number, actor: string) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_cognition_tier_set_local($1, $2, $3, $4) AS r`, [tier, model, maxOutputTokens, actor]);
+  }
+
+  /** v112: the registry's inference profile — local_only (default) or cloud_allowed (the owner's explicit choice). */
+  inferenceProfileSet(profile: "local_only" | "cloud_allowed", reason: string, actor: string) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_admin_inference_profile_set($1, $2, $3) AS r`, [profile, reason, actor]);
+  }
+
+  inferenceProfileState() {
+    return this.one<Record<string, unknown>>(`SELECT fleet_inference_profile_state() AS r`);
+  }
+
   cognitionTierEnable(tier: string, enabled: boolean, actor: string) {
     return this.one<Record<string, unknown>>(`SELECT fleet_cognition_tier_enable($1, $2, $3) AS r`, [tier, enabled, actor]);
   }
@@ -332,7 +346,8 @@ export class GenesisOps {
   /**
    * Phase F.3 owner monitoring: one row per founder — lifecycle, own economics,
    * cognition switches and usage, forbidden tool requests the model made (all
-   * refused by the runtime) and spend orders awaiting a decision.
+   * refused by the runtime) and its reserved (unexecuted) spend orders. Schema v27: no order ever awaits the owner —
+   * own-capital spend is the founder's, custody-checked by FleetController.
    */
   async foundersReport(founderToolNames: readonly string[]): Promise<Array<Record<string, unknown>>> {
     const r = await this.db.query(
@@ -345,7 +360,7 @@ export class GenesisOps {
                  SELECT t ->> 'name' AS n, count(*) AS c FROM fleet_cognition_log l, jsonb_array_elements(l.tool_calls) t
                   WHERE l.agent_id = a.agent_id AND l.at > now() - interval '1 day' AND NOT ((t ->> 'name') = ANY($1::text[]))
                   GROUP BY 1) x) AS forbidden_24h,
-              (SELECT count(*) FROM fleet_payment_orders o WHERE o.agent_id = a.agent_id AND o.status IN ('requested','awaiting_owner'))::int AS orders_awaiting
+              (SELECT count(*) FROM fleet_payment_orders o WHERE o.agent_id = a.agent_id AND o.status = 'reserved')::int AS orders_reserved
          FROM fleet_agents a WHERE a.origin IN ('genesis_founder','reseed_founder') ORDER BY a.agent_id`,
       [founderToolNames],
     );
@@ -365,7 +380,7 @@ export class GenesisOps {
       calls24h: x.calls_24h,
       charged24hCents: Number(x.charged_24h),
       forbiddenRequests24h: x.forbidden_24h,
-      ordersAwaitingDecision: x.orders_awaiting,
+      ordersReserved: x.orders_reserved,
     }));
   }
 
@@ -477,6 +492,14 @@ export class GenesisOps {
     return this.one<Record<string, unknown>>(`SELECT fleet_genesis_fail($1, $2, $3, $4) AS r`, [genesisId, agentId, reason, actor]);
   }
 
+  /** v40: turn a queued birth order into an approved one-founder birth cohort (the order is the authorization). */
+  birthAuthorize(orderId: string, actor: string, ttlS: number | null = null) {
+    return this.one<GenesisView & { birthOrderId: string; authSha256: string; replay?: boolean }>(`SELECT fleet_birth_authorize($1, $2, $3) AS r`, [orderId, ttlS, actor]);
+  }
+  birthsPending() {
+    return this.one<Array<{ orderId: string; kind: string; genesisId: string | null; genesisStatus: string | null; authSha256: string | null }>>(`SELECT fleet_admin_births_pending() AS r`);
+  }
+
   fund(genesisId: string, actor: string) {
     return this.one<GenesisView & { status: string }>(`SELECT fleet_genesis_fund($1, $2) AS r`, [genesisId, actor]);
   }
@@ -515,13 +538,32 @@ export class GenesisOps {
   decideOwnerRequest(requestId: string, decision: "approved" | "declined" | "answered", response: string | null, actor: string) {
     return this.one<Record<string, unknown>>(`SELECT fleet_owner_request_decide($1, $2, $3, $4) AS r`, [requestId, decision, response, actor]);
   }
+  /** v94: one bounded run for an agent: a total AI ceiling (ledger minor units) checked before every request, and an end time. */
+  cognitionRunStart(agentId: string, ceilingMinor: number, hours: number, note: string, actor: string) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_admin_cognition_run_start($1, $2, $3, $4, $5) AS r`, [agentId, ceilingMinor, hours, note, actor]);
+  }
+  cognitionRunEnd(agentId: string, reason: string, actor: string) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_admin_cognition_run_end($1, $2, $3) AS r`, [agentId, reason, actor]);
+  }
+  cognitionRun(agentId: string) { return this.one<Record<string, unknown>>(`SELECT fleet_admin_cognition_run($1) AS r`, [agentId]); }
+  /** v95: operations whose outcome is not known (a provider answer was lost), and what to check for each. */
+  operationsUncertain() { return this.one<Record<string, unknown>>(`SELECT fleet_admin_operations_uncertain() AS r`, []); }
+  /** v95: the owner records an uncertain outcome after checking the provider's own account (what was checked is kept). */
+  operationResolve(operationId: string, outcome: string, checked: string, actor: string) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_admin_operation_resolve($1, $2, $3, $4) AS r`, [operationId, outcome, checked, actor]);
+  }
+  /** v94: a resolved request replaced by the owner's current decision (recorded once; the request itself never changes). */
+  supersedeOwnerRequest(requestId: string, decision: string, actor: string) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_admin_owner_request_supersede($1, $2, $3) AS r`, [requestId, decision, actor]);
+  }
 
   /**
-   * OWNER: import a legacy knowledge proposal that was really an operational owner request as an UNRESOLVED owner request
-   * (same id, founder and creation time; category and blocking stated here, never inferred). Decides nothing; idempotent.
+   * Admin migration step: import a legacy knowledge proposal that was really an identity/legal dependency as an
+   * action-scoped dependency (same id, founder and creation time; kind and the one action stated here). Decides nothing;
+   * blocks nothing but that action; idempotent.
    */
-  importOwnerRequest(proposalId: string, category: string, blocking: boolean, goalRef: string | null, actor: string) {
-    return this.one<Record<string, unknown>>(`SELECT fleet_owner_request_import($1, $2, $3, $4, $5) AS r`, [proposalId, category, blocking, goalRef, actor]);
+  importOwnerRequest(proposalId: string, kind: string, action: string, goalRef: string | null, actor: string) {
+    return this.one<Record<string, unknown>>(`SELECT fleet_owner_request_import($1, $2, $3, $4, $5) AS r`, [proposalId, kind, action, goalRef, actor]);
   }
 
   decideIdentityClaim(claimId: string, approve: boolean, ttlS: number | null, maxReads: number | null, actor: string) {

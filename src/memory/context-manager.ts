@@ -124,6 +124,42 @@ function enforceLruLimit(cache: Map<string, number>): void {
   }
 }
 
+/**
+ * js-tiktoken's BPE merge is quadratic in the length of one pre-tokenized piece, and long pieces are ordinary agent input:
+ * runs of one character ("AAAA…" base64 of a zero buffer, "----" rules, blank padding), periodic strings and unspaced CJK
+ * prose. A 50k-character piece blocked the agent loop for minutes. Every piece is therefore encoded in slices of at most
+ * MAX_ENCODE_PIECE_CHARS (the cost per call is bounded and linear overall); each cut can only add a token, so the count
+ * stays a conservative upper bound. Ordinary text is grouped at whitespace boundaries and counted as before.
+ */
+const MAX_ENCODE_PIECE_CHARS = 48;
+const ENCODE_GROUP_CHARS = 2048;
+
+export function countTokensBounded(encoder: Pick<Tiktoken, "encode">, text: string): number {
+  let count = 0;
+  let group = "";
+  const flush = () => {
+    if (group) count += encoder.encode(group).length;
+    group = "";
+  };
+  for (const piece of text.match(/\s+|\S+/g) ?? []) {
+    if (piece.length <= MAX_ENCODE_PIECE_CHARS) {
+      if (group.length + piece.length > ENCODE_GROUP_CHARS) flush();
+      group += piece;
+      continue;
+    }
+    flush();
+    for (let i = 0; i < piece.length;) {
+      let end = Math.min(piece.length, i + MAX_ENCODE_PIECE_CHARS);
+      // Never split a surrogate pair.
+      if (end < piece.length && (piece.charCodeAt(end) & 0xfc00) === 0xdc00) end++;
+      count += encoder.encode(piece.slice(i, end)).length;
+      i = end;
+    }
+  }
+  flush();
+  return count;
+}
+
 function formatCacheKey(text: string, model?: string): string {
   return `${model ?? "default"}::${text}`;
 }
@@ -152,7 +188,7 @@ export function createTokenCounter(): TokenCounter {
     let count: number;
     if (encoder) {
       try {
-        count = encoder.encode(normalizedText).length;
+        count = countTokensBounded(encoder, normalizedText);
       } catch {
         count = Math.ceil(normalizedText.length / 3.5);
       }

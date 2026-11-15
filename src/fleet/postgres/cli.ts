@@ -7,6 +7,7 @@
  *   pnpm fleet:admin set-cap <1..50>
  *   pnpm fleet:admin set-mode <DEVELOPMENT|EXPANSION|HARVEST|EMERGENCY> [reason]
  *   pnpm fleet:admin approve-runtime          (FLEET_RUNTIME_REPO / _COMMIT / _BUILD_ID / _LOCKFILE_SHA256)
+ *   pnpm fleet:admin deployment-record deployed|rolled_back <commit> <fromSchema> <toSchema> [reason]   (v44; the rollout script)
  *   pnpm fleet:admin clear-runtime
  *   pnpm fleet:admin build-identity <dir>     (build id + lockfile hash of a built runtime tree)
  *   pnpm fleet:admin set-replication on|off   (DB-level replication switch)
@@ -33,6 +34,7 @@
  *   pnpm fleet:admin <treasury command>        see src/fleet/treasury/cli.ts (v5 money records are superseded by v10)
  *   pnpm fleet:admin <ledger command>          schema v10 central ledger; see src/fleet/treasury/ledger-cli.ts
  *   pnpm fleet:admin <genesis command>         schema v11 Genesis (owner gates); see src/fleet/genesis/cli.ts
+ *   pnpm fleet:admin <hub command>             schema v30 Fleet Hub views and economy infrastructure; see src/fleet/hub/cli.ts
  *   pnpm fleet:admin reap | reservations
  *   pnpm fleet:admin release <agentId> [reason]
  *   pnpm fleet:admin mark-dead <agentId> [reason]
@@ -76,6 +78,8 @@ import { PgTreasuryStore } from "../treasury/store.js";
 import { TREASURY_COMMANDS, runTreasuryCommand } from "../treasury/cli.js";
 import { PgLedgerAdmin } from "../treasury/ledger.js";
 import { LEDGER_COMMANDS, runLedgerCommand } from "../treasury/ledger-cli.js";
+import { PgHubAdmin } from "../hub/admin.js";
+import { HUB_COMMANDS, runHubCommand } from "../hub/cli.js";
 import { PgGenesisAdmin } from "../genesis/admin.js";
 import { GENESIS_COMMANDS, runGenesisCommand } from "../genesis/cli.js";
 import type { FleetCredential } from "../types.js";
@@ -379,6 +383,23 @@ async function main(argv: string[]): Promise<number> {
       await store.close();
     }
   }
+  if (HUB_COMMANDS.has(cmd)) {
+    // F2 (schema v30): Fleet Hub views and infrastructure controls; see src/fleet/hub/cli.ts.
+    const hub = new PgHubAdmin({
+      connectionString: (e.FLEET_ADMIN_DATABASE_URL || e.FLEET_CONTROLLER_DATABASE_URL || e.DATABASE_URL)!.trim(),
+      schema: e.FLEET_PG_SCHEMA?.trim() || undefined,
+    });
+    try {
+      console.log(JSON.stringify(await runHubCommand(cmd, rest, hub, actor), null, 2));
+      return 0;
+    } catch (err) {
+      console.error(redactText(err instanceof Error ? err.message : String(err)));
+      return 1;
+    } finally {
+      await hub.close();
+      await store.close();
+    }
+  }
   if (LEDGER_COMMANDS.has(cmd)) {
     const ledger = new PgLedgerAdmin({
       connectionString: (e.FLEET_ADMIN_DATABASE_URL || e.FLEET_CONTROLLER_DATABASE_URL || e.DATABASE_URL)!.trim(),
@@ -546,6 +567,17 @@ async function main(argv: string[]): Promise<number> {
         console.log(JSON.stringify(await store.getState()));
         return 0;
       }
+      case "deployment-record": {
+        // One operational event per production cutover (v44 Fleet Command routing): deployed (P2) or rolled back (P0).
+        const [outcome, commit, from, to, ...why] = rest;
+        if (!["deployed", "rolled_back"].includes(outcome ?? "") || !/^[0-9a-f]{7,40}$/.test(commit ?? "") || !/^\d{1,3}$/.test(from ?? "") || !/^\d{1,3}$/.test(to ?? "")) {
+          throw new Error("usage: deployment-record deployed|rolled_back <commit> <fromSchema> <toSchema> [reason…]");
+        }
+        await store.recordProductionEvent(outcome === "deployed" ? "production_deployed" : "production_rolled_back",
+          { commit, fromSchema: Number(from), toSchema: Number(to), ...(why.length ? { reason: why.join(" ").slice(0, 300) } : {}) }, actor);
+        console.log(JSON.stringify({ ok: true, recorded: outcome }));
+        return 0;
+      }
       case "set-replication": {
         const on = rest[0] === "on" ? true : rest[0] === "off" ? false : null;
         if (on === null) throw new Error("usage: set-replication on|off");
@@ -605,6 +637,54 @@ async function main(argv: string[]): Promise<number> {
       case "grant-service-role": {
         await store.grantServiceRole(rest[0] || store.serviceRole);
         console.log(`granted controller API to ${rest[0] || store.serviceRole}`);
+        return 0;
+      }
+      case "grant-browser-role": {
+        // R41.1: the browser worker's role (bx_* only), for scripts/fleet-browser-setup.sh.
+        await store.grantBrowserRole(rest[0] || undefined);
+        console.log(`granted the browser-worker API to ${rest[0] || "fleet_browser"}`);
+        return 0;
+      }
+      case "grant-provider-role": {
+        // v52: the Gumroad storefront gateway's role (gx_* only), for scripts/fleet-gumroad-setup.sh.
+        await store.grantProviderRole(rest[0] || undefined);
+        console.log(`granted the storefront-gateway API to ${rest[0] || "fleet_provider"}`);
+        return 0;
+      }
+      case "grant-channels-role": {
+        // v80: the channel gateway's role (chx_* only), for scripts/fleet-channels-setup.sh.
+        await store.grantChannelsRole(rest[0] || undefined);
+        console.log(`granted the channel-gateway API to ${rest[0] || "fleet_channels"}`);
+        return 0;
+      }
+      case "grant-code-role": {
+        // v89: the code gateway's role (cgx_* only).
+        await store.grantCodeRole(rest[0] || undefined);
+        console.log(`granted the code-gateway API to ${rest[0] || "fleet_code"}`);
+        return 0;
+      }
+      case "grant-build-role": {
+        // v89: the build environment's role (bbx_* only).
+        await store.grantBuildRole(rest[0] || undefined);
+        console.log(`granted the build-environment API to ${rest[0] || "fleet_build"}`);
+        return 0;
+      }
+      case "grant-media-role": {
+        // v85: the media provider gateway's role (mx_* only), for scripts/fleet-media-setup.sh.
+        await store.grantMediaRole(rest[0] || undefined);
+        console.log(`granted the media-gateway API to ${rest[0] || "fleet_media"}`);
+        return 0;
+      }
+      case "grant-push-role": {
+        // v83: the phone-push sender's role (px_* only), for scripts/fleet-push-setup.sh.
+        await store.grantPushRole(rest[0] || undefined);
+        console.log(`granted the phone-push API to ${rest[0] || "fleet_push"}`);
+        return 0;
+      }
+      case "grant-bankfeed-role": {
+        // v52: the bank-feed receipt connector's role (rx_* only).
+        await store.grantBankfeedRole(rest[0] || undefined);
+        console.log(`granted the bank-feed API to ${rest[0] || "fleet_bankfeed"}`);
         return 0;
       }
       case "grant-operator-role": {

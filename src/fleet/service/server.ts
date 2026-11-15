@@ -30,7 +30,7 @@ import { capabilityView } from "../cognition/capability-signature.js";
 import crypto from "crypto";
 import http from "http";
 import https from "https";
-import type { AddressInfo } from "net";
+import net, { type AddressInfo } from "net";
 import { ulid } from "ulid";
 import { FleetBypassError } from "../registry.js";
 import { FleetRuntimeError, sameRelease, type RuntimeRelease } from "../runtime.js";
@@ -47,7 +47,10 @@ import {
 } from "../postgres/store.js";
 import type { PgAgentGateway } from "../postgres/agent-gateway.js";
 import { UnsupportedSandboxTerminator, type SandboxTerminator } from "./terminator.js";
+import { STOREFRONT_OPS } from "../postgres/migrations-phase52.js";
 import { RateLimiter, type RateLimit } from "./rate-limit.js";
+import { PublicPages } from "./public-pages.js";
+import { readProxyV1, type ProxiedPeer } from "./proxy-protocol.js";
 
 export { SIG_HEADERS, canonicalRequest, signRequest } from "./server-signing.js";
 import { SIG_HEADERS, signRequest } from "./server-signing.js";
@@ -56,9 +59,17 @@ import { CognitionError, DEFAULT_COGNITION_DEADLINE_MS, FOUNDER_WAIT_MARGIN_MS, 
 import type { CognitionProvider } from "../cognition/types.js";
 import { inferRouted, type ProviderFactory } from "../cognition/routed-gateway.js";
 import { RelevanceAssessor } from "../experiments/relevance.js";
+import { SpendReviewer } from "../spend/review.js";
+import { KnowledgeReviewer } from "../spend/knowledge-review.js";
 import { actionDigest } from "../cognition/router.js";
 import { ResearchError, research as researchFetch } from "../research/gateway.js";
 import type { FetcherPort } from "../research/client.js";
+
+/**
+ * Economy op names are `domain.verb`; the only three-part names are the v52 storefront product ops, allowed by name (an
+ * explicit list, not a wider pattern). The database still allow-lists, authenticates and capability-checks every op.
+ */
+const ECONOMY_THREE_PART_OPS: ReadonlySet<string> = new Set(STOREFRONT_OPS.filter((o) => o.split(".").length === 3));
 
 interface RequestCtx {
   raw: Buffer;
@@ -93,7 +104,8 @@ const PUBLIC_HEALTH_CACHE_MS = 2_000;
  * authenticated route. Public routes identify nobody and grant no authority.
  */
 /** genesis_attest (schema v12): the single founder-runtime attestation route, authenticated by its one-time token in the database. */
-export type RouteAuth = "public" | "bearer" | "session" | "genesis_attest";
+/** provider_webhook (schema v48): a payment provider's signed delivery; stored unverified, verified by the custody executor. */
+export type RouteAuth = "public" | "bearer" | "session" | "genesis_attest" | "provider_webhook";
 export interface RoutePolicy {
   auth: RouteAuth;
   /** Opt-in for capability scope 'witness'. Irrelevant for public routes. */
@@ -102,6 +114,9 @@ export interface RoutePolicy {
 
 export const ROUTE_POLICY: Readonly<Record<string, Readonly<RoutePolicy>>> = Object.freeze({
   "GET /v1/health": { auth: "public", witness: false },
+  // v48: PayPal posts webhooks here. Public, stored unverified and never acted on by the controller (the custody executor
+  // verifies each with PayPal before anything is recorded); rate-limited; identifies nobody and grants no authority.
+  "POST /v1/webhooks/paypal": { auth: "provider_webhook", witness: false },
   "GET /v1/state": { auth: "session", witness: false },
   "GET /v1/members": { auth: "session", witness: false },
   "GET /v1/self": { auth: "session", witness: true },
@@ -138,10 +153,12 @@ export const ROUTE_POLICY: Readonly<Record<string, Readonly<RoutePolicy>>> = Obj
   "POST /v1/experiments/start": { auth: "session", witness: false },
   "POST /v1/experiments/record": { auth: "session", witness: false },
   "POST /v1/experiments/list": { auth: "session", witness: false },
-  // Schema v25 (F1-LIVE-01): explicit owner requests (a request records a need; only the owner decides; nothing is granted).
+  // Schema v25/v26: action-scoped external dependencies (F2-A: one unavailable action; never blocks the founder; grants nothing).
   "POST /v1/owner-requests/create": { auth: "session", witness: false },
   "POST /v1/owner-requests/withdraw": { auth: "session", witness: false },
   "POST /v1/owner-requests/list": { auth: "session", witness: false },
+  // v28+ (F2): the agent's own economic operations through one dispatcher (the database authorizes each op).
+  "POST /v1/economy": { auth: "session", witness: false },
 });
 
 /**
@@ -155,6 +172,8 @@ export function routeDecision(method: string, path: string, scope: string | null
   if (policy.auth === "public") return "allow";
   // The attestation token authenticates exactly one route, in the database; no agent scope applies.
   if (policy.auth === "genesis_attest") return "allow";
+  // A provider's signed webhook names no agent: it is only stored (unverified) and grants nothing.
+  if (policy.auth === "provider_webhook") return "allow";
   if (scope === "full") return "allow";
   // A held agent (Phase D3 operator/owner hold) keeps exactly the witness allow-list: liveness only.
   if (scope === "witness" || scope === "held") return policy.witness ? "allow" : "deny";
@@ -170,6 +189,8 @@ export interface AuditEntry {
 
 export interface FleetServiceOptions {
   admin: PgFleetStore;
+  /** v76: the public offer and order pages (absent: not served). */
+  publicPages?: PublicPages;
   agent: PgAgentGateway;
   /** Service-level REAL_REPLICATION_ENABLED; false rejects every replication request. */
   realReplicationEnabled: boolean;
@@ -177,6 +198,11 @@ export interface FleetServiceOptions {
   reaperIntervalMs?: number;
   audit?: (entry: AuditEntry) => void;
   maxBodyBytes?: number;
+  /**
+   * The body limit for POST /v1/economy and /v1/cognition/infer from a session the database has already accepted (a
+   * storefront file or an order delivery carries a workspace file, base64; a cognition step the images it shows). Every other request, and any unproven session, keeps maxBodyBytes.
+   */
+  maxEconomyBodyBytes?: number;
   /**
    * The runtime release this service instance runs. Claims and activations
    * of leases expecting any other runtime are refused; null refuses them all.
@@ -213,6 +239,11 @@ export interface FleetServiceOptions {
   cognitionProviderFactory?: ProviderFactory | null;
   /** Pre-Genesis step 4: the isolated research fetcher (null = research unavailable on this controller). */
   researchFetcher?: FetcherPort | null;
+  /**
+   * R41.1: the doctrines a founder's attested runtime release implements, read from the installed release tree (absent =
+   * not checked). Production: releaseDoctrines(RELEASES_DIR).
+   */
+  runtimeDoctrines?: ((runtimeCommit: string | null) => readonly string[]) | null;
   /** Domains founders may never research (the fleet's own). */
   researchDenyDomains?: string[];
   /** Phase F.2 hardening (L2): one deadline for a whole inference (all attempts); founders wait this + a margin. */
@@ -274,12 +305,21 @@ export function isLoopbackHost(host: string): boolean {
   return LOOPBACK_PEERS.has(host.replace(/^\[|\]$/g, "")) || host === "localhost";
 }
 
+/** R36: how long a connection to the PROXY-protocol listener may take to send its header. */
+const PROXY_HEADER_TIMEOUT_MS = 5_000;
+
 export class FleetService {
-  private servers: http.Server[] = [];
+  private servers: Array<http.Server | net.Server> = [];
+  /** R36: requests that arrived through the loopback PROXY-protocol listener, with the client the header named. */
+  private readonly proxied = new WeakMap<http.IncomingMessage, ProxiedPeer>();
   private reaperTimer: ReturnType<typeof setInterval> | null = null;
   private reaping: Promise<void> | null = null;
   /** Schema v24: the controller's independent evidence-relevance assessor (null without a routed provider factory). */
   readonly relevance: RelevanceAssessor | null;
+  /** v64: Fleet Control's spend reviewer (material or suspicious commitments only; holds only on credible evidence). */
+  readonly spendReviewer: SpendReviewer | null;
+  /** v65: Fleet Control's shared-lesson reviewer (promotion rule; bounded; treasury-paid). */
+  readonly knowledgeReviewer: KnowledgeReviewer | null;
   private lastReapOkAt: number | null = null;
   private lastReapError: string | null = null;
   private inFlight = 0;
@@ -305,7 +345,25 @@ export class FleetService {
     this.relevance = opts.cognitionProviderFactory
       ? new RelevanceAssessor({
         ports: { relevancePending: (n) => opts.admin.relevancePending(n), relevanceRecord: (...a) => opts.admin.relevanceRecord(...a),
-          relevanceCallFailed: (...a) => opts.admin.relevanceCallFailed(...a) },
+          relevanceCallFailed: (...a) => opts.admin.relevanceCallFailed(...a), controlAiReserve: (...a) => opts.admin.controlAiReserve(...a), controlAiSettle: (...a) => opts.admin.controlAiSettle(...a), },
+        providerFactory: opts.cognitionProviderFactory,
+        audit: (event, detail) => this.audit(event, null, detail),
+        deadlineMs: this.cognitionDeadlineMs(),
+      })
+      : null;
+    this.spendReviewer = opts.cognitionProviderFactory && typeof opts.admin.spendReviewsClaim === "function"
+      ? new SpendReviewer({
+        ports: { spendReviewsClaim: (n, w) => opts.admin.spendReviewsClaim(n, w), spendReviewRecord: (...a) => opts.admin.spendReviewRecord(...a),
+          spendReviewFailed: (...a) => opts.admin.spendReviewFailed(...a), controlAiReserve: (...a) => opts.admin.controlAiReserve(...a), controlAiSettle: (...a) => opts.admin.controlAiSettle(...a), },
+        providerFactory: opts.cognitionProviderFactory,
+        audit: (event, detail) => this.audit(event, null, detail),
+        deadlineMs: this.cognitionDeadlineMs(),
+      })
+      : null;
+    this.knowledgeReviewer = opts.cognitionProviderFactory && typeof opts.admin.knowledgeProposalsClaim === "function"
+      ? new KnowledgeReviewer({
+        ports: { knowledgeProposalsClaim: (n, w) => opts.admin.knowledgeProposalsClaim(n, w), knowledgeReviewRecord: (...a) => opts.admin.knowledgeReviewRecord(...a),
+          knowledgeReviewFailed: (...a) => opts.admin.knowledgeReviewFailed(...a), controlAiReserve: (...a) => opts.admin.controlAiReserve(...a), controlAiSettle: (...a) => opts.admin.controlAiSettle(...a), },
         providerFactory: opts.cognitionProviderFactory,
         audit: (event, detail) => this.audit(event, null, detail),
         deadlineMs: this.cognitionDeadlineMs(),
@@ -323,6 +381,12 @@ export class FleetService {
 
   private static credHash(token: string): string {
     return crypto.createHash("sha256").update(token).digest("hex");
+  }
+
+  /** A FleetSession credential the database already accepted (cache only; the request is still fully authenticated). */
+  private provenSession(req: http.IncomingMessage): boolean {
+    const m = /^FleetSession (\S{1,256})$/.exec(req.headers.authorization ?? "");
+    return m !== null && this.isKnownCred(FleetService.credHash(m[1]));
   }
 
   private isKnownCred(hash: string): boolean {
@@ -383,6 +447,12 @@ export class FleetService {
 
   // ─── Reaper ─────────────────────────────────────────────────────
 
+  /** v35: the economy-engine pass runs at most once a minute (its health window is measured in hours). */
+  private lastEngineAt = 0;
+  private lastRetentionAt = 0;
+  private lastLifecycleAt = 0;
+  private lastSweepDay = "";
+
   async reapOnce(): Promise<void> {
     if (this.reaping) return this.reaping;
     this.reaping = (async () => {
@@ -397,7 +467,93 @@ export class FleetService {
         if (estates) this.audit("estates_settled", null, { count: estates });
         const experiments = await this.opts.admin.reapExperiments(50);
         if (experiments) this.audit("experiments_reaped", null, { count: experiments });
+        // F2 (v30): execution envelopes — expiry returns unspent Fleet capital, stop-loss freezes only that envelope,
+        // ledger-verified milestones release the next tranche. (Sweeps run only when an operator enables them.)
+        const capital = await this.opts.admin.reapCapital(100);
+        if (capital.changed) this.audit("envelopes_reaped", null, { evaluated: capital.evaluated, changed: capital.changed });
+        // v48: an expired owner custody activation switches custody off; then every reserved agent order the four keys
+        // allow is issued to the custody signer (a no-op without an activation). Failures never stop the reaper.
+        if (typeof this.opts.admin.custodyActivationExpire === "function") {
+          try {
+            const x = await this.opts.admin.custodyActivationExpire();
+            if (x.expired) this.audit("custody_activation_expired", null, { activationId: x.expired });
+            if (x.active) {
+              const i = await this.opts.admin.issueDueInstructions(50);
+              if (i.issued || Object.keys(i.waiting ?? {}).length) this.audit("payment_instructions_pass", null, { issued: i.issued, waiting: i.waiting ?? {} });
+            }
+          } catch (err) {
+            this.audit("custody_pass_error", null, { error: err instanceof Error ? err.message : String(err) });
+          }
+        }
+        // v49–v51: undeclared card holds, held PayPal captures PayPal now shows available, death on wallet exhaustion and lapsed
+        // sweep reductions, then — once a day, and only while the owner has enabled sweeps (a no-op otherwise) — the net-profit
+        // sweep and tax true-up.
+        if (typeof this.opts.admin.lifecycleTick === "function" && Date.now() - this.lastLifecycleAt >= 60_000) {
+          this.lastLifecycleAt = Date.now();
+          try {
+            const l = await this.opts.admin.lifecycleTick();
+            const i = l.insolvency as { died?: number; heldByOwner?: number };
+            const h = l.cardHolds as { bookedAtMaximum?: number; voided?: number };
+            const av = (l.availability ?? {}) as { released?: number; waitingForBalance?: number };
+            const st = ((l as { settlement?: unknown }).settlement ?? {}) as { matched?: number; waitingForBalance?: number };
+            const dl = ((l as { deliveries?: unknown }).deliveries ?? {}) as { resent?: number };
+            if (i.died || h.bookedAtMaximum || h.voided || av.released || av.waitingForBalance || st.matched || (l.reductions as { expired?: number }).expired || dl.resent) {
+              this.audit("lifecycle_pass", null, { insolvency: i, cardHolds: h, availability: av, settlement: st, reductions: l.reductions, deliveries: dl });
+            }
+            // v56: a pass that failed is reported (the others ran).
+            const failed = Object.entries(l as Record<string, unknown>).filter(([, v]) => (v as { ok?: unknown } | null)?.ok === false && typeof (v as { error?: unknown }).error === "string");
+            if (failed.length) this.audit("lifecycle_error", null, { passes: Object.fromEntries(failed) });
+            const day = new Date().toISOString().slice(0, 10);
+            if (this.lastSweepDay !== day) {
+              const sw = await this.opts.admin.sweepRun(day);
+              // v56: the day counts as swept only once the run returned (a failed run is retried at the next pass).
+              this.lastSweepDay = day;
+              if ((sw as { enabled?: boolean }).enabled) {
+                await this.opts.admin.taxTrueUp(100);
+                this.audit("sweep_pass", null, { period: day, swept: (sw as { swept?: number }).swept ?? 0, totalMinor: (sw as { totalMinor?: number }).totalMinor ?? 0 });
+              }
+            }
+          } catch (err) {
+            this.audit("lifecycle_error", null, { error: err instanceof Error ? err.message : String(err) });
+          }
+        }
+        // v35: the economy engine (replication window, missions, estates, notifications). A failure here is reported and
+        // never stops the rest of the reaper.
+        if (typeof this.opts.admin.engineTick === "function" && Date.now() - this.lastEngineAt >= 60_000) {
+          this.lastEngineAt = Date.now();
+          try {
+            const e = await this.opts.admin.engineTick(this.opts.realReplicationEnabled);
+            const m = e.missions as { expired?: number; assigned?: number };
+            const es = e.estates as { inventoried?: number; commitmentsStopped?: number; released?: number; pruned?: number };
+            const phase = (e.replication as { phase?: string }).phase;
+            if (phase === "birth_ordered" || m.expired || m.assigned || es.inventoried || es.commitmentsStopped || es.released || es.pruned) {
+              this.audit("engine_pass", null, { replication: phase, missions: m, estates: es, notifications: e.notifications });
+            }
+          } catch (err) {
+            this.audit("engine_error", null, { error: err instanceof Error ? err.message : String(err) });
+          }
+        }
+        // v45: hourly retention of routine event copies and diagnostics (writes no event; a failure never stops the reaper).
+        if (typeof this.opts.admin.eventRetention === "function" && Date.now() - this.lastRetentionAt >= 3_600_000) {
+          this.lastRetentionAt = Date.now();
+          try { await this.opts.admin.eventRetention(); } catch (err) {
+            this.audit("retention_error", null, { error: err instanceof Error ? err.message : String(err) });
+          }
+          // v83: the operations watch rides the same hourly pass (a failure is audited and never stops the reaper).
+          if (typeof this.opts.admin.operationsWatch === "function") {
+            try { await this.opts.admin.operationsWatch(); } catch (err) {
+              this.audit("operations_watch_error", null, { error: err instanceof Error ? err.message : String(err) });
+            }
+          }
+        }
         this.assessRelevance();
+        // v64: Fleet Control spend reviews (single-flight, off the request path; a failure is bounded and never approves).
+        if (this.spendReviewer) void this.spendReviewer.tick(3).then((r) => {
+          if (r.reviewed || r.failed) this.audit("spend_review_pass", null, { ...r });
+        });
+        if (this.knowledgeReviewer) void this.knowledgeReviewer.tick(2).then((r) => {
+          if (r.reviewed || r.failed) this.audit("knowledge_review_pass", null, { ...r });
+        });
         await this.processTerminations();
         this.lastReapOkAt = Date.now();
         this.lastReapError = null;
@@ -471,6 +627,79 @@ export class FleetService {
     return this.bind(port, host, false);
   }
 
+  /**
+   * R36: the public HTTPS listener behind the host's nginx (stream SNI routing, `proxy_protocol on`). TLS still
+   * terminates here; every connection must open with one PROXY v1 line naming the real client, which then stands in
+   * for the TCP peer (rate limits, audit). Bound to loopback only and accepted only from a loopback peer, so no remote
+   * party can supply the line. A proxied request is NEVER a loopback peer, whatever address the line names: founder
+   * credentials and detailed /readyz stay on the controller host's direct listener.
+   */
+  async listenProxied(port = 0, host = "127.0.0.1"): Promise<{ host: string; port: number; url: string }> {
+    if (!this.opts.tls) throw new Error("The PROXY-protocol listener serves HTTPS only (TLS is not configured).");
+    if (!isLoopbackHost(host)) throw new Error(`The PROXY-protocol listener must bind to loopback (got ${host}): only the local nginx may send PROXY headers.`);
+    const byPeer = new Map<string, ProxiedPeer>();
+    const keyOf = (s: { remoteAddress?: string; remotePort?: number }) => `${s.remoteAddress ?? ""}|${s.remotePort ?? ""}`;
+    const tlsServer = https.createServer({ cert: this.opts.tls.cert, key: this.opts.tls.key, minVersion: "TLSv1.2" }, (req, res) => {
+      const peer = byPeer.get(keyOf(req.socket));
+      if (!peer) {
+        req.socket.destroy();
+        return;
+      }
+      this.proxied.set(req, peer);
+      void this.handle(req, res, true);
+    });
+    const raw = net.createServer((sock) => {
+      if (!LOOPBACK_PEERS.has(sock.remoteAddress ?? "")) {
+        this.audit("proxy_peer_refused", null, { ip: sock.remoteAddress ?? "unknown" });
+        sock.destroy();
+        return;
+      }
+      let buf = Buffer.alloc(0);
+      const timer = setTimeout(() => refuse("timeout"), PROXY_HEADER_TIMEOUT_MS);
+      const refuse = (why: string) => {
+        clearTimeout(timer);
+        sock.removeListener("data", onData);
+        this.audit("proxy_header_refused", null, { why });
+        sock.destroy();
+      };
+      const onData = (chunk: Buffer) => {
+        buf = Buffer.concat([buf, chunk]);
+        const r = readProxyV1(buf);
+        if (r.status === "incomplete") return;
+        if (r.status === "invalid") return refuse("malformed");
+        clearTimeout(timer);
+        sock.removeListener("data", onData);
+        sock.pause();
+        // Bytes after the header (the start of the TLS handshake) go back to the stream for the TLS layer.
+        if (r.rest.length) sock.unshift(r.rest);
+        const key = keyOf(sock);
+        byPeer.set(key, r.peer);
+        sock.once("close", () => byPeer.delete(key));
+        tlsServer.emit("connection", sock);
+      };
+      sock.on("data", onData);
+      sock.on("error", () => sock.destroy());
+    });
+    await new Promise<void>((resolve, reject) => {
+      raw.once("error", reject);
+      raw.listen(port, host, () => resolve());
+    });
+    this.servers.push(raw, tlsServer);
+    const addr = raw.address() as AddressInfo;
+    const h = addr.family === "IPv6" ? `[${addr.address}]` : addr.address;
+    return { host: addr.address, port: addr.port, url: `https://${h}:${addr.port}` };
+  }
+
+  /** The client address used for rate limits and audit: the PROXY header's on the proxied listener, else the TCP peer. */
+  private clientIp(req: http.IncomingMessage): string {
+    return this.proxied.get(req)?.sourceAddress ?? req.socket.remoteAddress ?? "unknown";
+  }
+
+  /** True only for a direct loopback TCP peer. A request through the PROXY-protocol listener is never local. */
+  private isLoopbackPeer(req: http.IncomingMessage): boolean {
+    return !this.proxied.has(req) && LOOPBACK_PEERS.has(req.socket.remoteAddress ?? "");
+  }
+
   private async bind(port: number, host: string, tls: boolean): Promise<{ host: string; port: number; url: string }> {
     if (!tls && !isLoopbackHost(host)) {
       throw new Error(`Refusing plain-HTTP binding on non-loopback address ${host}: remote access requires TLS.`);
@@ -496,12 +725,12 @@ export class FleetService {
     this.servers = [];
     if (!servers.length) return;
     const closed = Promise.all(servers.map((s) => new Promise<void>((r) => s.close(() => r()))));
-    for (const s of servers) s.closeIdleConnections?.();
+    for (const s of servers) if ("closeIdleConnections" in s) s.closeIdleConnections();
     const deadline = Date.now() + (this.opts.drainMs ?? 10_000);
     while ((this.inFlight > 0 || this.reaping) && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 25));
     }
-    for (const s of servers) s.closeAllConnections?.();
+    for (const s of servers) if ("closeAllConnections" in s) s.closeAllConnections();
     await closed;
   }
 
@@ -556,8 +785,11 @@ export class FleetService {
     throw new HttpError(409, "FLEET_RUNTIME_UNVERIFIED", `Runtime release mismatch: ${reason}`);
   }
 
-  private async readRaw(req: http.IncomingMessage): Promise<Buffer> {
-    const max = this.opts.maxBodyBytes ?? 64 * 1024;
+  private async readRaw(req: http.IncomingMessage, path: string): Promise<Buffer> {
+    // 2026-10-23: a cognition step carries the images view_image returned (≤ 5 tool results × 2 images, each ≤ ~1.9 MB of
+    // base64; validateMessages bounds them) — at 64 KB no image could reach the model. Proven sessions only, as for the economy.
+    const max = req.method === "POST" && (path === "/v1/economy" || path === "/v1/cognition/infer") && this.provenSession(req)
+      ? this.opts.maxEconomyBodyBytes ?? 21 * 1024 * 1024 : this.opts.maxBodyBytes ?? 64 * 1024;
     const chunks: Buffer[] = [];
     let size = 0;
     for await (const chunk of req) {
@@ -709,10 +941,18 @@ export class FleetService {
    * denial is recorded, so an invented token cannot forge scope_denied events;
    * either way the handler never runs.
    */
+  /** v48: a fixed-window limit on PayPal webhook deliveries (PayPal retries anything refused). */
+  private webhookWindow = { start: 0, n: 0 };
+  private paypalWebhookAllowed(): boolean {
+    const now = this.now();
+    if (now - this.webhookWindow.start >= 60_000) this.webhookWindow = { start: now, n: 0 };
+    return ++this.webhookWindow.n <= 120;
+  }
+
   private async authorize(method: string, path: string, req: http.IncomingMessage, ctx: RequestCtx): Promise<void> {
     const policy = ROUTE_POLICY[`${method} ${path}`];
     if (!policy) throw new HttpError(404, "FLEET_NOT_FOUND", "no such endpoint");
-    if (policy.auth === "public" || policy.auth === "genesis_attest") return;
+    if (policy.auth === "public" || policy.auth === "genesis_attest" || policy.auth === "provider_webhook") return;
     const cred = policy.auth === "bearer" ? await this.bearer(req, path, ctx) : await this.credentials(req, path, ctx);
     const scope = await this.opts.admin.capabilityScope(cred.agentId);
     // No such agent: the handler's own authentication rejects it (unchanged behaviour).
@@ -747,10 +987,15 @@ export class FleetService {
     res.setHeader("x-content-type-options", "nosniff");
     if (tls) res.setHeader("strict-transport-security", "max-age=31536000");
     // Phase 6: browsers may only call from explicitly allowed origins; agents send no Origin.
+    // v76: the public offer / order pages (their own rate limits, same-origin POSTs and CSP; no agent credential involved).
+    if (this.opts.publicPages && PublicPages.matches(path)) {
+      await this.opts.publicPages.handle(req, res, path, this.clientIp(req));
+      return;
+    }
     const origin = req.headers.origin;
     if (origin !== undefined) {
       if (!(this.opts.allowedOrigins ?? []).includes(origin)) {
-        this.audit("api_origin_denied", null, { path, ip: req.socket.remoteAddress ?? "unknown" });
+        this.audit("api_origin_denied", null, { path, ip: this.clientIp(req) });
         this.send(res, 403, { ok: false, code: "FLEET_ORIGIN_DENIED", reason: "origin not allowed" });
         return;
       }
@@ -762,6 +1007,18 @@ export class FleetService {
         res.writeHead(204).end();
         return;
       }
+    }
+    // v56: where PayPal returns a buyer (FLEET_PAYPAL_RETURN_URL / _CANCEL_URL in custody's environment). A static page: no
+    // parameter is read, nothing is recorded — the payment itself is confirmed only by PayPal's evidence through custody.
+    if (req.method === "GET" && (path === "/v1/paypal/return" || path === "/v1/paypal/cancel")) {
+      const done = path === "/v1/paypal/return";
+      const body = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${done ? "Thank you" : "Payment cancelled"}</title></head>`
+        + `<body style="font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem;line-height:1.5"><h1>${done ? "Thank you for your order" : "Payment cancelled"}</h1>`
+        + `<p>${done ? "Your payment is being completed with PayPal. The seller will deliver or be in touch at the e-mail address of your PayPal account." : "No payment was taken. To pay, go back to your order page — your browser's Back button, or the order page link you were given."}</p></body></html>`;
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff",
+        "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'", "referrer-policy": "no-referrer" });
+      res.end(body);
+      return;
     }
     if (req.method === "GET" && path === "/healthz") {
       this.send(res, this.draining ? 503 : 200, {
@@ -787,7 +1044,7 @@ export class FleetService {
   private async handleInner(req: http.IncomingMessage, res: http.ServerResponse, path: string): Promise<void> {
     if (req.method === "GET" && path === "/readyz") {
       // Detailed readiness is for local administration only.
-      if (!LOOPBACK_PEERS.has(req.socket.remoteAddress ?? "")) {
+      if (!this.isLoopbackPeer(req)) {
         this.send(res, 404, { ok: false, code: "FLEET_NOT_FOUND", reason: "no such endpoint" });
         return;
       }
@@ -796,13 +1053,13 @@ export class FleetService {
       return;
     }
     const started = this.now();
-    const ctx: RequestCtx = { raw: Buffer.alloc(0), ip: req.socket.remoteAddress ?? "unknown", requestId: crypto.randomUUID(), agentId: null, status: 200 };
+    const ctx: RequestCtx = { raw: Buffer.alloc(0), ip: this.clientIp(req), requestId: crypto.randomUUID(), agentId: null, status: 200 };
     const send = (status: number, body: unknown, headers?: Record<string, string>) => {
       ctx.status = status;
       this.send(res, status, body, { "x-request-id": ctx.requestId, ...headers });
     };
     try {
-      ctx.raw = await this.readRaw(req);
+      ctx.raw = await this.readRaw(req, path);
       const out = await this.route(req.method ?? "GET", path, req, ctx);
       // Phase D3.1: the handler succeeded, so the database accepted this credential.
       if (ctx.credHash) this.markKnownCred(ctx.credHash);
@@ -840,6 +1097,13 @@ export class FleetService {
       } else if (isPgPermissionError(err)) {
         await this.recordDb("db_authorization_failed", null, { path, pgCode: (err as { code?: string }).code, message: (err as Error).message });
         send(500, { ok: false, code: "FLEET_DB_AUTHORIZATION_FAILED", reason: "database refused the operation" });
+      } else if (["23514", "22001", "23502"].includes(String((err as { code?: unknown }).code))) {
+        // 2026-10-18: a value broke a database rule (check, length, required): say which, so the caller can fix it.
+        const e = err as { code?: string; constraint?: string; column?: string; message?: string };
+        const rule = e.code === "22001" ? "a value is longer than its field allows" : e.code === "23502" ? `a required value is missing${e.column ? ` (${e.column})` : ""}`
+          : `a value breaks the rule ${e.constraint ?? "of that record"}`;
+        this.audit("api_error", null, { path, error: String(e.message ?? "").slice(0, 300) });
+        send(400, { ok: false, code: "FLEET_BAD_REQUEST", reason: `${rule} (${String(e.message ?? "").slice(0, 200)})` });
       } else {
         const msg = err instanceof Error ? err.message : String(err);
         this.audit("api_error", null, { path, error: msg });
@@ -952,7 +1216,7 @@ export class FleetService {
         // Phase F.2: founders run on the controller host, so a founder credential is honoured
         // only from a loopback peer. A founder token that leaked (e.g. through a model
         // provider) cannot open a session over the public listener.
-        if (!LOOPBACK_PEERS.has(req.socket.remoteAddress ?? "")) {
+        if (!this.isLoopbackPeer(req)) {
           const caps = await agent.capabilities(agentId, token);
           if (caps.ok && (caps.origin === "genesis_founder" || caps.origin === "reseed_founder")) {
             await this.recordDb("founder_remote_session_refused", agentId, { ip: ctx.ip });
@@ -1050,9 +1314,9 @@ export class FleetService {
       }
 
       case "/v1/spend/request": {
-        // Schema v10: a structured spend order against the agent's own ledger allocation. The
-        // database decides (reserved / awaiting_owner / rejected); nothing is executed here: the
-        // agent never names an address, only an owner-enrolled destination id.
+        // Schema v10/v27: a structured order committing the agent's OWN capital. The database checks custody only
+        // (reserved, or rejected with a precise custody category; never an owner route); nothing is executed here:
+        // the agent never names an address, only a registered destination id (owner-enrolled payee or controller-verified vendor, v29).
         const { agentId, token } = await this.credentials(req, path, ctx);
         const amount = Number(body.amountCents);
         const recoverable = body.recoverableCents === undefined ? 0 : Number(body.recoverableCents);
@@ -1068,12 +1332,16 @@ export class FleetService {
         // call of at least the action class's minimum tier (controller's record, single-use, digest-matched).
         // Founders not on routing: not enforced (enforced=false), the legacy path is unchanged.
         const toolCallId = typeof body.cognitionToolCallId === "string" ? body.cognitionToolCallId.slice(0, 64) : (/^mind:([A-Za-z0-9_.-]{1,64}):/.exec(idempotencyKey)?.[1] ?? null);
-        const boundary = await admin.actionCognitionVerify(agentId, "spend_request", amount, toolCallId,
-          actionDigest("request_spend", { amountCents: amount, category: body.category, destinationId }));
+        // v31: contextual depth — exposure share, recoverability and destination novelty (never one percentage alone).
+        const boundary = await admin.actionCognitionVerifyCtx(agentId, "spend_request", amount, typeof body.category === "string" ? body.category.slice(0, 32) : null,
+          destinationId, recoverable, toolCallId, actionDigest("request_spend", { amountCents: amount, category: body.category, destinationId }));
         if (!boundary.ok) {
           this.audit("action_cognition_refused", agentId, { code: boundary.code ?? null, actionClass: boundary.actionClass ?? null, minTier: boundary.minTier ?? null, tier: boundary.tier ?? null });
           throw new HttpError(403, String(boundary.code ?? "FLEET_ACTION_COGNITION_MISSING"), "the cognition behind this action does not meet its minimum tier");
         }
+        // v95: the durable operation this order follows (a further order to the same payee names the latest one).
+        const after = body.after === undefined || body.after === null ? null : String(body.after);
+        if (after !== null && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(after)) throw new HttpError(400, "FLEET_BAD_REQUEST", "after is an operationId");
         const r = await agent.spendRequest(agentId, token, {
           idempotencyKey,
           amountCents: amount,
@@ -1081,9 +1349,11 @@ export class FleetService {
           destinationId,
           purpose: str(body, "purpose", 300),
           recoverableCents: recoverable,
+          after,
         });
-        if (!r.ok && !r.order) throw FleetService.refusal(r, "spend refused");
-        return { ok: r.ok, code: r.code ?? null, order: r.order ?? null, replay: r.replay === true, executed: false };
+        if (!r.ok && !r.order) throw FleetService.refusal(r, typeof r.reason === "string" ? r.reason : "spend refused");
+        return { ok: r.ok, code: r.code ?? null, custody: r.custody ?? null, order: r.order ?? null, replay: r.replay === true, executed: false,
+          operation: r.operation ?? null, note: r.note ?? null };
       }
 
       // ─── Schema v24: the founder's side of the experiment pipeline. Every decision is the registry's; the answer —
@@ -1130,9 +1400,14 @@ export class FleetService {
 
       case "/v1/owner-requests/create": {
         const { agentId, token } = await this.credentials(req, path, ctx);
+        // A runtime older than F2-A sends a category: the identity/legal ones map to a kind; anything ordinary is refused
+        // by the registry (FLEET_NOT_AN_EXCEPTION) — it was never the owner's to decide.
+        const legacyKind: Record<string, string> = { account_or_identity: "kyc", policy_exception: "constitutional_change" };
+        const kind = typeof body.kind === "string" ? body.kind.slice(0, 40) : (legacyKind[str(body, "category", 40)] ?? str(body, "category", 40));
         const r = await agent.ownerRequestCreate(agentId, token, {
-          idempotencyKey: str(body, "idempotencyKey", 128), category: str(body, "category", 40), goalRef: typeof body.goalRef === "string" ? body.goalRef.slice(0, 16) : null,
-          title: str(body, "title", 200), detail: str(body, "detail", 2000), blocking: body.blocking === true,
+          idempotencyKey: str(body, "idempotencyKey", 128), kind, action: typeof body.action === "string" ? body.action.slice(0, 200) : str(body, "title", 200),
+          goalRef: typeof body.goalRef === "string" ? body.goalRef.slice(0, 16) : null, title: str(body, "title", 200), detail: str(body, "detail", 2000),
+          after: typeof body.after === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.after) ? body.after : null,
         });
         if (!r.ok && (r.code === "FLEET_AUTH_FAILED" || r.code === "FLEET_SESSION_EXPIRED" || r.code === "FLEET_AGENT_DEAD")) throw FleetService.refusal(r, "owner request refused");
         this.audit("owner_request_create", agentId, { ok: r.ok, code: r.code ?? null });
@@ -1150,6 +1425,40 @@ export class FleetService {
         const { agentId, token } = await this.credentials(req, path, ctx);
         const r = await agent.ownerRequestList(agentId, token);
         if (!r.ok) throw FleetService.refusal(r, "owner requests refused");
+        return r;
+      }
+
+      case "/v1/webhooks/paypal": {
+        // v48: PayPal's webhook delivery. Stored as received (bounded body, the five transmission headers only) for the
+        // custody executor to verify with PayPal; the controller trusts nothing in it. A backlog answers 503 so PayPal
+        // retries (it retries for three days).
+        if (!this.paypalWebhookAllowed()) throw new HttpError(429, "FLEET_RATE_LIMITED", "too many webhook deliveries");
+        const eventId = typeof body.id === "string" ? body.id : "";
+        const eventType = typeof body.event_type === "string" ? body.event_type : "";
+        const res = body.resource && typeof body.resource === "object" ? (body.resource as Record<string, unknown>) : {};
+        const resourceId = typeof res.id === "string" && /^[A-Za-z0-9-]{3,80}$/.test(res.id) ? res.id : null;
+        const headers: Record<string, string> = {};
+        for (const n of ["paypal-auth-algo", "paypal-cert-url", "paypal-transmission-id", "paypal-transmission-sig", "paypal-transmission-time"]) {
+          const v = req.headers[n];
+          if (typeof v === "string" && v.length <= 700) headers[n] = v;
+        }
+        const r = await admin.paypalWebhookReceive(eventId, eventType, resourceId, headers, ctx.raw.toString("utf8"));
+        if (!r.ok) throw new HttpError(r.code === "FLEET_BACKLOG" ? 503 : 400, r.code ?? "FLEET_BAD_REQUEST", "webhook not stored");
+        return { received: true };
+      }
+
+      case "/v1/economy": {
+        // F2 (schema v28+): opportunities, decisions, ventures, knowledge, wallet, rails, vendors, Fleet capital and
+        // envelopes. The op is checked against the database's own closed set (FLEET_UNKNOWN_OPERATION otherwise) and every
+        // op is authenticated and capability-checked there; arguments are a bounded JSON object validated by the database.
+        const { agentId, token } = await this.credentials(req, path, ctx);
+        const op = str(body, "op", 40);
+        if (!/^[a-z]+(\.[a-z_]+)?$/.test(op) && !ECONOMY_THREE_PART_OPS.has(op)) return { ok: false, code: "FLEET_BAD_REQUEST" };
+        const args = body.args && typeof body.args === "object" && !Array.isArray(body.args) ? (body.args as Record<string, unknown>) : {};
+        const r = await agent.economy(agentId, token, op, args);
+        if (!r.ok && (r.code === "FLEET_AUTH_FAILED" || r.code === "FLEET_SESSION_EXPIRED" || r.code === "FLEET_AGENT_DEAD")) throw FleetService.refusal(r, "economy refused");
+        // Metadata telemetry only (op, outcome code): never arguments, amounts or text.
+        if (/^(capital|envelope|vendor|rail|venture|decision)\./.test(op)) this.audit("economy_op", agentId, { op, ok: r.ok, code: r.code ?? null });
         return r;
       }
 
@@ -1188,8 +1497,9 @@ export class FleetService {
                 capabilities: (a, t) => agent.capabilities(a, t),
                 cognitionStatus: (a, t) => agent.cognitionStatus(a, t),
                 routingState: (a) => admin.cognitionRoutingState(a),
-                authorize: (a, e, route, psha) => admin.cognitionRoutedAuthorize(a, e, route, psha),
+                authorize: (a, e, route, psha, turn) => turn ? admin.cognitionConversationAuthorize(a, e, route, psha, turn) : admin.cognitionRoutedAuthorize(a, e, route, psha),
                 record: (a, id, x, obs) => admin.cognitionRoutedRecord(a, id, x, obs),
+                ...(this.opts.runtimeDoctrines ? { runtimeDoctrines: async (a: string) => this.opts.runtimeDoctrines!((await admin.getAgent(a))?.runtimeCommit ?? null) } : {}),
               },
               this.opts.cognitionProviderFactory, agentId, token, body, { deadlineMs: this.cognitionDeadlineMs() },
             );
@@ -1269,11 +1579,20 @@ export class FleetService {
       case "/v1/knowledge/list": {
         // Parameters travel in the signed body (the request signature covers the path, not a query string).
         const { agentId, token } = await this.credentials(req, path, ctx);
+        // v111: with a query, the most relevant of ALL current lessons (an older controller ignores it: the latest page).
+        if (typeof body.query === "string" && body.query.trim()) {
+          const category = typeof body.category === "string" && /^[a-z]{3,20}$/.test(body.category) ? body.category : null;
+          const limit = Number.isSafeInteger(body.limit) ? Math.min(20, Math.max(1, Number(body.limit))) : 8;
+          const r = await agent.knowledgeSearch(agentId, token, body.query.slice(0, 200), category, limit);
+          if (!r.ok) throw FleetService.refusal(r, "knowledge refused");
+          return { entries: r.entries, retired: r.retired, note: r.note, searched: r.searched, matched: r.matched, query: body.query.slice(0, 200) };
+        }
         const after = body.after === undefined ? 0 : Number(body.after);
         if (!Number.isSafeInteger(after) || after < 0) throw new HttpError(400, "FLEET_BAD_REQUEST", "after must be a non-negative integer");
         const r = await agent.knowledgeList(agentId, token, after, 50);
         if (!r.ok) throw FleetService.refusal(r, "knowledge refused");
-        return { entries: r.entries };
+        // v68: also the recently retired (superseded) lessons and their replacement; older runtimes read entries only.
+        return { entries: r.entries, ...(r.retired !== undefined ? { retired: r.retired } : {}), ...(typeof r.note === "string" ? { note: r.note } : {}) };
       }
 
       case "/v1/identity/request": {

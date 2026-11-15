@@ -64,6 +64,7 @@ export function agentFromJson(a: Record<string, unknown>): SharedAgentRecord {
     generation: a.generation as number,
     name: a.name as string,
     walletAddress: (a.walletAddress as string) ?? null,
+    runtimeWalletAddress: (a.runtimeWalletAddress as string) ?? null,
     runtimeVersion: (a.runtimeVersion as string) ?? null,
     runtimeRepo: (a.runtimeRepo as string) ?? null,
     runtimeCommit: (a.runtimeCommit as string) ?? null,
@@ -212,17 +213,18 @@ export class PgAgentGateway {
   }
 
   /**
-   * Schema v10: submit a structured spend order against the agent's own
-   * ledger allocation. The database decides (reserved / awaiting_owner /
-   * rejected); nothing is executed by this call.
+   * Schema v10/v27: submit a structured order committing the agent's OWN capital.
+   * The database checks custody only (reserved, or rejected with a precise
+   * custody category; never an owner route); nothing is executed by this call.
    */
   async spendRequest(
     agentId: string,
     token: string,
-    r: { idempotencyKey: string; amountCents: number; category: string; destinationId: string; purpose: string; recoverableCents?: number },
+    r: { idempotencyKey: string; amountCents: number; category: string; destinationId: string; purpose: string; recoverableCents?: number; after?: string | null },
   ): Promise<Record<string, unknown> & { ok: boolean }> {
+    // v95: after = the durable operation this one follows (null: the first on its payee).
     return this.call("api_spend_request", [
-      agentId, token, r.idempotencyKey, r.amountCents, r.category, r.destinationId, r.purpose, r.recoverableCents ?? 0,
+      agentId, token, r.idempotencyKey, r.amountCents, r.category, r.destinationId, r.purpose, r.recoverableCents ?? 0, r.after ?? null,
     ]);
   }
 
@@ -272,9 +274,9 @@ export class PgAgentGateway {
     return this.call("api_experiment_list", [agentId, token, limit]);
   }
 
-  /** Schema v25 (F1-LIVE-01): explicit owner requests. */
-  async ownerRequestCreate(agentId: string, token: string, r: { idempotencyKey: string; category: string; goalRef: string | null; title: string; detail: string; blocking: boolean }): Promise<Record<string, unknown> & { ok: boolean }> {
-    return this.call("api_owner_request_create", [agentId, token, r.idempotencyKey, r.category, r.goalRef, r.title, r.detail, r.blocking]);
+  /** Schema v26 (F2-A): action-scoped external dependencies (only identity/legal/constitutional kinds). */
+  async ownerRequestCreate(agentId: string, token: string, r: { idempotencyKey: string; kind: string; action: string; goalRef: string | null; title: string; detail: string; after?: string | null }): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.call("api_owner_request_create", [agentId, token, r.idempotencyKey, r.kind, r.action, r.goalRef, r.title, r.detail, r.after ?? null]);
   }
 
   async ownerRequestWithdraw(agentId: string, token: string, requestId: string): Promise<Record<string, unknown> & { ok: boolean }> {
@@ -285,12 +287,25 @@ export class PgAgentGateway {
     return this.call("api_owner_request_list", [agentId, token]);
   }
 
+  /**
+   * Schema v28+ (F2): the agent's own economic operations (opportunities, decisions, ventures, knowledge, wallet,
+   * capital requests, payment rails) through the single authenticated dispatcher. The op is one of a fixed set the
+   * database knows; arguments are a JSON object validated by the database.
+   */
+  async economy(agentId: string, token: string, op: string, args: Record<string, unknown>): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.call("api_economy", [agentId, token, op, JSON.stringify(args ?? {})]);
+  }
+
   async knowledgePropose(agentId: string, token: string, category: string, title: string, content: string): Promise<Record<string, unknown> & { ok: boolean }> {
     return this.call("api_knowledge_propose", [agentId, token, category, title, content]);
   }
 
   async knowledgeList(agentId: string, token: string, after: number, limit: number): Promise<Record<string, unknown> & { ok: boolean }> {
     return this.call("api_knowledge_list", [agentId, token, after, limit]);
+  }
+  /** v111: the current lessons most relevant to a question, across all of them. */
+  async knowledgeSearch(agentId: string, token: string, query: string, category: string | null, limit: number): Promise<Record<string, unknown> & { ok: boolean }> {
+    return this.call("api_knowledge_search", [agentId, token, query, category, limit]);
   }
 
   async identityRequest(agentId: string, token: string, factKey: string, purpose: string, workflow: string): Promise<Record<string, unknown> & { ok: boolean }> {

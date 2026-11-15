@@ -1,0 +1,31 @@
+# Automaton Fleet restore drill (scripts/fleet-backup.sh drill): the newest backup restored into a scratch database, schema
+# and ledger checked, the scratch database dropped. Monthly by the .timer.
+# NOT INSTALLED by default (owner-approved host step; docs/operations/backup-and-recovery.md). Runs as root because it reads
+# every Fleet state directory and dumps the database as the postgres user; it writes only its staging directory and sends
+# only restic's client-side-encrypted data to the repository. Secrets are systemd credentials (never in the environment).
+# Key material in separate escrow (custody key, TLS keys) is excluded by backup.env.
+
+[Unit]
+Description=Automaton Fleet restore drill (scratch database)
+Wants=postgresql.service
+After=postgresql.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/automaton-fleet/backup.env
+Environment=FLEET_BACKUP_STAGING=/var/lib/automaton-fleet-backup/staging
+Environment=RESTIC_CACHE_DIR=/var/cache/automaton-fleet-backup
+ExecStart=/opt/automaton-fleet/current/scripts/fleet-backup.sh drill
+LoadCredential=restic-password:/etc/automaton-fleet/backup/restic-password
+LoadCredential=s3-key-id:/etc/automaton-fleet/backup/s3-key-id
+LoadCredential=s3-key:/etc/automaton-fleet/backup/s3-key
+StateDirectory=automaton-fleet-backup
+CacheDirectory=automaton-fleet-backup
+StateDirectoryMode=0700
+UMask=0077
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=3h
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=yes

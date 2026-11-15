@@ -233,7 +233,7 @@ describe("Fleet security: Phase 6 HTTPS controller configuration", () => {
       { FLEET_REMOTE_LISTEN_ENABLED: "true", FLEET_PUBLIC_HOSTNAME: "localhost", FLEET_PUBLIC_LISTEN: "0.0.0.0:8443", FLEET_ALLOWED_ORIGINS: "https://ops.example.com" },
       tls,
     );
-    expect(ok).toEqual({ hostname: "localhost", publicListen: { host: "0.0.0.0", port: 8443 }, allowedOrigins: ["https://ops.example.com"] });
+    expect(ok).toEqual({ hostname: "localhost", publicListen: { host: "0.0.0.0", port: 8443 }, proxyProtocol: false, allowedOrigins: ["https://ops.example.com"] });
     expect(() => loadRemoteConfig({ FLEET_ALLOWED_ORIGINS: "http://insecure.example.com" }, null)).toThrow(/https origins/);
     // A certificate about to expire, or a key that does not match, is refused.
     const short = makeCert(tmpDir(), "localhost", 1);
@@ -519,15 +519,15 @@ describe.skipIf(!PG_BIN)("Fleet security policy: Phase 6 control plane, provisio
     const store = track(new PgFleetStore({ connectionString: pgc.ownerUrl, schema }));
     expect((await store.health()).schemaVersion).toBe(1);
     const check = await store.migrateCheck();
-    expect(check).toEqual({ currentVersion: 1, resultingVersion: FLEET_PG_SCHEMA_VERSION, wouldApply: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25] });
+    expect(check).toEqual({ currentVersion: 1, resultingVersion: FLEET_PG_SCHEMA_VERSION, wouldApply: Array.from({ length: FLEET_PG_SCHEMA_VERSION - 2 + 1 }, (_, i) => 2 + i) });
     expect((await store.health()).schemaVersion).toBe(1); // rolled back
-    expect(await store.migrate()).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]);
+    expect(await store.migrate()).toEqual(Array.from({ length: FLEET_PG_SCHEMA_VERSION - 2 + 1 }, (_, i) => 2 + i));
     const h = await store.health();
-    expect(h.schemaVersion).toBe(25);
-    expect(FLEET_PG_SCHEMA_VERSION).toBe(25);
+    expect(h.schemaVersion).toBe(FLEET_PG_SCHEMA_VERSION);
+    expect(FLEET_PG_SCHEMA_VERSION).toBe(FLEET_PG_SCHEMA_VERSION);
     expect((await store.getState()).maxAgents).toBe(2);
     const v5 = await ownerRaw.query(`SELECT version FROM ${schema}.fleet_schema_migrations ORDER BY version`);
-    expect(v5.rows.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]);
+    expect(v5.rows.map((r) => r.version)).toEqual(Array.from({ length: FLEET_PG_SCHEMA_VERSION - 1 + 1 }, (_, i) => 1 + i));
     expect((await store.auditPrivileges()).problems).toEqual([]);
     expect(await store.migrate()).toEqual([]); // idempotent
     await ownerRaw.query(`DROP SCHEMA ${schema} CASCADE`);
@@ -848,7 +848,11 @@ describe.skipIf(!PG_BIN)("Fleet security policy: Phase 6 control plane, provisio
     try {
       const agentId = report.agentId!;
       const a = (await admin.getAgent(agentId))!;
-      expect(a.walletAddress?.toLowerCase()).toBe(keylessDryRunAddress(agentId));
+      // v33: the economic identity is the controller's keyless custody address; the address the dry-run runtime derived for
+      // itself is recorded as its runtime wallet (information only).
+      const ids = (await ownerRaw.query(`SELECT wallet_address, runtime_wallet_address, fleet.fleet_keyless_address(agent_id) AS keyless FROM fleet.fleet_agents WHERE agent_id = $1`, [agentId])).rows[0];
+      expect(a.walletAddress?.toLowerCase()).toBe(ids.keyless);
+      expect(ids.runtime_wallet_address.toLowerCase()).toBe(keylessDryRunAddress(agentId));
       expect(report.authority).toMatchObject({ spendingFrozen: true, dailyLimitCents: 0 });
       // Even the owner cannot grant it spend authority.
       await ownerRaw.query("UPDATE fleet.fleet_wallet_custody SET spending_frozen = false, daily_limit_cents = 1000000 WHERE agent_id = $1", [agentId]);
@@ -998,7 +1002,7 @@ describe.skipIf(!PG_BIN)("Fleet security policy: Phase 6 control plane, provisio
       const r = await doctor(env);
       expect(r.checklist.filter((c) => !c.ok), formatChecklist(r)).toEqual([]);
       expect(r.checklist.map((c) => c.item)).toEqual([
-        "PostgreSQL roles correct", "schema v25", "controller service active", "privileged secrets protected", "runtime repo pinned",
+        "PostgreSQL roles correct", `schema v${FLEET_PG_SCHEMA_VERSION}`, "controller service active", "privileged secrets protected", "runtime repo pinned",
         "runtime commit pinned", "build ID pinned", "HTTPS valid", "remote controller reachable", "replay protection working",
         "agent credentials scoped", "payments disabled", "owner sweeps disabled", "fleet cap = 2", "no unresolved orphan", "no stuck reservation",
       ]);

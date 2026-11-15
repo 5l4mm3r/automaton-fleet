@@ -1,0 +1,19 @@
+{
+  "id": "s1-order-and-correction",
+  "verdict": "poor_decision",
+  "reason": "the paid order was not delivered",
+  "observations": {
+    "calls": 108,
+    "minutes": 37.5
+  },
+  "cost": {
+    "calls": 108,
+    "refused": 0,
+    "usdMicro": "0",
+    "allInMicro": "0",
+    "capPence": 1
+  },
+  "startedAt": "2026-10-23T15:46:01.600Z",
+  "endedAt": "2026-10-23T16:23:40.925Z",
+  "founder": "01M5MQ1Q6YRFQD7FW2MX2Q75RT"
+}

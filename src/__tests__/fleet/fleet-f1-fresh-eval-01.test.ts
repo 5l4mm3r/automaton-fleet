@@ -16,7 +16,7 @@ import {
   ARMS, EVAL_SYSTEM, FRESH_PLAN, FakeFreshModel, KEY, PRE_REGISTRATION, PRE_REGISTRATION_SHA256, PROBE_CONTRACT, PROBE_TASK, applyTrunk, classify,
   evalTools, legacyPacket, parseAnswers, runFreshCell, scoreProbe, summarize, type FreshArm, type FreshCellRequest, type ProbeScore,
 } from "../../fleet/eval/f1-fresh-eval-01.js";
-import { FOUNDER_CHARTER, FOUNDER_EXPERIMENT_TOOLS, FOUNDER_ROUTED_ADDENDUM, FOUNDER_ROUTED_TOOLS } from "../../fleet/cognition/types.js";
+import { FOUNDER_CHARTER, FOUNDER_CHARTER_V2, FOUNDER_EXPERIMENT_TOOLS, FOUNDER_ROUTED_ADDENDUM, FOUNDER_ROUTED_ADDENDUM_R23, FOUNDER_ROUTED_TOOLS } from "../../fleet/cognition/types.js";
 import { EvalStateError, F1_FRESH_EVAL_01_SPEC, runPlan, scoreFresh } from "../../fleet/eval/f1-eval-02-driver.js";
 import { loadFacts } from "../../fleet/founder/facts.js";
 import { buildTaskPacket, taskPacketProblems } from "../../fleet/cognition/task-packet.js";
@@ -28,6 +28,8 @@ const PRICES = { inputMicrocentsPerToken: 200, outputMicrocentsPerToken: 1000, c
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "fresh-eval-test-"));
 const req = (arm: FreshArm, o: Partial<FreshCellRequest> = {}): FreshCellRequest => ({ cellId: `t-${arm}`, arm, replicate: 1, maxSteps: 3, maxTokens: 8000, prices: PRICES, budgetMicrocents: 150_000_000, ...o });
 const CONFIG = { transport: "fake", model: "claude-sonnet-5-5", effort: "medium", maxTokens: 8000, prices: PRICES, capMicrocents: 150_000_000 };
+/** sha256 of the sealed instrument's system prompt (an input of both sealed F1-FRESH pre-registration hashes). */
+const EVAL_SYSTEM_SHA256 = "831a2b9dfd3803fa2470b56598b7ba782f8d2f918e78e23d2858f7724bad76bb";
 
 describe("F1-FRESH-EVAL-01 trunk and arms (production fact store and packet builder)", () => {
   it("the shared trunk is deterministic; FRESH keeps a structured lifecycle; LEGACY does the best the old store could", () => {
@@ -81,7 +83,10 @@ describe("F1-FRESH-EVAL-01 trunk and arms (production fact store and packet buil
   });
 
   it("every arm gets the identical production routed prefix: same system prompt, same tool definitions", () => {
-    expect(EVAL_SYSTEM).toBe(`${FOUNDER_CHARTER}\n${FOUNDER_ROUTED_ADDENDUM}`);
+    // The sealed instrument: charter v2 + the R23 routed addendum, frozen (F2-A moved production to charter v3).
+    expect(EVAL_SYSTEM).toBe(`${FOUNDER_CHARTER_V2}\n${FOUNDER_ROUTED_ADDENDUM_R23}`);
+    expect(EVAL_SYSTEM).not.toBe(`${FOUNDER_CHARTER}\n${FOUNDER_ROUTED_ADDENDUM}`);
+    expect(crypto.createHash("sha256").update(EVAL_SYSTEM).digest("hex")).toBe(EVAL_SYSTEM_SHA256);
     const t = evalTools().map((x) => x.name);
     expect(t).toEqual(expect.arrayContaining(["remember_fact", "retract_fact", "recall_facts", ...FOUNDER_ROUTED_TOOLS.map((x) => x.name), ...FOUNDER_EXPERIMENT_TOOLS.map((x) => x.name)]));
     expect(new Set(t).size).toBe(t.length);

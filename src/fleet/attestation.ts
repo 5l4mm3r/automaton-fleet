@@ -34,6 +34,12 @@ export const BUILD_IDENTITY_FILES: readonly string[] = Object.freeze([
   "constitution.md",
 ]);
 export const BUILD_IDENTITY_DIRS: readonly string[] = Object.freeze(["dist", "src"]);
+/**
+ * Directories included in the build identity when the tree has them (v39): the Admin control centre's Next.js static
+ * export. A release built with it pins every UI byte (a modified or deleted file changes the build id); an older tree
+ * without it keeps exactly the identity it always had.
+ */
+export const BUILD_IDENTITY_OPTIONAL_DIRS: readonly string[] = Object.freeze(["packages/dashboard-web/out"]);
 
 const HEX64 = /^[0-9a-f]{64}$/;
 const COMMIT_RE = /^[0-9a-f]{40}$/;
@@ -131,6 +137,12 @@ export function computeBuildIdentity(dir: string): BuildIdentity {
     if (!st.isDirectory()) throw new FleetRuntimeError(`Runtime ${d} is not a directory.`);
     listFiles(dir, d, files);
   }
+  for (const d of BUILD_IDENTITY_OPTIONAL_DIRS) {
+    let st: fs.Stats;
+    try { st = fs.lstatSync(path.join(dir, d)); } catch { continue; }
+    if (!st.isDirectory()) throw new FleetRuntimeError(`Runtime ${d} is not a directory.`);
+    listFiles(dir, d, files);
+  }
   files.sort((a, b) => (Buffer.compare(Buffer.from(a), Buffer.from(b))));
   const h = crypto.createHash("sha256");
   for (const f of files) h.update(`${f}\0${sha256(fs.readFileSync(path.join(dir, f)))}\n`);
@@ -155,6 +167,7 @@ const path = require("path");
 const { execFileSync } = require("child_process");
 const FILES = ${JSON.stringify(BUILD_IDENTITY_FILES)};
 const DIRS = ${JSON.stringify(BUILD_IDENTITY_DIRS)};
+const OPTIONAL_DIRS = ${JSON.stringify(BUILD_IDENTITY_OPTIONAL_DIRS)};
 const [dir, nonce] = process.argv.slice(2);
 const sha = (d) => crypto.createHash("sha256").update(d).digest("hex");
 function fail(msg) { process.stdout.write("${ATTESTATION_MARKER}" + JSON.stringify({ error: msg }) + "\\n"); process.exit(3); }
@@ -174,6 +187,7 @@ try {
     files.push(f);
   }
   for (const d of DIRS) { if (!fs.lstatSync(path.join(dir, d)).isDirectory()) fail("not a dir " + d); walk(d, files); }
+  for (const d of OPTIONAL_DIRS) { let st; try { st = fs.lstatSync(path.join(dir, d)); } catch { continue; } if (!st.isDirectory()) fail("not a dir " + d); walk(d, files); }
 } catch (e) { fail(String(e && e.message || e)); }
 files.sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)));
 const h = crypto.createHash("sha256");

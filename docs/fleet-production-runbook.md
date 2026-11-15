@@ -1932,6 +1932,154 @@ Design: `docs/design/f1-fresh-01-fact-freshness.md`. Evidence: `docs/evaluations
     `facts.json` edits are detected by hash on re-upgrade.
   - Controller: `runtime.env.pre-r25` + `current` → `releases/59896ce…`.
 
+## Stage R29 — F2 autonomous economy: controller + schema v26–v31, Founder 1 (procedure; prepared 2026-10-02, NOT executed)
+
+Candidate `b949b1c7f156ac73ac12c31cbc3eeb958413169e` (`fleet-origin/f2/integration`; contains the frozen F2 candidate
+`713f4dd`, merged as `aceea47`). Design: `docs/design/f2-autonomous-economy.md` §25–§30. Local build (reproducible,
+`scripts/fleet-build-runtime.sh`): build `2b9584d5f73b87552e8d672feb2b90b1ef10419c00c603e7f46f084739e10da2`, lockfile
+`eee9dc2f…` unchanged (`docs/evaluations/r29/pins-local.txt`). Full suite on the exact tree: 127 files, 2670 passed,
+1 skipped (root-only), 0 failed, no exclusions. Same shape as R28 (controller-only update, then the founder via the
+R23 lifecycle). Real payments, owner sweeps, replication and the dry-run child stay off; rails stay pinned not-live.
+
+- **R29-0 Read-only inventory** (no change): pins and `current`, unit states / MainPIDs / NRestarts, `readyz`,
+  `fleet:doctor`, `fleet:verify`, `fleet-verify-deployment.sh`, schema (expect 25), Founder 1 pin (`6764d78`), PID,
+  `facts.json` digest, books (cash + expenses), population 1/0/0 cap 2, safety flags, disk space.
+- **R29-1 Build on the VPS:** tooling checkout to `b949b1c`; `scripts/fleet-build-runtime.sh
+  https://github.com/5l4mm3r/automaton-fleet.git b949b1c7f156ac73ac12c31cbc3eeb958413169e` must print the local
+  build id above. Pin `runtime.env` (keep `runtime.env.pre-r29` = the `6764d78` pins); `fleet-deploy-release.sh build`
+  then `sudo … install` (switches `current`; `releases/6764d78…` kept). The running controller keeps the old code.
+- **R29-2 Backup + restore proof + real-data rehearsal (before any outage):**
+  1. `pg_dump -Fc` of the live v25 database to `~/automaton_fleet-v25-pre-v31-<ts>.dump` (0600; size, sha256,
+     `pg_restore -l` table/function counts; PostgreSQL version); copy Founder 1's durable state (root 0700 backup,
+     no credential) with its sha256; snapshot non-secret pins and unit-file checksums.
+  2. Restore the dump into a THROWAWAY database (separate name, never the live one); row counts and ledger verify
+     equal the source.
+  3. On the restored copy with the new tooling: `migrate-check` must be exactly
+     `{currentVersion:25, resultingVersion:31, wouldApply:[26,27,28,29,30,31]}`; `migrate`; `audit-privileges` PASS;
+     ledger verifies, journal count and hash-chain head unchanged (migrations post no journal); Founder 1's agent row,
+     identity, credential hash, Genesis, accounts and balances unchanged; `fleet_economy_health()` ok; run `migrate`
+     again → nothing to apply. Drop the throwaway database.
+  4. Rollback proof on the throwaway side: restore the same dump again → schema 25 with identical counts (a v25
+     database is what the `6764d78` release serves).
+- **R29-3 Controller cutover** (OUTAGE, controller-side units only; never the founder unit): stop the controller-side
+  units; fresh dump `~/automaton_fleet-v25-pre-v31-<ts>.dump` (verified as above); `migrate-check` exactly as in
+  R29-2.3; `migrate`; `audit-privileges` PASS; `approve-runtime`; start; `readyz` 200; `fleet:verify-runtime` VERIFIED;
+  doctor, `fleet:verify`, `fleet-verify-deployment.sh`, ledger verify, `hub reconcile`, `hub-health`; Founder 1 PID and
+  pin unchanged; flags false. A `6764d78` founder against v31: v26–v31 are additive for the v25 founder API (the
+  migration-path suite runs the v25-shaped founder's API across every step).
+- **R29-4 Founder 1** (R23 lifecycle): `upgrade-rehearsal 6764d78b68ea3d97ea78a91ce1a15fbc2a5adad8` (must pass with
+  production unchanged); `upgrade-status`, `upgrade-preflight`; `upgrade-runtime 01M3F50SH7PNX2E3GST13J52AS`. Expect
+  `verified`, state digests identical, identity/credential/Genesis/ledger unchanged; then verify-deployment, challenges,
+  first natural wake (economy tools in the capability record; wallet and runway shown as information).
+- **Rollback.**
+  - Founder: `rollback-runtime 01M3F50SH7PNX2E3GST13J52AS <upgradeId> <reason…>` (`releases/6764d78…` intact).
+  - Controller/schema: founder back on `6764d78` first; restore `runtime.env.pre-r29`; `current` →
+    `releases/6764d78…`; restore the pre-v31 dump (v25 code refuses a v31 database); verify schema 25; re-verify.
+    A restore loses every row written after the dump.
+- **Not part of R29:** real payments, live rails, owner sweeps, replication, a child, crypto, tax-profile data, the
+  PayPal credential, FX.
+
+### Stage R29 record (2026-10-02, VPS UTC)
+
+Evidence: `docs/evaluations/r29/` (ids, digests, counts, status; scanned clean, no founder-written text).
+
+- **R29-0** inventory 09:45–09:51: as after R28 (`6764d78`/`cdbcffb9…`, schema 25, Founder 1 PID 318932, books
+  9139 + 861 = 10000p, doctor DEPLOYMENT OK, flags false).
+- **R29-1** VPS build of `b949b1c` = local: build `2b9584d5…0da2`, lockfile `eee9dc2f…` unchanged (`pins.txt`).
+- **R29-2** real-data rehearsal 10:25:10–10:25:22 (after five aborted runs on script defects, all fail-closed on the
+  throwaway or backup side): online dump `~/automaton_fleet-v25-r29-20261002T102510Z.dump` (3,103,763 B, sha
+  `9050f84d…29ec`); Founder 1 state `/var/lib/automaton-fleet-backups/r29-20261002T102510Z/` (root 0700, tar 0600, sha
+  `91cd9867…`, credential file excluded). Restore into throwaway `automaton_fleet_r29rh` (production database ACL; CLI
+  as `postgres` over the socket with session role `fleetadmin`, no credential read): 91 tables with identical row
+  counts, schema 25. `migrate-check` `{25→31, [26..31]}`, migrate 1.2 s, audit PASS, ledger head 535 / 498 journals
+  unchanged, `fleet_ledger_verify` ok (0 unbalanced), Founder 1's 9 accounts identical + 3 new zero-balance accounts
+  (envelope cash, tax expense, tax reserve), identity/credential unchanged. Re-run a no-op; rollback proof (the dump
+  restores to schema 25 with identical rows, head, identity); throwaway dropped.
+- **R29-3** controller `6764d78` → `b949b1c`, schema 25 → 31: outage 10:34:44–10:34:56 (12 s), controller-side units
+  only. Pre-v31 dump `~/automaton_fleet-v25-pre-v31-20261002T103444Z.dump` (3,105,069 B, sha `e0ce25a0…c94b`, verified,
+  91 tables / 608 functions); `runtime.env.pre-r29` kept (`6764d78` pins). Audit PASS, runtime approved, VERIFIED,
+  `readyz` 200. Doctor DEPLOYMENT OK (WARNs: `AGENT_NO_ROUTE_FORWARD` until the founder acts, sandbox termination,
+  wallet custody); SAFE FOR REAL PAYMENTS NO (no custody signer; agent-held wallet keys). verify-deployment 149/0,
+  ledger verify ok (499 journals), Hub health ok. Founder 1 untouched (PID 318932). Owner request `62cbe1b7` preserved
+  as a pending action-scoped dependency (no response, no decision).
+- **R29-4** Founder 1 `6764d78` → `b949b1c`: rehearsal 24/24 (production unchanged, host clean, founder untouched);
+  preflight ok; upgrade `8b85e001-1922-492b-9016-efe708c168dd` **verified**, downtime 1.8 s, PID 318932 → 349284,
+  state diff identical (0 lost/changed/added). Identity `a8a7af56…`, credential `107ddfca…`, Genesis `8af1178c…`,
+  ledger accounts `f37337b8…` (changed at R29-3 by the three zero-balance accounts), ledger head, population 1/0/0
+  cap 2, routing and safety switches unchanged. verify-deployment 149/0.
+- **First wake on `b949b1c`** (10:45:02–10:45:10, 4 T2 calls, 10p): capability record 35 tools (wallet, venture,
+  opportunity, fleet_capital, economic_knowledge, routine_task, …). The founder consulted `fleet_capital`, created and
+  selected one venture itself; no capital request, no payment order, no owner step; challenges passing.
+- **Rollback:**
+  - Founder: `rollback-runtime 01M3F50SH7PNX2E3GST13J52AS 8b85e001-1922-492b-9016-efe708c168dd <reason…>`
+    (`releases/6764d78…` intact).
+  - Controller/schema: founder first; `runtime.env.pre-r29`; `current` → `releases/6764d78…`; restore
+    `~/automaton_fleet-v25-pre-v31-20261002T103444Z.dump` (v25 code refuses v31). Loses every row written after
+    10:34:44, including the founder's venture.
+- **Clean-up later:** the extra rehearsal dumps in `~` and backup directories `r29-20261002T1017*`–`1024*` (the first
+  tar is 0644 inside the 0700 directory); `/var/tmp/r29-tooling`.
+
+## Stage R30 — controller custody signer, schema v32 (2026-10-02, VPS UTC)
+
+Controller-only update (`b949b1c` → `f072614`, build `9bf9ae22…6091`); Founder 1 untouched (its code is unchanged).
+Same procedure as R29-1…R29-3 (VPS build = local; real-data rehearsal on a throwaway restore with `migrate-check`
+exactly `{31→32, [32]}`; cutover 11:26:43–11:26:55; pre-v32 dump `~/automaton_fleet-v31-pre-v32-20261002T112643Z.dump`, sha
+`d6609eee…`; `runtime.env.pre-r30`). Result: wallet custody PASS (Founder 1 keyless); the only real-payment blocker is the
+absent live custody signer (pins unchanged). Evidence and rollback: `docs/evaluations/r30/`.
+
+## Stage R31 — constitutional correction, schema v33 (2026-10-02, VPS UTC)
+
+Controller-only (`f072614` → `3aebcc2`, build `055e8076…`); Founder 1 untouched. Same procedure as R30. Cutover
+12:05:18–12:05:29; pre-v33 dump `~/automaton_fleet-v32-pre-v33-20261002T120518Z.dump` (sha `39658635…`); `runtime.env.pre-r31`.
+No synthetic tax (fallback 0), legal entity optional, future children keyless. Evidence/rollback: `docs/evaluations/r31/`.
+
+## Stage R32 — agent operational identity + owner identity broker, schema v34 (2026-10-02, VPS UTC)
+
+Controller-only (`3aebcc2` → `27b07e9`, build `1c430ef8…0ba4`, identical locally and on the VPS); Founder 1 untouched.
+R32-2 rehearsal PASSED 12:42:40–12:42:58 (`{33→34, [34]}`, audit PASS, ledger/Founder 1 identical, v11 raw release
+retired, rerun no-op, rollback proof). **R32-3 cutover NOT RUN** (the auto-mode classifier denied it; awaiting
+owner approval): `docs/evaluations/r32/r32-3-deploy.sh` (fail-closed; `runtime.env.pre-r32`; pre-v34 dump). The
+identity broker unit is not part of R32 (owner-approved provisioning: `docs/design/agent-identity.md`).
+
+## Stage R33 — schemas v34–v38 (2026-10-02, VPS UTC) — rehearsed; cutover awaiting the owner
+
+Release `e9eee6f` (build `89533671…`, lockfile `ea24cb1f…`), identical locally and on the VPS. Supersedes R32.
+`scripts/fleet-rollout.sh rehearse ~/r33-pins.txt 33 38` PASSED at 16:02 (`docs/evaluations/r33/`). Cutover (owner):
+`bash ~/fleet-rollout.sh cutover ~/r33-pins.txt 33 38` — controller-side only, automatic rollback on failure. New services
+(identity broker, browser worker, dashboard) remain unprovisioned until their owner-approved host steps.
+
+## Stage R36 — TLS edge with PROXY protocol (networking only; schema unchanged at 41)
+
+Release `29cde7d` (build `a85fd089…`, lockfile `1df54e35…` unchanged), identical locally and on the VPS; both
+rehearsals PASSED 2026-10-03 ~19:57Z (`docs/evaluations/r36/`). Owner cutovers:
+- the code at 20:08Z;
+- the edge at 20:29:39Z, after the fixed certificate check.
+
+R36 and the edge are live, and admin.agentfleet.vip is served by nginx.
+
+Owner decision (2026-10-03): option B. `api.agentfleet.vip` and `admin.agentfleet.vip` both on :443 behind nginx, with the
+real client address preserved at FleetController.
+
+- **Controller** (`FLEET_PUBLIC_PROXY_PROTOCOL=true`, off by default): the public listener binds loopback only
+  (`FLEET_PUBLIC_LISTEN=127.0.0.1:8443`; a non-loopback bind is refused at startup), accepts connections only from the
+  peer 127.0.0.1, and requires one PROXY v1 `TCP4`/`TCP6` line before TLS (anything else closes the connection). TLS
+  still terminates in the controller with the same API certificate. The header's address is used for per-IP rate limits
+  and audit. A proxied request is never local, whatever address it names: founder credentials and detailed `/readyz`
+  remain on the direct `127.0.0.1:8787` listener (Founder 1 uses it and is unaffected).
+- **Edge** (`deploy/nginx/automaton-fleet-edge.conf`, `automaton-fleet-edge.service`; the stock `nginx.service` stays
+  disabled so :80 remains free for certbot): stream SNI preread on :443 (IPv4, as before); `admin.agentfleet.vip` goes to
+  nginx's own TLS server on `127.0.0.1:9443` (Let's Encrypt, renewal hook `automaton-fleet-edge.sh` reloads the edge),
+  which overwrites `X-Forwarded-For` with the PROXY address and proxies to the dashboard on `127.0.0.1:8790`; everything
+  else goes to the controller. The edge cannot read Fleet secrets or the API private key.
+- **Procedure**:
+  1. `scripts/fleet-rollout.sh rehearse <pins> 41 41`, then the owner runs `cutover`. This is the code only, and
+     behaviour is identical because the flag is off.
+  2. `scripts/fleet-edge.sh rehearse <pins>`: a throwaway controller and edge on test ports against a fresh dump.
+  3. The owner runs `scripts/fleet-edge.sh cutover <pins>`: admin certificate, edge files, env switch, controller
+     restart, edge start, external checks, with automatic rollback.
+  4. Rollback: `scripts/fleet-edge.sh rollback` (env only, back to 0.0.0.0:443). For the code, the R35 release and
+     `runtime.env.pre-<commit7>`.
+
 ## Operating the Claude bridge (dev VM, Phase D)
 
 This is dev-VM tooling only (`docs/design/phase-d-claude-bridge.md`). It changes
@@ -2112,3 +2260,64 @@ After this, privileged steps go back to the operator typing sudo, as on the loca
 - The operator account can run `pnpm fleet:*` with `admin.env` group access, and
   `automaton-fleet-service` cannot read it (`fleet-verify-deployment.sh`).
 - That the witness release (stage 21b) builds reproducibly on the VPS, and the live v6 → v7 migration applies cleanly to the restored registry.
+
+## Stage R37 — schema v42 (multi-agent team projects), controller release 94f09a7 (DEPLOYED 2026-10-07)
+
+Release `94f09a7` (build `da053d1c…`, lockfile `1df54e35…` unchanged), identical locally and on the VPS. Full record:
+`docs/evaluations/r37/`.
+
+- **Rehearsals:** `fleet-rollout.sh rehearse <pins> 41 42` PASSED, then `fleet-upgrade-rehearsal.sh <pins> 41 42` PASSED.
+  The second shows that 29cde7d refuses schema 42, that the candidate services run on it, and that the database rollback
+  restores 41 with the old release running again.
+- **Owner cutover 12:25:41Z:** a 20 s outage (12:26:25–12:26:45Z). The reconciliation gate passed; balances, events,
+  notifications, Agents, cap and flags are unchanged.
+  - Rollback snapshot `~/automaton_fleet-v41-pre-v42-20261007T122626Z.dump` (sha256 `c81a560a…`).
+  - Founder 1 kept running on b949b1c (same PID) through the cutover. It was then upgraded to 94f09a7 at 12:43Z with
+    `fleet-founders.sh upgrade-runtime` (owner-run): verified, upgrade `d65b938d…`.
+- **Production now:**
+  - schema 42, controller/Operator API/custody/dashboard/identity and Founder 1 on 94f09a7;
+  - cap 2, 1 living Agent, DEVELOPMENT;
+  - all four safety flags false;
+  - UI root 0.3.0, V2.4.1 preview at /hq-preview/.
+- **Rollback (class B; 29cde7d cannot run on 42):** stop the units, `DROP SCHEMA fleet CASCADE`, restore the
+  pre-v42 dump, then `runtime.env.pre-94f09a7`, `current` → `releases/29cde7d…`, and start in order. This is what the
+  rollout script's automatic rollback does.
+- **Procedure notes for the next schema release:**
+  1. `pnpm test:security` / `test:financial` now run whole files serially; no manual file lists.
+  2. The rollout gate compares `fleet-reconcile-snapshot.sql` before and after the migration.
+  3. `fleet-upgrade-rehearsal.sh` needs the tooling tree left by `rehearse`.
+  4. Claude Code's classifier blocks production cutovers: the owner runs the one guarded command.
+
+## Stage R38 — schema v43: owner sign-in resilience, notification housekeeping; V2.4.2 preview (DEPLOYED 2026-10-07)
+
+- **Release:** `db3ce41` (build `65b4bdc0…`). Owner cutover at 16:56Z, an 18 s outage, reconciliation OK.
+  - Rollback dump `~/automaton_fleet-v42-pre-v43-20261007T165651Z.dump` (`d3e7dcad…`).
+- **Preview:** `/opt/automaton-fleet/ui/0.3.0+hq-preview-0.8.2`.
+- **Owner sign-in:** password + TOTP from any browser, or passkey + TOTP. The owner set a password at 17:51Z and signed in
+  from Chrome (not Edge) at 18:02Z.
+- **Record:** `docs/evaluations/r38/`. **Procedures:** `docs/admin-access.md`.
+
+## Stage R39 — schema v44: Fleet Command event routing; V2.4.3 promoted to the admin root (DEPLOYED 2026-10-07)
+
+- **Release:** `7f65cd1` (build `dcbea07f…`), via `scripts/fleet-release.sh`: backend + UI + root verification, with one
+  outcome event.
+  - Outage 19 s (18:57:40–18:57:59Z). Reconciliation OK.
+  - Rollback dump `~/automaton_fleet-v43-pre-v44-20261007T185740Z.dump` (`76d0dcf7…`).
+- **Root:** `/opt/automaton-fleet/ui/0.8.3` (V2.4.3 at `/`, the same build at `/hq-preview/`).
+  - The previous dir `0.3.0+hq-preview-0.8.2` is kept; `dashboard.env.pre-0.8.3` switches back to it.
+- **Backend rollback:** `fleet-rollout.sh revert ~/r39-pins.txt 43 44 "<reason>"`, after rolling the UI back.
+- **Future releases:** use `scripts/fleet-release.sh <pins> <from> <to> <uiName> <ui.tgz> <sha256>`. It is atomic at
+  release level and records exactly one `production_deployed` or `production_rolled_back` event.
+- **Record:** `docs/evaluations/r39/`.
+
+## Stage R40 — schema v45: V2.4.4 final (disposable notifications, clearable Fleet Command, meaningful Fleet history) (DEPLOYED 2026-10-07)
+
+- **Release:** `136c4bd` (build `9823d0a3…`), via `fleet-release.sh`. Outage 19 s (20:52:30–20:52:49Z); reconciliation
+  OK.
+  - Purged 2,447 routine event copies and process steps; the canonical history is byte-identical.
+  - Rollback dump `~/automaton_fleet-v44-pre-v45-20261007T205230Z.dump`.
+- **Root:** `/opt/automaton-fleet/ui/0.8.4` (V2.4.4, the same build at `/hq-preview/`).
+- **Every event is meaningful (permanent) or temporary** (7 days for copies and process steps, 30 days for routine
+  authentication diagnostics). The hourly `svc_event_retention` pass writes no event. See `docs/admin-access.md`.
+- **Rollback:** UI first (`dashboard.env.pre-0.8.4`), then `fleet-rollout.sh revert ~/r40-pins.txt 44 45 "<reason>"`.
+- **Record:** `docs/evaluations/r40/`. This subject is CLOSED.

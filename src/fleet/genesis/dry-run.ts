@@ -178,7 +178,9 @@ export async function runGenesisDryRun(opts: {
       "distinct ids, keyless identities, own lineage roots");
     check("independent workspaces and state", distinct("workspace_id") && distinct("state_namespace"), rows.map((r) => `${r.workspace_id}/${r.state_namespace}`).join(" "));
     const accts = (await c.query(`SELECT agent_id, count(*)::int AS k FROM fleet_ledger_accounts WHERE agent_id = ANY($1) GROUP BY agent_id`, [ids])).rows;
-    check("independent ledger accounts", accts.length === n && accts.every((x) => x.k === 9), accts.map((x) => `${x.k}`).join(","));
+    // One account per agent-scope ledger class (v10 + v11 investment P&L + v29 tax reserve, tax expense, envelope capital).
+    const perAgent = Number((await c.query(`SELECT count(*)::int AS n FROM fleet_ledger_classes WHERE scope = 'agent'`)).rows[0].n);
+    check("independent ledger accounts", accts.length === n && accts.every((x) => x.k === perAgent), accts.map((x) => `${x.k}/${perAgent}`).join(","));
     // Physical workspace layout (temporary): each founder's directories are its own.
     const dirs = rows.map((r) => {
       const root = path.join(tmpRoot, r.workspace_id);

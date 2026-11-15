@@ -60,8 +60,11 @@ export interface LedgerVerifyResult {
 export interface EconomicModel {
   ledgerAuthoritative: boolean;
   custodyExecutionEnabled: boolean;
-  ownerApprovalThresholdCents: number;
-  agentDailySpendCents: number;
+  /**
+   * Schema v27: the per-order owner threshold and the agent daily line are RETIRED — no spend decision reads them (own
+   * capital is the founder's to risk-manage; FleetController checks custody only). Shown for history, never as policy.
+   */
+  legacyRetired: { ownerApprovalThresholdCents: number; agentDailySpendCents: number };
   reservationTtlS: number;
   strongAuthThresholdCents: number;
   destinationCooldownS: number;
@@ -141,8 +144,7 @@ export class PgLedgerAdmin {
     return {
       ledgerAuthoritative: m.ledger_authoritative,
       custodyExecutionEnabled: m.custody_execution_enabled,
-      ownerApprovalThresholdCents: num(m.owner_approval_threshold_cents),
-      agentDailySpendCents: num(m.agent_daily_spend_cents),
+      legacyRetired: { ownerApprovalThresholdCents: num(m.owner_approval_threshold_cents), agentDailySpendCents: num(m.agent_daily_spend_cents) },
       reservationTtlS: m.reservation_ttl_s,
       strongAuthThresholdCents: num(m.strong_auth_threshold_cents),
       destinationCooldownS: m.destination_cooldown_s,
@@ -223,6 +225,14 @@ export class PgLedgerAdmin {
     return { destinationId: r.destinationId, activatableAt: r.activatableAt, activationCode: code.code };
   }
 
+  /**
+   * Schema v32: record the payable reference of an owner-enrolled destination for the custody signer. Only the enrolled
+   * reference is accepted (its hash must equal the one recorded at enrolment); it is an account identifier, not a secret.
+   */
+  async destinationReferenceSet(destinationId: string, reference: string, actor: string): Promise<{ ok: boolean; replay?: boolean }> {
+    return this.one(`SELECT fleet_admin_destination_reference_set($1, $2, $3) AS r`, [destinationId, reference, actor]);
+  }
+
   async activateDestination(destinationId: string, activationCode: string, actor: string): Promise<{ status: string }> {
     return this.one(`SELECT fleet_destination_activate($1, $2, $3) AS r`, [destinationId, activationCode, actor]);
   }
@@ -296,6 +306,18 @@ export class PgLedgerAdmin {
     return this.recordExternal("external_revenue", agentId, amountCents, externalRef, counterparty, actor, key);
   }
 
+  /**
+   * Schema v46: owner-recorded revenue that claims an external settlement key (e.g. `gumroad:<account>:payout:<id>`).
+   * The key is recorded once (fleet_revenue_claims); no other manual revenue or owner funding may reuse it.
+   */
+  async recordRevenueClaimed(agentId: string, amountCents: number, externalRef: string, counterparty: string, actor: string, claimKey: string,
+    key = idempotencyKey("revenue")): Promise<string> {
+    if (!counterparty) throw new Error("an external counterparty reference is required");
+    return this.one(`SELECT fleet_admin_record_external_claimed('external_revenue', $1, $2, $3, $4, $5, $6, $7) AS r`, [
+      agentId, cents(amountCents, "amount"), externalRef, sha256Hex(counterparty.trim().toLowerCase()), actor, idem(key), claimKey,
+    ]);
+  }
+
   /** Owner-only: mark a reference (e.g. a treasury account) as fleet-controlled, so value from it is never revenue. */
   async addControlledReference(reference: string, label: string, actor: string): Promise<void> {
     await this.pool.query(`SELECT fleet_controlled_reference_add($1, $2, $3)`, [sha256Hex(reference.trim().toLowerCase()), label, actor]);
@@ -322,15 +344,10 @@ export class PgLedgerAdmin {
     ]);
   }
 
-  async spendDecision(orderId: string, decision: "approve" | "reject", actor: string, opts: { note?: string; acknowledgeWarnings?: boolean } = {}) {
-    return this.one<Record<string, unknown>>(`SELECT fleet_admin_spend_decision($1, $2, $3, $4, $5) AS r`, [
-      orderId, decision, actor, opts.note ?? null, opts.acknowledgeWarnings === true,
-    ]);
-  }
-
   /**
-   * Owner withdrawal instruction. Above the strong-auth threshold this returns
-   * `pending_confirmation` plus a one-time confirmation code (shown once);
+   * Owner withdrawal instruction. Every amount returns `pending_confirmation` plus a
+   * one-time confirmation code (shown once), or `needs_acknowledgement` with the
+   * controller's risk advice when above the recommended safe amount (schema v31);
    * confirmWithdrawal() with that code places the (inert) reserved order.
    */
   async ownerWithdrawal(p: {
@@ -341,13 +358,13 @@ export class PgLedgerAdmin {
     acknowledgeWarnings?: boolean;
     key?: string;
   }): Promise<Record<string, unknown> & { confirmationCode?: string }> {
-    const m = await this.model();
-    const code = p.amountCents >= m.strongAuthThresholdCents ? oneTimeCode() : null;
+    // Schema v31: every withdrawal is strongly confirmed (no amount decides when security applies).
+    const code = oneTimeCode();
     const r = await this.one<Record<string, unknown>>(`SELECT fleet_admin_owner_withdrawal($1, $2, $3, $4, $5, $6, $7) AS r`, [
       cents(p.amountCents, "amount"), p.destinationId, p.actor, p.reason ?? null, p.acknowledgeWarnings === true,
-      idem(p.key ?? idempotencyKey("withdrawal")), code?.sha256 ?? null,
+      idem(p.key ?? idempotencyKey("withdrawal")), code.sha256,
     ]);
-    return r.status === "pending_confirmation" && code ? { ...r, confirmationCode: code.code } : r;
+    return r.status === "pending_confirmation" ? { ...r, confirmationCode: code.code } : r;
   }
 
   async confirm(instructionId: string, code: string, actor: string): Promise<Record<string, unknown>> {

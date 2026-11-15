@@ -1,0 +1,227 @@
+# Release package — f852888 (schema 61 → 62, dashboard 0.13.0): owner ↔ agent conversations, customisable names, treasury-paid owner turns, event-driven hibernation
+
+Prepared and rehearsed 2026-10-10; **DEPLOYED 2026-10-10 16:08:28Z** on the owner's authorization (see the end). Before it, production was `b0ac910`, schema 61, UI 0.12.1; both agents run
+`fda78a0` and are **paused** (since 12:37Z; no AI call after 12:19:54Z). Supersedes the 3b456cd build in `~/rlc62`:
+do not cut over from it. The specification and its acceptance matrix are in
+`docs/design/owner-replies-and-plain-language.md` (revision 2).
+
+No live flag, cap, operating mode, economic policy or approved runtime changes. The four safety flags stay false;
+setup protection stays on; custody execution stays off.
+
+## Contents
+
+| Commit | What |
+|---|---|
+| 0b031ee | UI 0.12.2: plain-language pass, "Awaiting reply", customisable PayPal key names, design |
+| 3b456cd | schema v62 + UI 0.13.0: conversations (messages, files, replies, requests and card approvals in one thread), names (200 characters, Unicode / emoji, duplicates tagged, unsafe characters refused; key and payment-account names are labels only), treasury-paid owner turns (`owner_conversation_charge`), Mind panel, P3_INFO → P3_SUMMARY fix plus a one-time backfill; runtime: `reply_to_owner`, attention wake-ups, event-driven hibernation |
+| f852888 | validation fixes: the scripted rehearsal model keeps the v5 close within the five-call limit; four tests updated to v62 routing and hibernation; a ledger test's false positive (a UUID containing "5000") |
+
+## Identity
+
+| | |
+|---|---|
+| Release commit | `f85288880ef01346b6c084f378af02a0f8cdc537` (`fleet-origin/fleet/final-v2.4`), tree `d5f659ac…` |
+| Runtime build ID | `00f67293ae92240f91d8f571b13824fd33911b8526093092d37edf22d673e52c`; the VPS build and an independent local build agree |
+| Lockfile SHA-256 | `1df54e3526cb39c847d18fec14f1d4e3595557e34d94040c5b774f9b2f2a21c1` (unchanged) |
+| Pins file (VPS) | `~/rlc62b/pins.txt` |
+| Dashboard | 0.13.0, `~/rlc62b/ui-0.13.0-f852888.tgz` (build VM copy: `/var/tmp/automaton-fleet-ui-build/`), live tree digest `299ac7f4…40cc`, 52 files; a second build is byte-identical |
+| Dashboard SHA-256 | `27cfff7d0cf5ed1506fbaa93057216cb212b5cfda8ad20499d32401965756f6b` (verified on the VPS) |
+| Release scripts | `~/rlc62b/fleet-{rollout,release,ui-deploy}.sh`, byte-identical to the commit (and unchanged since `~/rlc61`) |
+
+## Validation (frozen trees; no edits during runs)
+
+| Run | Tree | Result |
+|---|---|---|
+| `npx tsc --noEmit` | 3b456cd, f852888 | pass |
+| security suite | 3b456cd | 1382 / 1386 (1 skipped); 3 failures, all fixed in f852888 (below) |
+| financial suite | 3b456cd | 838 / 845 (1 skipped); 6 failures, all fixed in f852888 (below) |
+| 18 focus files not covered by those suites (conversations runtime, labels, contract, cognition, dashboards, PayPal, mapping, …) | 3b456cd | 155 / 155 |
+| dashboard typecheck, lint, simulation, live build | 3b456cd (no dashboard change since) | pass |
+| delta after the fixes: founder-upgrade (real founder processes), event routing, live-01-pg, v56 / v57 / v59 routing, ledger, R41.1 continuation, founder conversation | f852888 | 112 / 112 (9 files) |
+
+The 3b456cd failures and their fixes, with no check weakened:
+
+- `fleet-founder-upgrade` (real processes). In the scripted model, the v5 close asked for seven tool calls; only five
+  run per step. The declared sleep that was cut off still ended the turn, and v62 then correctly kept the founder
+  hibernating, so its journal was never written and no slim wake-up followed. The scripted founder now closes the walk
+  with a plain sleep and declares hibernation at its first slim wake-up, inside the limit. The rehearsal waits for the
+  journal and the declared wake condition together. The checks are unchanged: 12/12.
+- `fleet-event-routing-pg`: the routing-table test now includes the v62 routes.
+- `fleet-live-01-pg`: its slim-packet rig sets `hibernationSafetyMs: 0` (timer backoff only), like the other rigs.
+- v56 / v57 / v59 "events are routed": those kinds now route to `P3_SUMMARY` (the v62 fix).
+- `fleet-ledger` circuit-breaker leak check: the order id `05000291-…` matched `/5000/`. UUIDs are masked before the check.
+
+Evidence: `~/fleet-release-evidence/3b456cd/validation/` and `~/fleet-release-evidence/f852888/` on the build VM.
+
+## Rehearsal (`fleet-rollout.sh rehearse ~/rlc62b/pins.txt 61 62`, 2026-10-10 15:25:35–15:25:55Z): PASSED
+
+- Dump `~/automaton_fleet-v61-rollout-f852888-20261010T152539Z.dump` (`24222c43…`). Restore row counts identical;
+  migrate-check would apply 62; counters consistent.
+- Reconciliation OK: 0 new accounts; 804 journals; 1,646 events preserved, none purged; only role grants appended.
+  Ledger verify true. A re-run applies nothing. Rollback proof: the dump restores to 61 with the same ledger head.
+- Stamp `~/rollout-f852888-rehearsal.ok`. The cutover must start before **2026-10-11 15:25:55Z**, or rehearse again.
+- Second disposable copy (`~/rlc62b/check62.sh`, copy dropped). These were **identical** before and after:
+  - founders: status, registry name, identity hash, ledger fingerprint, cash 8,641 / 9,536;
+  - settings: protection on, custody off, 1 rail, identity authority off, sweep off, registry 2/2;
+  - PayPal: key `4fee40f2c10ba139`, sealed credential active, credential active, rail `pending_setup` with webhook
+    `4JR443408B058674D`, 0 checks.
+
+  The v62 tables on the migrated copy:
+  - 0 messages and 0 labels;
+  - names still shown as Agent-1 / Agent-2;
+  - `owner_conversation_charge` registered;
+  - the backfill run again returns 0;
+  - each thread shows its one pending request, with the agent paused.
+
+  The v61 owner-test gate stayed closed.
+- Afterwards, live: schema 61, runtime b0ac910, both agents paused, flags false.
+
+## Deployment (needs the owner's authorization, within the rehearsal window)
+
+1. Controller and dashboard:
+   ```
+   bash ~/rlc62b/fleet-release.sh ~/rlc62b/pins.txt 61 62 0.13.0 ~/rlc62b/ui-0.13.0-f852888.tgz 27cfff7d0cf5ed1506fbaa93057216cb212b5cfda8ad20499d32401965756f6b
+   ```
+   Then run the usual read-only checks: founders' identity and ledger fingerprints against the pre-cutover baseline,
+   flags, custody, protection and the PayPal state. With this step alone you get names, threads, sending messages and
+   files (they wait as *pending*), answering requests, card approvals in the thread, and the P3 fix (see the spec's
+   "what works when" table).
+   Rollback: UI `dashboard.env.pre-0.13.0`, then `bash ~/rlc62b/fleet-rollout.sh revert ~/rlc62b/pins.txt 61 62 <reason>`.
+2. Agents' runtime: conversations, `reply_to_owner` and event-driven hibernation need it. This step needs its own
+   authorization and can run only after step 1, because it rehearses toward the installed release.
+   ```
+   sudo scripts/fleet-founders.sh upgrade-rehearsal fda78a0eeaa8af87bd8725b7bf1df0c1bea315db
+   sudo scripts/fleet-founders.sh upgrade-preflight 01M4C4NXT786Q4E9725N5A15KV
+   sudo scripts/fleet-founders.sh upgrade-runtime 01M4C4NXT786Q4E9725N5A15KV      # Agent-2 first
+   sudo scripts/fleet-founders.sh upgrade-preflight 01M3F50SH7PNX2E3GST13J52AS
+   sudo scripts/fleet-founders.sh upgrade-runtime 01M3F50SH7PNX2E3GST13J52AS      # then Agent-1
+   ```
+   Run these from `/opt/automaton-fleet/current`. Rollback: `rollback-runtime <agentId> <upgradeId> <reason>`.
+3. Resuming the agents is a separate decision, with Pause / Resume on each conversation. Before that, the treasury must
+   be able to pay for owner turns: it holds £0 outside the agents' partitions, so owner messages wait with "treasury
+   short" until it is funded.
+
+## Deployment (2026-10-10, owner-authorized): DEPLOYED
+
+Pre-flight 16:06:32Z: pins, package `27cfff7d…`, scripts and build checkout matched; rehearsal stamp 15:25:55Z (valid);
+production b0ac910 / 61 / UI 0.12.1, both agents paused, founder baseline taken.
+
+- `fleet-release.sh` 16:06:44–16:08:28Z, exit 0; outage 16:07:34–16:08:17Z (43 s). Pre-migration dump
+  `~/automaton_fleet-v61-pre-v62-20261010T160754Z.dump` (`a56d9fb2…`); migrate 62; reconciliation OK (1,655 events,
+  none purged). UI 0.13.0 at `/opt/automaton-fleet/ui/0.13.0` (52 files), root verified, unauthenticated read 401; one
+  `production_deployed`.
+- Runtime f852888 / `00f67293…e52c`; `/opt/automaton-fleet/current` → f852888; the four flags false; protection on;
+  custody execution off; identity authority off; sweep off; registry 2/2 DEVELOPMENT.
+- Founders: identity hashes and ledger fingerprints identical to the 16:06:32Z baseline; 804 journals before and after;
+  cash 8,641 / 9,536; both on fda78a0, units running, **both still paused**; no AI call since 12:19:54Z. Shown as
+  Agent-1 / Agent-2; each thread shows its one pending request.
+- PayPal unchanged: key `4fee40f2c10ba139`, sealed credential active, rail `pending_setup`, webhook `4JR443408B058674D`,
+  0 checks. v62: 0 messages, `owner_conversation_charge` registered, ledger verify true.
+- Events since the start: role grants, `runtime_approved`, `production_deployed`, one `session_opened`, the usual two
+  restart-time `api_auth_failed` heartbeats. Public `/healthz` and `/v1/health` 200 (`/readyz` is loopback-only: 200).
+- Rollback: UI `dashboard.env.pre-0.13.0`; backend `bash ~/rlc62b/fleet-rollout.sh revert ~/rlc62b/pins.txt 61 62 <reason>`.
+
+Next, each on the owner's word: the agents' runtime upgrade (step 2 above), resuming them, and PayPal readiness.
+
+## Agents' runtime upgrade (2026-10-10, owner-authorized): DONE, both still paused
+
+- On-host `fleet-founders.sh upgrade-rehearsal fda78a0…` (throwaway registry, fake provider), 16:1x–16:3xZ:
+  **`pass: true`, 27/27** — includes slim wake-up (3,270 B vs 7,499 B full), v5 served (8 v5 / 0 v4 steps),
+  `field_guide` + `field_journal` run, journal written, wake condition declared, rollback after v5 use keeps the journal,
+  upgrade again verified. Production untouched by it.
+- Agent-2 (`01M4C4NXT786Q4E9725N5A15KV`): preflight ok; `upgrade-runtime` **verified**, upgrade
+  `f48d9854-b1ee-47bc-a389-530f6810323a`; fda78a0 → f852888; pid 757524, same uid 62577; downtime 2,051 ms; 1 challenge
+  passed; state identical (0 lost / changed / added).
+- Agent-1 (`01M3F50SH7PNX2E3GST13J52AS`): preflight ok; `upgrade-runtime` **verified**, upgrade
+  `901d5c95-c2ea-4366-8150-4546f924a8cd`; fda78a0 → f852888; pid 757816, same uid 65037; downtime 1,995 ms; 1 challenge
+  passed; state identical.
+- After: identity hashes and ledger fingerprints identical to the 16:06:32Z baseline; 804 journals; cash 8,641 / 9,536;
+  **both paused**; no AI call since 12:19:54Z; 0 in flight.
+- Rollback per agent: `sudo scripts/fleet-founders.sh rollback-runtime <agentId> <upgradeId> <reason>`.
+
+Next, each on the owner's word: resume the agents (Pause / Resume on each conversation); fund the treasury so owner
+turns can be paid; PayPal re-probe after the owner fixes the app.
+
+## PayPal readiness (2026-10-10, pinned runtime, as automaton-fleet-custody)
+
+The owner re-sealed `vault:paypal/treasury` from the Live app that holds the webhook (17:18:27Z; the earlier keys were
+from another app), added the two missing events and ticked Transaction search. Probe 17:20:07Z: sign-in ok; balances
+**200** (GBP, USD); webhook `4JR443408B058674D` **200**, URL matches, **8/8** events; Transaction Search **404** (feature
+just enabled; re-probe later). Recorded as probe evidence: `account_access` verified, `webhook_configuration` verified.
+Owner-test gate **open**; rail still `pending_setup`; `capabilitiesReady` `[]`; agents cannot use the rail. Next: the £1
+receiving test on the owner's go.
+
+## £1 receiving test (2026-10-10, live)
+
+- Checkout `e5bd5e23-c7ff-4dee-85d6-8c9267a8c342` (PayPal order `5B4220784C699793H`, £1.00 GBP) created 17:26:43Z; the
+  owner paid it. The approval did not reach the Fleet through a verified `CHECKOUT.ORDER.APPROVED` webhook (custody
+  could not reach PayPal's API until the unit fix in `768dc0a`); PayPal's own order record showed APPROVED.
+- Owner-approved one-off (option A): a script run as `automaton-fleet-custody` on the pinned runtime called custody's
+  own `paypalCheckoutByOrder` / `paypalCheckoutUpdate(…, "approved")`, refusing unless the checkout was exactly this one
+  and still `open`. Result `{"ok":true,"status":"approved"}` (~19:58Z, run by the owner). No other state was changed.
+- Custody captured through its normal path at 19:58:26Z: capture `19C47714VJ327730R`, journal `dc303ba5…`, owner
+  capital **£0.67** (net of PayPal's £0.33 fee). The owner confirmed £0.67 in the treasury PayPal account.
+- Status at 20:43Z: `captured (waiting for Transaction Search)`; the 20:34Z Balances reading showed £0.00 available
+  (likely pending/held on PayPal's side). Next: `hub-paypal-test` reaches "in the balance" → record `sale_ingestion`
+  from first use → activate the rail (owner's go). Agents remain paused and cannot use the rail.
+
+## UI 0.13.1 (2026-10-10 21:18Z, dashboard only)
+
+`4ed4122` (saved PayPal keys read as saved). Package `ui-0.13.1-4ed4122.tgz` sha256
+`0fd25d7d067d3c260775625e29d80b2c4435e22a033cfa1ab4a5c6e85e43c695` (two builds byte-identical; live tree digest
+`396a05c9…b069`, 52 files), staged in `~/rlc0131/` with `fleet-ui-deploy.sh` (`5bef3755…`, unchanged). Deployed by the
+owner: `sudo bash ~/rlc0131/fleet-ui-deploy.sh 0.13.1 …` → DONE 21:18:04Z, dashboard pid 755191 → 770799. Checks:
+live `/` and `/login/` byte-identical to the build; CSP present; dashboard, controller and custody active. No schema,
+controller, runtime or money change. Rollback: `dashboard.env.pre-0.13.1`. `/hq-preview/` is not served (no preview
+tree since 0.12.x; 404 before and after).
+
+## £1 test complete; PayPal rail active; mail live (2026-10-10, evening)
+
+- **£1 test:** `hub-paypal-test` → "captured, completed and in the balance: receiving works" (Transaction Search status
+  S) by 22:26Z.
+- **Rail `b71b3f3c…` (owner-run):** `economy-rail-verify … sale_ingestion verified first_use` (the £1 test), then
+  `economy-rail-status … active`. Readiness: `account_access` + `webhook_configuration` (probe), `sale_ingestion`
+  (first_use); `capabilitiesReady` = `[receive_payments]`; rail `paypal | live | active`. Refunds, payouts, card spend
+  and bank transfer remain unverified. Money out is still off: `REAL_PAYMENTS_ENABLED=false`, custody execution off.
+  Agents are paused, and no venture is assigned to the rail yet.
+- **Mail (B3, partly):**
+  - Install: Proton Bridge 3.27.1 (debsig verified, key `E2C75D68E6234B07`), installed with
+    `fleet-proton-bridge-setup.sh install/enable` (own user, loopback only).
+  - Login seals and the fixes needed:
+    - The first seal lacked the PEM BEGIN/END lines, so mail was NOT_CONFIGURED; this was silent.
+    - The next address was `@gmail.com`, then `@proton.com`, so Bridge refused every send with "invalid return path".
+    - The final address is `fleet.treasury@proton.me`, picked up after an identity restart at 22:19:56Z.
+    - A running provider is not replaced live; the replacement only takes effect on restart.
+  - Owner notification email: `economy-notification-policy - <owner address>` (22:04Z).
+  - Inbound: the owner's test mail was ingested at 22:33:52Z (unassigned, as expected).
+  - Outbound: the 4 stale DAILY reports exhausted 5 attempts on the wrong address. The first real send is the
+    07:00Z daily report.
+  - Still open: the agent mail.send/reply test and the £1 order-delivery test (needs resumed agents).
+- **Follow-ups (UI 0.13.2 + identity):**
+  - pre-seal validation: PEM and an address the Bridge account owns;
+  - send-side health;
+  - live provider replacement;
+  - unified Saved / Saved and encrypted / Connected states;
+  - an owner email field on Notifications;
+  - log the provider-start failure reason.
+
+## UI 0.13.2 (2026-10-10 23:13Z, dashboard only)
+
+`0e0a0de`. Contents:
+- Saved / saved-and-encrypted states with Change on every stored item.
+- Pre-seal Proton Bridge checks.
+- Receiving health and the last send result.
+- A Mail page over the existing `mail_feed` read, with `mail_assign`; agent addresses link to their mail.
+- An owner email field in Delivery policy.
+- A readable Virtual HQ Treasury banner: the plaque moved above it, the balance centred.
+
+Package and deploy:
+- Package `ui-0.13.2-0e0a0de.tgz`, sha256 `cea6d58cdf27f833d2352f0f7d95185dbc392c769061438f21d8a5bc69f33d7b`. Two builds
+  were byte-identical (tree `84e0d153…e9a4`).
+- Staged in `~/rlc0132/` and deployed by the owner at 23:13:43Z. A repeat run was refused (the directory is immutable).
+
+Checks:
+- Live `/` and `/login/` are byte-identical to the build.
+- Tests: 72/72 (0.13.2 unit, codex mapping, command centre), plus the live contract 13/13 and the simulation tests.
+- The banner was verified by headless screenshots at 1024–1600 px; phone width was not verified.
+- Rollback: `dashboard.env.pre-0.13.2`.

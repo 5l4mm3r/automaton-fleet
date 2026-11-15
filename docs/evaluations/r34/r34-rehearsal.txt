@@ -1,0 +1,10 @@
+== rollout rehearse 8fa10bf (schema 33 -> 40) from 3aebcc2 start 2026-10-02T17:36:04Z
+Note: switching to '8fa10bfbef0b1d9fe7f0ed26f373597cbd4096e6'.
+dump /home/ubuntu/automaton_fleet-v33-rollout-8fa10bf-20261002T173608Z.dump sha 9c970f09c493dff9
+restore: row counts identical
+migrate-check: {"currentVersion":33,"resultingVersion":40,"wouldApply":[34,35,36,37,38,39,40],"requiredVersion":40,"rolledBack":true}
+{"ok":true,"latencyMs":3,"schemaVersion":40,"countersConsistent":true}
+ledger verify: true
+re-run: {"currentVersion":40,"resultingVersion":40,"wouldApply":[],"requiredVersion":40,"rolledBack":true}
+rollback proof: the dump restores to schema 33 with the same ledger head
+== REHEARSAL PASSED 2026-10-02T17:36:19Z — live untouched (schema 33)

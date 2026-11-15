@@ -6,6 +6,8 @@
  *   rehearsal                                real-runtime two-founder rehearsal against a THROWAWAY
  *                                            registry (production registry is only read, before/after)
  *   provision <genesisId>                    approved → attesting, one isolated runtime per founder
+ *   births                                   queued birth orders and their provisioning state (v40)
+ *   birth <orderId>                          a birth order → a running agent: authorize, provision, attest, fund, activate (v40)
  *   attest <genesisId>                       runtime + host evidence per founder (or whole-set rollback)
  *   activate <genesisId> <authSha256>        OWNER GATE: credentials delivered, runtimes restart active
  *   teardown <genesisId>                     stop and delete every runtime of that Genesis
@@ -20,6 +22,17 @@
  *   rollback-runtime <agentId> <upgradeId> <reason…>    OWNER GATE: return to the runtime recorded by that upgrade
  *   upgrade-rehearsal <fromCommit>           the whole lifecycle + routed cognition on a SYNTHETIC founder created on
  *                                            the installed release <fromCommit>, THROWAWAY registry, fake provider
+ *   revision-rehearsal                       (2026-10-19) a buyer's revision end to end on a SYNTHETIC founder of the pinned
+ *                                            release in a real founder unit: fulfil, the buyer's report while the office
+ *                                            renderer is unavailable (answer, honest blocker, free waiting, a restart),
+ *                                            then recalculation, inspection, review and delivery of exactly those bytes
+ *   scenario-suite <terms.json> <ceilingPence> --credit-hold <usdMicro> --key-file <path> [--workbook <xlsx>] [--only s1,s2…]
+ *                                            (2026-10-23) the Stage-1 scenario suite with the REAL model (spends real
+ *                                            provider credit, up to the frozen terms' ceiling — which must be repeated on
+ *                                            the command line): one throwaway registry and newborn founder per scenario,
+ *                                            simulated buyer/payments/mail; evidence and per-call rows under
+ *                                            /var/lib/automaton-fleet-eval/<runId> (import them after the run with hub
+ *                                            economy-engineering-calls-import)
  *
  * F1-FRESH-02 — memory retention health (read-only; counts and status only, never a fact key or value):
  *   memory-report <agentId>                  founder_memory_write telemetry from the unit's journal + fact-store health
@@ -42,6 +55,11 @@ import { FOUNDER_STATE_ROOT, RELEASES_DIR, SystemdFounderHost, founderPinPaths, 
 import { computeBuildIdentity } from "../attestation.js";
 import { rollbackFounderRuntime, upgradeFounderRuntime } from "./upgrade.js";
 import { runUpgradeRehearsal } from "./upgrade-rehearsal.js";
+import { runRevisionRehearsal } from "./revision-rehearsal.js";
+import { runScenarioSuite, ceilingPence, creditHoldUsdMicro, SCENARIO_IDS, type ScenarioId, type SuiteTerms } from "../eval/scenario-suite.js";
+import { readCognitionKey } from "../service/main.js";
+import { killMainProcess, procAlive } from "../eval/kill.js";
+import { OFFICE_PROGRAM } from "./exec-sandbox.js";
 import { FounderProvisioner } from "./provisioner.js";
 import { FOUNDER_UNREADABLE_PATHS } from "./runtime.js";
 import { findPostgresBin, startEphemeralRegistry } from "./ephemeral-registry.js";
@@ -240,6 +258,27 @@ async function main(argv: string[]): Promise<number> {
         await genesis.close();
       }
     }
+    case "birth": {
+      // v40: provision a running agent for a queued birth order (automatic or Admin-directed), end to end.
+      const actor = actorOrDie();
+      const orderId = rest[0];
+      if (!orderId || !UUID.test(orderId)) throw new Error("usage: birth <orderId>");
+      const genesis = new PgGenesisAdmin({ connectionString: adminUrl() });
+      try {
+        const pinRelease = loadRuntimeRelease(readEnvFile(process.env.FLEET_RUNTIME_ENV_FILE?.trim() || DEFAULT_RUNTIME_ENV_FILE));
+        const prov = new FounderProvisioner({ genesis, host: new SystemdFounderHost(undefined, undefined, pinRelease), apiUrl: PRODUCTION_API_URL, actor, log });
+        const r = await prov.birth(orderId);
+        out(r);
+        return r.genesis.status === "activated" ? 0 : 1;
+      } finally {
+        await genesis.close();
+      }
+    }
+    case "births": {
+      actorOrDie();
+      const genesis = new PgGenesisAdmin({ connectionString: adminUrl() });
+      try { out(await genesis.birthsPending()); return 0; } finally { await genesis.close(); }
+    }
     case "pin": {
       // Pin a living founder's unit to its REGISTERED runtime (Genesis attestation, or its latest upgrade). No restart.
       actorOrDie();
@@ -351,7 +390,7 @@ async function main(argv: string[]): Promise<number> {
       let report;
       try {
         report = await runUpgradeRehearsal({
-          registry: reg, host: new SystemdFounderHost(undefined, undefined, from), from, to, actor, backupRoot, log,
+          registry: reg, host: new SystemdFounderHost(undefined, undefined, from), from, to, actor, backupRoot, log, releasesDir: RELEASES_DIR,
           pinEnvFile: (agentId) => founderPinPaths(agentId).env,
           // The shipped unit heartbeats every 30 s and thinks on every 2nd heartbeat.
           timeoutMs: 360_000, healthTimeoutMs: 120_000, pollMs: 1_000,
@@ -365,9 +404,132 @@ async function main(argv: string[]): Promise<number> {
       out({ ...report, pass, production: end.production, hostClean: end.hostClean, livingFounders: end.livingFounders });
       return pass ? 0 : 1;
     }
+    case "revision-rehearsal": {
+      const actor = actorOrDie();
+      const release = loadRuntimeRelease(readEnvFile(process.env.FLEET_RUNTIME_ENV_FILE?.trim() || DEFAULT_RUNTIME_ENV_FILE));
+      if (!release) throw new Error("no pinned runtime release in runtime.env");
+      const releaseDir = runningRuntimeDir(import.meta.url);
+      if (fs.realpathSync(releaseDir) !== fs.realpathSync(path.join(RELEASES_DIR, release.commit))) throw new Error("run the rehearsal from the pinned release (scripts/fleet-founders.sh)");
+      const bin = findPostgresBin();
+      if (!bin) throw new Error("PostgreSQL server binaries not found");
+      const guard = await rehearsalGuard();
+      const reg = await startEphemeralRegistry({ bin, rolesSql: path.join(releaseDir, "scripts/fleet-db-roles.sql"), runAs: "postgres", parent: "/var/tmp", identity: true });
+      const work = fs.mkdtempSync(path.join("/var/tmp", "fleet-revision-rehearsal-"));
+      fs.chmodSync(work, 0o700);
+      // The office renderer switch for ONE throwaway founder's unit: LibreOffice made inaccessible to it (a drop-in removed with
+      // the founder's unit directory at teardown), then the unit restarted. Living founders' units are never touched.
+      const setRenderer = async (agentId: string, available: boolean) => {
+        const f = path.join(path.dirname(founderPinPaths(agentId).dropIn), "90-rehearsal-renderer.conf");
+        if (available) fs.rmSync(f, { force: true });
+        else {
+          fs.mkdirSync(path.dirname(f), { recursive: true, mode: 0o755 });
+          fs.writeFileSync(f, "# revision rehearsal (a throwaway founder): the office renderer is unavailable to this founder\n[Service]\nInaccessiblePaths=-/usr/lib/libreoffice\n", { mode: 0o644 });
+        }
+        execFileSync("systemctl", ["daemon-reload"], { stdio: "ignore", timeout: 60_000 });
+        execFileSync("systemctl", ["restart", founderUnit(agentId)], { stdio: "ignore", timeout: 120_000 });
+      };
+      let report;
+      try {
+        report = await runRevisionRehearsal({
+          registry: { ownerUrl: reg.ownerUrl, serviceUrl: reg.serviceUrl, agentUrl: reg.agentUrl, custodyUrl: reg.custodyUrl, identityUrl: reg.identityUrl! },
+          host: new SystemdFounderHost(undefined, undefined, release), release, actor, setRenderer, rendererInstalled: fs.existsSync(OFFICE_PROGRAM),
+          identityDir: path.join(work, "identity"), log,
+          // The shipped unit heartbeats every 30 s and thinks on every 2nd heartbeat (one thinking slot a minute).
+          timeoutMs: 360_000, pollMs: 1_000, quietMs: 180_000,
+        });
+      } finally {
+        reg.stop();
+        fs.rmSync(work, { recursive: true, force: true });
+      }
+      const end = await guard.finish(reg.dir);
+      const pass = report.pass && report.complete && end.productionUnchanged && end.hostClean && end.livingUntouched;
+      out({ ...report, pass, production: end.production, hostClean: end.hostClean, livingFounders: end.livingFounders });
+      return pass ? 0 : 1;
+    }
+    case "scenario-suite": {
+      const actor = actorOrDie();
+      const [termsFile, ceilingArg] = rest;
+      const flag = (n: string) => { const i = rest.indexOf(n); return i >= 0 ? rest[i + 1] : undefined; };
+      if (!termsFile || !ceilingArg) throw new Error("usage: scenario-suite <terms.json> <ceilingPence> --key-file <path> [--workbook <xlsx>] [--only s1-…,s2-…]");
+      const terms = JSON.parse(fs.readFileSync(termsFile, "utf8")) as SuiteTerms;
+      const only = flag("--only")?.split(",").filter(Boolean) as ScenarioId[] | undefined;
+      if (only?.some((x) => !(SCENARIO_IDS as readonly string[]).includes(x))) throw new Error(`unknown scenario in --only (known: ${SCENARIO_IDS.join(", ")})`);
+      const ceiling = ceilingPence(terms, only);
+      // The operator repeats the approved ceiling: a terms file changed after approval does not run.
+      if (Number(ceilingArg) !== ceiling) throw new Error(`the terms' ceiling is ${ceiling}p, not ${ceilingArg}p: refusing`);
+      if (!/^[A-Za-z0-9._:-]{3,64}$/.test(terms.runId)) throw new Error("terms.runId must match [A-Za-z0-9._:-]{3,64}");
+      // The production credit hold for this run (placed first with hub economy-engineering-credit-hold), repeated here.
+      const hold = creditHoldUsdMicro(terms, only);
+      if (flag("--credit-hold") !== hold.toString()) throw new Error(`place the credit hold first (hub economy-engineering-credit-hold ${terms.runId} anthropic ${hold} <reason>) and repeat it: --credit-hold ${hold}`);
+      const keyFile = flag("--key-file");
+      if (!keyFile) throw new Error("--key-file <the controller's provider key file> is required");
+      // Strict secret-file validation, and owned by the user the controller unit runs as; held by this process only.
+      const svcUser = execFileSync("systemctl", ["show", "-p", "User", "--value", "automaton-fleet.service"], { encoding: "utf8", timeout: 30_000 }).trim();
+      if (!/^[a-z_][a-z0-9_-]{0,31}$/.test(svcUser)) throw new Error("cannot resolve the controller unit's user");
+      const apiKey = readCognitionKey(keyFile, Number(execFileSync("id", ["-u", svcUser], { encoding: "utf8", timeout: 30_000 }).trim()));
+      const release = loadRuntimeRelease(readEnvFile(process.env.FLEET_RUNTIME_ENV_FILE?.trim() || DEFAULT_RUNTIME_ENV_FILE));
+      if (!release) throw new Error("no pinned runtime release in runtime.env");
+      const releaseDir = runningRuntimeDir(import.meta.url);
+      if (fs.realpathSync(releaseDir) !== fs.realpathSync(path.join(RELEASES_DIR, release.commit))) throw new Error("run the suite from the pinned release (scripts/fleet-founders.sh)");
+      const bin = findPostgresBin();
+      if (!bin) throw new Error("PostgreSQL server binaries not found");
+      const evidenceDir = path.join("/var/lib/automaton-fleet-eval", terms.runId);
+      if (fs.existsSync(evidenceDir)) throw new Error(`run ${terms.runId} already has evidence (${evidenceDir}): one bounded attempt per run id`);
+      const guard = await rehearsalGuard();
+      const work = fs.mkdtempSync(path.join("/var/tmp", "fleet-scenario-suite-"));
+      fs.chmodSync(work, 0o700);
+      const regs: Array<{ stop(): void; dir: string }> = [];
+      const setRenderer = async (agentId: string, available: boolean) => {
+        const f = path.join(path.dirname(founderPinPaths(agentId).dropIn), "90-rehearsal-renderer.conf");
+        if (available) fs.rmSync(f, { force: true });
+        else {
+          fs.mkdirSync(path.dirname(f), { recursive: true, mode: 0o755 });
+          fs.writeFileSync(f, "# scenario suite (a throwaway founder): the office renderer is unavailable to this founder\n[Service]\nInaccessiblePaths=-/usr/lib/libreoffice\n", { mode: 0o644 });
+        }
+        execFileSync("systemctl", ["daemon-reload"], { stdio: "ignore", timeout: 60_000 });
+        execFileSync("systemctl", ["restart", founderUnit(agentId)], { stdio: "ignore", timeout: 120_000 });
+      };
+      let report;
+      try {
+        report = await runScenarioSuite({
+          terms, only, actor, release, evidenceDir, workDir: work, rendererInstalled: fs.existsSync(OFFICE_PROGRAM),
+          host: new SystemdFounderHost(undefined, undefined, release),
+          newRegistry: async () => {
+            const reg = await startEphemeralRegistry({ bin, rolesSql: path.join(releaseDir, "scripts/fleet-db-roles.sql"), runAs: "postgres", parent: "/var/tmp", identity: true });
+            regs.push(reg);
+            return { ownerUrl: reg.ownerUrl, serviceUrl: reg.serviceUrl, agentUrl: reg.agentUrl, custodyUrl: reg.custodyUrl, identityUrl: reg.identityUrl!, stop: () => reg.stop() };
+          },
+          provider: { baseUrl: process.env.FLEET_COGNITION_BASE_URL?.trim() || "https://api.anthropic.com/v1", apiKey },
+          setRenderer,
+          // The contradiction case: one evaluation variable on a THROWAWAY founder's unit (a drop-in removed with its unit).
+          setEvalEnv: async (agentId, name, value) => {
+            const f = path.join(path.dirname(founderPinPaths(agentId).dropIn), "91-scenario-eval.conf");
+            if (value === null) fs.rmSync(f, { force: true });
+            else {
+              if (!/^[a-z_]{3,40}$/.test(value)) throw new Error("evaluation value must be a check id");
+              fs.mkdirSync(path.dirname(f), { recursive: true, mode: 0o755 });
+              fs.writeFileSync(f, `# scenario suite (a throwaway founder): evaluation only\n[Service]\nEnvironment=${name}=${value}\n`, { mode: 0o644 });
+            }
+            execFileSync("systemctl", ["daemon-reload"], { stdio: "ignore", timeout: 60_000 });
+            execFileSync("systemctl", ["restart", founderUnit(agentId)], { stdio: "ignore", timeout: 120_000 });
+          },
+          killHard: (agentId) => killMainProcess(founderUnit(agentId), {
+            systemctl: (args) => execFileSync("systemctl", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 60_000 }),
+            alive: procAlive, sleep: (ms) => new Promise((r) => setTimeout(r, ms)) }),
+          workbookFixture: flag("--workbook"), log,
+        });
+      } finally {
+        for (const r of regs) { try { r.stop(); } catch { /* stopped */ } }
+        fs.rmSync(work, { recursive: true, force: true });
+      }
+      const end = await guard.finish(regs[regs.length - 1]?.dir ?? work);
+      out({ ...report, production: end.production, productionUnchanged: end.productionUnchanged, hostClean: end.hostClean, livingFounders: end.livingFounders,
+        import: `hub economy-engineering-calls-import ${terms.runId} anthropic <each of callsFiles>` });
+      return end.productionUnchanged && end.hostClean && end.livingUntouched ? 0 : 1;
+    }
     default:
-      console.error("usage: fleet-founders.sh status | rehearsal | provision <genesisId> | attest <genesisId> | activate <genesisId> <authSha256> | teardown <genesisId> | pin <agentId>\n"
-        + "       fleet-founders.sh upgrade-status <agentId> | upgrade-preflight <agentId> | upgrade-runtime <agentId> [--health-timeout S] | rollback-runtime <agentId> <upgradeId> <reason…> | upgrade-rehearsal <fromCommit>");
+      console.error("usage: fleet-founders.sh status | rehearsal | births | birth <orderId> | provision <genesisId> | attest <genesisId> | activate <genesisId> <authSha256> | teardown <genesisId> | pin <agentId>\n"
+        + "       fleet-founders.sh upgrade-status <agentId> | upgrade-preflight <agentId> | upgrade-runtime <agentId> [--health-timeout S] | rollback-runtime <agentId> <upgradeId> <reason…> | upgrade-rehearsal <fromCommit> | revision-rehearsal");
       return 2;
   }
 }

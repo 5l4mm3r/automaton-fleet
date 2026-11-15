@@ -126,50 +126,73 @@ Fleet cap = 2 (operator-approved at S9, 2026-09-24) until explicitly changed.
 
 ## Current production deployment
 
-State after Phase C (2026-09-25), per docs/fleet-production-runbook.md.
+State after release 1945915 (2026-10-14 10:19Z, schema 73 -> 75, UI 0.17.1 -> 0.18.0), per
+docs/evaluations/launch-candidate/release-1945915.md (release-e54ee56.md, 72 -> 73, and release-d63a595.md, 69 -> 72, before it; launch-checklist-v65.md) and
+docs/fleet-production-runbook.md.
 
 Runtime repository:
 https://github.com/5l4mm3r/automaton-fleet.git
 
-Runtime commit:
-4d6a0befb97ee64e4ebc6daffe4baa64d6a4b790
+Controller runtime commit (approved, pinned and installed):
+1945915ee10e81271a9ae66793d7e22aa63eabd5
 
 Runtime build ID:
-54beb10104a11888446ed1d09a85f236d87b977558a88514de7600d7dcc83ced
+5db374f6b61314db25f52e79052369d9b615837cc11f9da2cfbc2c12be02863a
 
 Runtime lockfile SHA256:
-eee9dc2f24b389bd00f8d5d617391ce34d04c612bc8f7fca201bb9f7c1a3a811
-
-Previous releases kept for rollback:
-5a5469e, 03f8760 (B0), cdfd70c, 11c0c7c (v7 requires restoring the pre-v8 dump)
+1df54e3526cb39c847d18fec14f1d4e3595557e34d94040c5b774f9b2f2a21c1
 
 Database schema:
-v8
+v75 (1945915, 2026-10-14 10:19Z: v74 pre-launch write-off + launch boundary INSTALLED, NOT APPLIED — owner-only, installing
+it authorises nothing; v75 read-only Virtual presence). Before: v73 (v70-v72 AI credit by funding source / evidence-first purchases / acquisition cost: d63a595, 2026-10-12 19:54Z;
+v73 one-time historical acquisition cost: e54ee56, 20:32Z). AI-credit setup recorded 20:14-20:32Z: policy owner_card,
+reconciled $41.29, opening lot cost 7000/8400, opening £18.24, historical correction applied once (801 journals) —
+owner payable £21.87, unbacked capital £200.00, nothing reimbursed. v74 write-off APPLIED once 2026-10-14 10:33Z (no
+launch boundary yet): owner payable £0 (£21.87 contributed capital), wallets £100.00 / £100.00, unbacked £200.00
+
+Releases: scripts/fleet-release.sh (backend cutover + UI promotion + root verification; ONE
+production_deployed / production_rolled_back event; an unchanged UI is reused; rollback restores the UI live before
+the attempt; retry guards run before runtime changes — d63a595). Fix forward now: AI-credit and correction records exist
+(a revert would discard them; pre-v73 dump ~/automaton_fleet-v72-pre-v73-20261012T203143Z.dump, `~/rlc73/fleet-rollout.sh
+revert ~/rlc73/pins.txt 72 73 <reason>`). Never revert once real money or provider data exists — freeze and fix forward (README §3).
 
 Controller domain:
-https://api.agentfleet.vip
+https://api.agentfleet.vip  (admin UI: https://admin.agentfleet.vip)
 
 Current live topology:
 - production: OVH VPS (ssh alias agentfleet-vps), the only live controller
-- FleetController public HTTPS on 0.0.0.0:443 (Let's Encrypt certificate)
+- public :443 served by the nginx TLS edge (SNI routing, PROXY protocol to the loopback controller on
+  127.0.0.1:8443; admin.agentfleet.vip to the dashboard on 127.0.0.1:8790)
 - FleetController backend 127.0.0.1:8787, PostgreSQL and Redis loopback-only
-- Operator API (read-only, signed requests) on 127.0.0.1:8788 only, enabled at boot,
-  kill switch on; reached only through the restricted SSH account fleet-op-tunnel
-- two operator principals: bridge-claude (ops.read.status, ops.read.agents,
-  ops.read.events; its signing key and SSH tunnel key live only on the dev VM)
-  and bridge-chatgpt (ops.read.status, ops.read.agents; its key lives only in
-  the ChatGPT adapter's state directory on the VPS)
-- ChatGPT adapter (Phase C): automaton-fleet-chatgpt-adapter on a private Unix
-  socket, separately pinned artifact 6691b4c (build 62336fee…); reached only via
-  the OpenAI Secure MCP Tunnel client (automaton-fleet-chatgpt-tunnel, outbound
-  only, awaiting the owner's OpenAI tunnel credentials); no new public listener
-- SSH: key-only authentication (password logins disabled globally)
-- local Ubuntu development VM: controller stopped and disabled; not a live registry
-- registry: cap 2, DEVELOPMENT mode, replication off
-- 0 living, 0 reserved, 0 quarantined; zero agents
-- root witness OS user and unit installed; witness not enrolled, activated or started
-- fleet:doctor DEPLOYMENT OK; fleet:verify 16/16 PASS, SAFE FOR DRY RUN YES;
-  fleet:verify-runtime VERIFIED; privilege audit PASS (agent, service, operator)
+- Operator API (signed requests) on 127.0.0.1:8788 only, via the restricted SSH account fleet-op-tunnel
+- Admin UI: root = UI 0.18.0 (deployed 2026-10-14 10:19Z with 1945915: Virtual Command Centre with live presence; hibernation shown only from a report < 26 h old, else unknown; FLEET_DASHBOARD_STATIC_DIR=/opt/automaton-fleet/ui/0.18.0, UI rollback `dashboard.env.before-release-1945915-*`). Before: 0.17.1 (2026-10-12 16:59Z with b60e262;
+  UI rollback `dashboard.env.pre-0.17.1`; Capital backing panel (AI-credit opening pending); Spend reviews, business project folders + lessons panel; Mail page with dismiss / delete permanently (confirm, no step-up), Saved states, Proton checks)
+- Mail: Proton Bridge 3.27.1 (own unit, loopback), shared address fleet.treasury@proton.me, owner notifications to the owner's
+  separate Proton address; PayPal rail b71b3f3c… ACTIVE for receiving (£1 test complete); money out still off; /hq-preview/ is NOT served (no preview tree since 0.12.x); agents shown as
+  Agent-1 / Agent-2 (owner Rename, v60; v62: 200-character Unicode names, duplicates tagged, key / account labels);
+  v62 owner ↔ agent conversations (thread, files, request answers, card approvals; owner turns treasury-paid) —
+  replies need the agents resumed
+- owner sign-in: password + TOTP (any browser) or passkey + TOTP; owner access must not depend on one browser's
+  passkey; methods are never silently removed (docs/admin-access.md)
+- Fleet Command: its own bounded, clearable P0–P3 feed (v45); notifications are disposable (delete = delete);
+  every fleet_events row is meaningful (permanent, Fleet history) or temporary (7 / 30-day retention). Subject CLOSED.
+- identity broker, custody, fetcher and the ChatGPT adapter/tunnel run as separate units
+- registry: cap 2, DEVELOPMENT mode, replication off; all four safety flags false; survival protection ON (v55,
+  set by the migration); custody execution off, standing identity authority off, sweep policy off
+- PayPal treasury (onboarding B1, in progress): custody key 4fee40f2… (/var/lib/automaton-fleet-custody, 0600);
+  vault:paypal/treasury sealed; rail b71b3f3c… pending_setup, 0 readiness checks recorded (probe 2026-10-10:
+  sign-in OK, reporting 403, webhook 404 — owner to fix in the PayPal app); no £1 test yet
+- 2 living Agents, both on runtime b60e262 (upgraded 2026-10-12 17:2xZ, upgrades b4548dbd… Agent-2 / 39b55b87…
+  Agent-1; previous 973e0c1; rollback `fleet-founders.sh rollback-runtime <agentId> <upgradeId> <reason>`), both PAUSED
+  by the owner since 2026-10-10 12:37Z (founder-cognition pause; resume only on the owner's word), doctrine founder-v6
+  (Charter v6, toolset-2, Field Guide v2.1, event wake + "since your last turn", retired lessons in read_knowledge): founder-1 (01M3F50SH7PNX2E3GST13J52AS, shown as
+  Agent-1) and agent-2 (01M4C4NXT786Q4E9725N5A15KV)
+  (live-verified: v5 delivery, tools, hibernation, slim wake; event-triggered wake and field-journal persistence
+  await legitimate live activity; never provoke them; docs/evaluations/r41-1/fda78a0/deployment.md)
+- browser worker: automaton-fleet-browser (own OS user, DB roles fleet_browser(_login), bx_* only; pinned Chrome for
+  Testing headless shell 153.0.8010.12)
+- SSH: key-only authentication
+- local Ubuntu development VM: not a live registry
 
 ## Known architecture
 

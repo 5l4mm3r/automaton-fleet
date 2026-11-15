@@ -33,6 +33,7 @@ async function main(): Promise<number> {
   let req: Record<string, unknown>;
   try {
     let s = "";
+    process.stdin.setEncoding("utf8");   // a multi-byte character split across chunks stays intact
     for await (const chunk of process.stdin) { s += chunk; if (s.length > 65_536) throw new Error("too large"); }
     req = JSON.parse(s);
   } catch {

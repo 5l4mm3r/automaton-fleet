@@ -1,0 +1,226 @@
+/**
+ * The 2D facility map — a top-down rendering of the same world as the 3D scene. It needs no WebGL (phones, weak devices,
+ * browsers without WebGL, "Map" chosen in the display settings). It repaints only when something real moves (agents,
+ * packets, the camera easing): no ambient animation, so a still 50-agent Fleet costs nothing per frame. One requestAnimationFrame loop moves agents towards
+ * their targets, carries packets and frames the focus by setting SVG attributes directly: no React render per frame, no
+ * style attributes (the deck's strict CSP), capped to the chosen frame rate and paused while the tab is hidden.
+ */
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
+import type { Projector } from "./AgentLabels";
+import { money } from "../model";
+import type { AgentModel } from "../command/agents";
+import { DEPARTMENT, DEPARTMENTS, type DepartmentId } from "../command/departments";
+import { usePortraitUrl } from "../command/AgentPortrait";
+import type { VirtualPrefs } from "../command/prefs";
+import { BED_LENGTH, BED_WIDTH, bedIndex, bedPoint, birthState, focusRect, livePackets, WORLD, type BirthState, type Packet, type Point } from "./world";
+import { along, INTAKE, routeThrough, toHub } from "./hq/route";
+import { corridorRoute, mayWander, roamCandidates, roamPoint } from "./hq/wander";
+import { SLEEP_LAMP } from "./hq/beds";
+import { ALL_CREW_SEATS, CREW_DESK, type PlacedDesk } from "./hq/crew-layout";
+import { DONE_WORDS, ROLE_COLOUR, ROLE_NAME } from "../command/helpers";
+
+/** The floor grid as one path (cheaper to repaint than a pattern fill). */
+const GRID = (() => {
+  let d = "";
+  for (let x = WORLD.minX; x <= WORLD.maxX; x += 2) d += `M${x} ${WORLD.minZ}V${WORLD.maxZ}`;
+  for (let z = WORLD.minZ; z <= WORLD.maxZ; z += 2) d += `M${WORLD.minX} ${z}H${WORLD.maxX}`;
+  return d;
+})();
+
+export type Focus = { level: "fleet" } | { level: "department"; id: DepartmentId } | { level: "agent"; id: string };
+
+/** One cached bitmap per agent and condition (cheap to repaint with 50 agents on the map). */
+const Portrait = memo(function Portrait({ id, band }: { id: string; band: AgentModel["health"]["band"] }) {
+  const href = usePortraitUrl(id, band);
+  return href ? <image href={href} x={-0.5} y={-1.04} width={1} height={1} /> : <rect x={-0.5} y={-1.04} width={1} height={1} fill="#020617" />;
+});
+
+function activate(fn: () => void) {
+  return { onClick: fn, onKeyDown: (e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fn(); } } };
+}
+
+const MapAgent = memo(function MapAgent({ m, selected, newborn, mark, register, onAgent }: {
+  m: AgentModel; selected: boolean; newborn: boolean; mark: boolean; register: (id: string, el: SVGGElement | null, start: Point | null) => void; onAgent: (id: string) => void;
+}) {
+  // Born while the map is open → walks in from Fleet Command; otherwise appears at its own spot.
+  const [start] = useState<Point | null>(() => (newborn ? { x: DEPARTMENT.command.x, z: DEPARTMENT.command.z } : null));
+  const id = m.agent.id;
+  const ref = useCallback((el: SVGGElement | null) => register(id, el, start), [register, id, start]);
+  return <g ref={ref} role="button" tabIndex={0} aria-label={`${m.agent.name}, ${money(m.agent.cash)}, ${m.health.label}, ${m.placement.activity}`} className="cursor-pointer outline-none"
+    opacity={m.agent.status === "dead" ? 0.55 : 1} {...activate(() => onAgent(id))}>
+    {selected && <circle r={0.95} fill="none" stroke="#e2e8f0" strokeWidth={0.06} />}
+    {/* Reduced motion: a newborn is marked "new" by a static ring instead of the entrance sequence. */}
+    {mark && <circle r={1.1} fill="none" stroke="#67e8f9" strokeWidth={0.05} strokeDasharray="0.2 0.12" />}
+    <Portrait id={id} band={m.health.band} />
+  </g>;
+});
+
+/**
+ * A specialist's desk on the map (crew.ts in 3D): the desk, its monitor bar and the specialist's head — lit in the role's
+ * colour while a real helper job is on it, dark with a small static "z" while asleep. Not an agent: never in the roster.
+ */
+const MapDesk = memo(function MapDesk({ d, onRoom }: { d: PlacedDesk; onRoom: (id: DepartmentId) => void }) {
+  const D = CREW_DESK, on = !!d.desk.job, colour = ROLE_COLOUR[d.desk.role];
+  const j = d.desk.job, label = `${ROLE_NAME[d.desk.role]} ${d.desk.seat} (specialist, not an agent): ${j ? `${j.phase === "working" ? "working" : j.phase === "finished" ? "just finished" : DONE_WORDS[j.phase]} — ${j.text}` : "asleep, no job"}`;
+  return <g transform={`translate(${d.bay.x} ${d.bay.z}) rotate(${-d.bay.q * 90})`} data-crew-desk={d.desk.key} data-awake={on ? "1" : "0"} role="button" tabIndex={0} aria-label={label}
+    className="cursor-pointer outline-none" {...activate(() => onRoom(d.desk.department))}>
+    <title>{label}</title>
+    <rect x={-D.deskW / 2} y={D.deskZ0} width={D.deskW} height={D.deskZ1 - D.deskZ0} rx={0.05} fill="#1b2638" stroke="#475569" strokeWidth={0.03} />
+    <rect x={-0.3} y={D.deskZ0 + 0.04} width={0.6} height={0.09} fill={on ? colour : "#0b1220"} />
+    <circle cx={0} cy={D.seatZ} r={0.2} fill={on ? colour : "#334155"} stroke={on ? "#e2e8f0" : "#1e293b"} strokeWidth={0.03} />
+    {!on && <text x={0.18} y={D.seatZ - 0.2} fontSize={0.34} fill="#94a3b8" className="font-mono" transform={`rotate(${d.bay.q * 90} 0.18 ${D.seatZ - 0.2})`}>z</text>}
+  </g>;
+});
+
+export function VirtualMap({ models, targets, packets, focus, prefs, selected, onRoom, onAgent, positionsRef, projectRef, stations, births, birthStates, teams, crew = [] }: {
+  models: AgentModel[]; targets: Map<string, Point>; packets: Packet[]; focus: Focus; prefs: VirtualPrefs; selected: string | null;
+  onRoom: (id: DepartmentId) => void; onAgent: (id: string) => void;
+  /** Published for the label layer: animated positions and world → screen projection. */
+  positionsRef: MutableRefObject<Map<string, Point>>; projectRef: MutableRefObject<Projector | null>;
+  /** Each agent's workstation on the Agent Floor, and births (presentation only). */
+  stations: ReadonlyMap<string, Point>; births: ReadonlyMap<string, number>; birthStates: ReadonlyMap<string, BirthState>;
+  /** Agents on an active team project (they are working: they never stroll). */
+  teams?: ReadonlyMap<string, string>;
+  /** The specialist crew's desks with their real helper jobs (command/helpers.ts crewOf → crew-layout placeDesks). */
+  crew?: readonly PlacedDesk[];
+}) {
+  const svg = useRef<SVGSVGElement>(null);
+  const agentEls = useRef(new Map<string, SVGGElement>());
+  const packetEls = useRef<SVGCircleElement[]>([]);
+  /** The ceiling pipe each travelling packet is in (one path per packet slot): drawn only while it travels. */
+  const pipeEls = useRef<SVGPathElement[]>([]);
+  const routes = useRef(new Map<string, Point[]>());
+  const pos = useRef(new Map<string, Point>());
+  /** The element each agent's current transform was written to (a remounted element is redrawn). */
+  const drawn = useRef(new Map<string, SVGGElement>());
+  const packetsOn = useRef(true);
+  const view = useRef<{ x: number; z: number; w: number; d: number }>({ x: WORLD.minX, z: WORLD.minZ, w: WORLD.maxX - WORLD.minX, d: WORLD.maxZ - WORLD.minZ });
+  // Where an idle agent may stroll on the map: rooms (not Quarters or Estate) and corridors, off every workstation, crew
+  // desk and intake (wander.ts). The map has no furniture to walk around, so walks follow the corridors (corridorRoute).
+  const roam = useMemo(() => roamCandidates([...stations.values(), ...ALL_CREW_SEATS, ...Object.values(INTAKE)]), [stations]);
+  const live = useRef({ targets, packets, focus, prefs, births, models, teams, roam });
+  useEffect(() => { live.current = { targets, packets, focus, prefs, births, models, teams, roam }; }, [targets, packets, focus, prefs, births, models, teams, roam]);
+  /** A strolling agent's corridor route (recomputed only when its stroll goal changes). */
+  const strolls = useRef(new Map<string, { to: Point; pts: Point[] }>());
+  const stationEls = useRef(new Map<string, SVGRectElement>());
+  /** Set an attribute only when its value changes (a still Fleet costs no repaint); cached per element. */
+  const put = (el: Element, attr: string, value: string) => { if (el.getAttribute(attr) !== value) el.setAttribute(attr, value); };
+  /** An agent's element registers here; `start` is where it appears (Fleet Command for a birth), else its own spot. */
+  const register = useCallback((id: string, el: SVGGElement | null, start: Point | null) => {
+    if (!el) { agentEls.current.delete(id); return; }
+    agentEls.current.set(id, el);
+    if (start && !pos.current.has(id)) { pos.current.set(id, { ...start }); el.setAttribute("transform", `translate(${start.x} ${start.z})`); }
+  }, []);
+
+  useEffect(() => {
+    positionsRef.current = pos.current;
+    const project: Projector = (p, lift) => {
+      const el = svg.current, v = view.current;
+      if (!el) return null;
+      const W = el.clientWidth, H = el.clientHeight, k = Math.min(W / v.w, H / v.d);
+      return { x: (W - v.w * k) / 2 + (p.x - v.x) * k, y: (H - v.d * k) / 2 + (p.z + 0.05 * lift - v.z) * k };
+    };
+    projectRef.current = project;
+    let raf = 0, last = 0;
+    const tick = (t: number) => {
+      raf = requestAnimationFrame(tick);
+      const { targets: tg, packets: pk, focus: fc, prefs: pr } = live.current;
+      if (document.visibilityState !== "visible" || t - last < 1000 / pr.fps - 1) return;
+      const dt = last ? Math.min(0.1, (t - last) / 1000) : 0.016;
+      last = t;
+      const snap = pr.reduceMotion;
+      // Workstations: lit while the agent lives, powering up during a birth, powered down after death.
+      const nowMs = Date.now(), dead = new Set(live.current.models.filter((m) => m.agent.status === "dead").map((m) => m.agent.id));
+      for (const [id, st] of stationEls.current) {
+        const b = birthState(live.current.births.get(id), nowMs, snap);
+        const power = dead.has(id) ? 0 : b.power;
+        put(st, "fill-opacity", (0.06 + power * 0.5).toFixed(2));
+        put(st, "stroke", dead.has(id) ? "#334155" : power >= 1 ? "#22d3ee" : "#155e75");
+        const el = agentEls.current.get(id);
+        if (el) put(el, "visibility", b.visible ? "visible" : "hidden");
+      }
+      // Only what changes is written to the DOM: a still Fleet costs no repaint (large Fleets stay smooth).
+      // Agents walk towards their department slot (about 4 units per second; snap with reduced motion). An agent with
+      // nothing real to do strolls through the facility at a gentler pace, along the corridors (cosmetic, wander.ts) —
+      // never on Reduce Motion; its recorded placement is unchanged.
+      const byId = new Map(live.current.models.map((m) => [m.agent.id, m])), teamsNow = live.current.teams, roamNow = live.current.roam;
+      for (const [id, el] of agentEls.current) {
+        const home = tg.get(id), m = byId.get(id);
+        if (!home) continue;
+        const idle = !snap && !!m && mayWander(m.agent.status, m.placement.basis, teamsNow?.has(id) ?? false);
+        const target = idle ? roamPoint(id, home, roamNow, nowMs) : home;
+        const cur = pos.current.get(id);
+        if (cur && cur.x === target.x && cur.z === target.z && drawn.current.get(id) === el) continue;
+        const from = cur ?? { ...target };
+        let goal = target;
+        if (idle && cur) {
+          let r = strolls.current.get(id);
+          if (!r || r.to.x !== target.x || r.to.z !== target.z) { r = { to: { ...target }, pts: corridorRoute(cur, target) }; strolls.current.set(id, r); }
+          while (r.pts.length > 1 && Math.hypot(r.pts[0].x - from.x, r.pts[0].z - from.z) < 1e-3) r.pts.shift();
+          goal = r.pts[0] ?? target;
+        } else strolls.current.delete(id);
+        const dx = goal.x - from.x, dz = goal.z - from.z, dist = Math.hypot(dx, dz), step = (idle ? 2.4 : 4) * dt;
+        const next = snap || dist <= step ? { ...goal } : { x: from.x + (dx / dist) * step, z: from.z + (dz / dist) * step };
+        pos.current.set(id, next);
+        drawn.current.set(id, el);
+        el.setAttribute("transform", `translate(${next.x.toFixed(3)} ${next.z.toFixed(3)})`);
+      }
+      // Packets travel the pipes through the Fleet Command hub (route.ts), only when enabled and motion is allowed; the
+      // pipe a packet is in is drawn while it travels and nowhere else. Idle elements are written once.
+      const now = Date.now();
+      const shown = pr.dataFlow && !snap ? livePackets(pk, now, 60) : [];
+      if (shown.length || packetsOn.current) {
+        packetsOn.current = shown.length > 0;
+        packetEls.current.forEach((c, i) => {
+          const p = shown[i], pipe = pipeEls.current[i], f = p ? (now - p.start) / p.duration : -1;
+          if (!p || f < 0 || f >= 1) { if (c.getAttribute("r") !== "0") c.setAttribute("r", "0"); if (pipe && pipe.getAttribute("d") !== "") pipe.setAttribute("d", ""); return; }
+          let route = routes.current.get(p.id);
+          if (!route) { route = routeThrough(p.points); routes.current.set(p.id, route); if (routes.current.size > 240) routes.current.delete(routes.current.keys().next().value!); }
+          const at = along(route, f).p;
+          c.setAttribute("cx", at.x.toFixed(3)); c.setAttribute("cy", at.z.toFixed(3)); c.setAttribute("r", "0.28"); c.setAttribute("fill", p.colour);
+          if (pipe) { pipe.setAttribute("d", route.map((q, k) => `${k ? "L" : "M"}${q.x.toFixed(2)} ${q.z.toFixed(2)}`).join("")); pipe.setAttribute("stroke", p.colour); pipe.setAttribute("stroke-opacity", (0.25 + 0.5 * Math.sin(Math.PI * f)).toFixed(2)); }
+        });
+      }
+      // Camera: ease the viewBox towards the focus; stop writing once it has arrived.
+      const r = focusRect(fc, pos.current);
+      const goal = { x: r.x - r.w / 2, z: r.z - r.d / 2, w: r.w, d: r.d }, v = view.current, k = snap ? 1 : Math.min(1, dt * 4);
+      const far = Math.abs(goal.x - v.x) + Math.abs(goal.z - v.z) + Math.abs(goal.w - v.w) + Math.abs(goal.d - v.d);
+      if (far > 0.002) {
+        if (far < 0.01) { v.x = goal.x; v.z = goal.z; v.w = goal.w; v.d = goal.d; }
+        else { v.x += (goal.x - v.x) * k; v.z += (goal.z - v.z) * k; v.w += (goal.w - v.w) * k; v.d += (goal.d - v.d) * k; }
+        svg.current?.setAttribute("viewBox", `${v.x.toFixed(3)} ${v.z.toFixed(3)} ${v.w.toFixed(3)} ${v.d.toFixed(3)}`);
+      }
+    };
+    raf = requestAnimationFrame(tick);
+    // Clear only what this renderer published (the other renderer may already have taken over).
+    return () => { cancelAnimationFrame(raf); if (projectRef.current === project) projectRef.current = null; };
+  }, [positionsRef, projectRef]);
+
+
+  const beds = bedIndex(models), sleeping = new Map(models.filter((m) => m.placement.basis === "sleep").map((m) => [m.agent.id, m.rest.sleep]));
+  return <svg ref={svg} viewBox={`${WORLD.minX} ${WORLD.minZ} ${WORLD.maxX - WORLD.minX} ${WORLD.maxZ - WORLD.minZ}`} className="h-full w-full select-none" role="group" aria-label="Fleet headquarters map">
+    <rect x={WORLD.minX - 5} y={WORLD.minZ - 5} width={WORLD.maxX - WORLD.minX + 10} height={WORLD.maxZ - WORLD.minZ + 10} fill="#030712" />
+    <path d={GRID} fill="none" stroke="#0f2236" strokeWidth={0.05} />
+    {/* Every department's own corridor to the Fleet Command hub (the pipes information travels in run along them). */}
+    {DEPARTMENTS.filter((d) => d.id !== "command").map((d) => <path key={`c-${d.id}`} d={toHub({ x: d.x, z: d.z }).map((q, k) => `${k ? "L" : "M"}${q.x} ${q.z}`).join("")} fill="none" stroke="#0e2a3d" strokeWidth={0.14} />)}
+    {DEPARTMENTS.map((d) => <g key={d.id} role="button" tabIndex={0} aria-label={`${d.name}: ${d.purpose}`} className="cursor-pointer outline-none focus-visible:opacity-80" {...activate(() => onRoom(d.id))}>
+      <rect x={d.x - d.w / 2} y={d.z - d.d / 2} width={d.w} height={d.d} rx={0.4} fill={d.id === "command" ? "#06182a" : "#071322"} stroke={d.accent} strokeOpacity={focus.level === "department" && focus.id === d.id ? 1 : 0.55} strokeWidth={d.id === "command" ? 0.16 : 0.08} />
+      {/* No continuous ambient animation on the map: any animation inside the SVG repaints the whole map every frame. */}
+      {d.id === "command" && <circle cx={d.x} cy={d.z} r={1.4} fill="none" stroke={d.accent} strokeWidth={0.1} />}
+      <text x={d.x - d.w / 2 + 0.4} y={d.z - d.d / 2 + 0.75} fontSize={0.62} fill={d.accent} className="font-mono tracking-widest">{d.name.toUpperCase()}</text>
+    </g>)}
+    {/* One workstation per agent on the Agent Floor (a dark bar until it is powered). */}
+    {models.map((m) => { const st = stations.get(m.agent.id); return st ? <rect key={`st-${m.agent.id}`} ref={(el) => { if (el) stationEls.current.set(m.agent.id, el); else stationEls.current.delete(m.agent.id); }}
+      x={st.x - 0.45} y={st.z - 1.42} width={0.9} height={0.24} rx={0.05} fill="#22d3ee" fillOpacity={0.06} stroke="#155e75" strokeWidth={0.04} data-station={m.agent.id} /> : null; })}
+    {/* Quarters: a bed for every living agent; its lamp shows who sleeps there and why (owner's pause / hibernation). */}
+    {[...beds].map(([id, i]) => { const b = bedPoint(i), s = sleeping.get(id); return <g key={`bed-${id}`} data-bed={id}>
+      <rect x={b.x - BED_WIDTH / 2 + (b.level ? 0.12 : 0)} y={b.z + (b.level ? 0.12 : 0)} width={BED_WIDTH} height={BED_LENGTH} rx={0.08} fill="#202c52" stroke="#6272a8" strokeWidth={0.05} />
+      <rect x={b.x - 0.12} y={b.z + 0.1} width={0.24} height={0.16} fill={s === "owner_pause" ? SLEEP_LAMP.owner_pause : s === "hibernating" ? SLEEP_LAMP.hibernating : SLEEP_LAMP.empty} />
+    </g>; })}
+    {/* The specialist crew's desks (not agents): lit only while a real helper job is on them. */}
+    {crew.map((d) => <MapDesk key={d.desk.key} d={d} onRoom={onRoom} />)}
+    {Array.from({ length: 60 }, (_, i) => <path key={`pipe${i}`} ref={(el) => { if (el) pipeEls.current[i] = el; }} d="" fill="none" strokeWidth={0.22} strokeLinejoin="round" />)}
+    {models.map((m) => <MapAgent key={m.agent.id} m={m} selected={selected === m.agent.id} newborn={(birthStates.get(m.agent.id)?.phase ?? "settled") !== "settled"} mark={birthStates.get(m.agent.id)?.mark ?? false} register={register} onAgent={onAgent} />)}
+    {Array.from({ length: 60 }, (_, i) => <circle key={`p${i}`} ref={(el) => { if (el) packetEls.current[i] = el; }} r={0} />)}
+  </svg>;
+}

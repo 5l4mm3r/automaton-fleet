@@ -9,7 +9,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { ACTION_MIN_TIER, RouteError, TASK_CLASSES, actionDigest, candidateFor, parseRouteRequest, route, type TierCandidate } from "../../fleet/cognition/router.js";
-import { FOUNDER_EXPERIMENT_TOOLS } from "../../fleet/cognition/types.js";
+import { FOUNDER_CHARTER, FOUNDER_EXPERIMENT_TOOLS } from "../../fleet/cognition/types.js";
 import { inferRouted, type ProviderFactory, type RoutedCognitionPorts } from "../../fleet/cognition/routed-gateway.js";
 import { buildDecisionPacket, renderDecisionPacket, taskPacketProblems, DECISION_LIMITS } from "../../fleet/cognition/task-packet.js";
 import { AnthropicProvider } from "../../fleet/cognition/anthropic.js";
@@ -87,6 +87,22 @@ describe("router: tier from the task only", () => {
   });
 });
 
+describe("v82: a helper call's own record (kind and stated purpose) — validated, never a routing input", () => {
+  it("accepts the closed kinds and purposes, refuses anything else, and never changes the tier", () => {
+    const plain = route(parseRouteRequest({ taskClass: "page_interpretation" }));
+    const tagged = parseRouteRequest({ taskClass: "page_interpretation", helper: { kind: "routine", purpose: "marketing" } });
+    expect(tagged.helper).toEqual({ kind: "routine", purpose: "marketing" });
+    expect(route(tagged)).toEqual(plain);
+    expect(parseRouteRequest({ taskClass: "agent_step", escalation: { reasonCode: "HIGH_CONSEQUENCE", requestedTier: "T3" }, helper: { kind: "escalation", purpose: "decision" } }).helper)
+      .toEqual({ kind: "escalation", purpose: "decision" });
+    expect(parseRouteRequest({ taskClass: "agent_step", helper: { kind: "review", purpose: "quality_review" } }).helper).toEqual({ kind: "review", purpose: "quality_review" });
+    for (const bad of [{ kind: "routine", purpose: "decision" }, { kind: "routine" }, { kind: "crew", purpose: "research" }, { kind: "routine", purpose: "research", wealth: 1 },
+                       { kind: "escalation", purpose: "decision" }, "research", [{ kind: "routine", purpose: "research" }]]) {
+      expect(() => parseRouteRequest({ taskClass: "agent_step", helper: bad }), JSON.stringify(bad)).toThrow(RouteError);
+    }
+  });
+});
+
 describe("Critical Decision Packet: the question, not the job", () => {
   function state() {
     const root = tmp();
@@ -115,7 +131,8 @@ describe("Critical Decision Packet: the question, not the job", () => {
 });
 
 /** In-memory ports that behave like the database for the gateway (authorization snapshot, exact record). */
-function fakePorts(o: { lastModel?: string | null; lastAgeS?: number | null; authorize?: (route: Record<string, unknown>) => Record<string, unknown> & { ok: boolean }; status?: Record<string, unknown>; experimentsEnabled?: boolean } = {}) {
+function fakePorts(o: { lastModel?: string | null; lastAgeS?: number | null; authorize?: (route: Record<string, unknown>) => Record<string, unknown> & { ok: boolean }; status?: Record<string, unknown>; experimentsEnabled?: boolean;
+  doctrines?: readonly string[] } = {}) {
   const seen = { authorized: [] as Array<{ estimate: number; route: Record<string, unknown>; promptSha: string }>, recorded: [] as Array<{ r: CognitionRecord; obs: Record<string, unknown> }> };
   let n = 0;
   const ports: RoutedCognitionPorts = {
@@ -130,6 +147,7 @@ function fakePorts(o: { lastModel?: string | null; lastAgeS?: number | null; aut
       seen.recorded.push({ r, obs });
       return { ok: true, chargedCents: 0, chargedMicrocents: 0, usageSource: r.usageSource };
     },
+    ...(o.doctrines ? { runtimeDoctrines: async () => o.doctrines! } : {}),
   };
   return { ports, seen };
 }
@@ -162,6 +180,48 @@ describe("routed gateway (real AnthropicProvider → fake Messages API)", () => 
       }
       await inferRouted(fakePorts({ experimentsEnabled: true }).ports, factory, "A", "t", { messages: obs });
       expect(names()).toEqual(expect.arrayContaining(experimentTools));
+    });
+  });
+
+  it("R41.1 doctrine: absent (Founder 1's runtime) keeps charter v4 and the v4 tools byte-for-byte; founder-v5 gets charter v5 and the v5 tools; the tier never changes; unknown is refused", async () => {
+    await withFake(async (factory, fake) => {
+      const body = () => fake.lastBody as { system?: unknown; tools?: Array<{ name: string; input_schema?: { properties?: Record<string, unknown> } }> };
+      const sys = () => JSON.stringify(body().system ?? "");
+      const tool = (n: string) => (body().tools ?? []).find((t) => t.name === n);
+      const v4 = await inferRouted(fakePorts().ports, factory, "A", "t", { messages: obs });
+      const v4Tools = (body().tools ?? []).map((t) => t.name);
+      const v4Sys = sys();
+      expect(v4Sys).toContain(JSON.stringify(FOUNDER_CHARTER.split("\n")[0]).slice(1, -1));
+      expect(v4Sys).not.toContain("YOU EXIST UNDER ECONOMIC PRESSURE");
+      expect(v4Tools).not.toContain("field_journal");
+      expect(Object.keys(tool("set_goal")?.input_schema?.properties ?? {}).sort()).toEqual(["rationale", "title"]);
+      expect(Object.keys(tool("sleep")?.input_schema?.properties ?? {})).toEqual(["reason"]);
+      // An explicit founder-v4 is the same request as no doctrine at all.
+      await inferRouted(fakePorts().ports, factory, "A", "t", { messages: obs, doctrine: "founder-v4" });
+      expect(sys()).toBe(v4Sys);
+      expect((body().tools ?? []).map((t) => t.name)).toEqual(v4Tools);
+      const v5 = await inferRouted(fakePorts().ports, factory, "A", "t", { messages: obs, doctrine: "founder-v5" });
+      expect(sys()).toContain("YOU EXIST UNDER ECONOMIC PRESSURE");
+      expect(sys()).toContain("A blocked dependency blocks ONE ACTION, never you or your venture");
+      expect((body().tools ?? []).map((t) => t.name).sort()).toEqual([...v4Tools, "field_journal", "field_guide"].sort()); // exactly two additions
+      expect(Object.keys(tool("set_goal")?.input_schema?.properties ?? {}).sort()).toEqual(["awaiting", "blockedBy", "id", "rationale", "reviewAt", "title"]);
+      expect(Object.keys(tool("sleep")?.input_schema?.properties ?? {}).sort()).toEqual(["reason", "reviewAt", "wakeOn"]);
+      expect(v5.route).toEqual(v4.route); // doctrine never touches routing, tier or model
+      const { ports, seen } = fakePorts();
+      await expect(inferRouted(ports, factory, "A", "t", { messages: obs, doctrine: "founder-v99" })).rejects.toMatchObject({ code: "FLEET_DOCTRINE_UNKNOWN", status: 400 });
+      expect(seen.authorized).toEqual([]); // refused before anything is authorized or charged
+    });
+  });
+
+  it("R41.1 compatibility: founder-v5 is served only when the founder's attested release implements it; a v4-only release asking for it is refused, never downgraded; v4 is always served", async () => {
+    await withFake(async (factory, fake) => {
+      const legacy = fakePorts({ doctrines: ["founder-v4"] });
+      await expect(inferRouted(legacy.ports, factory, "A", "t", { messages: obs, doctrine: "founder-v5" })).rejects.toMatchObject({ code: "FLEET_DOCTRINE_INCOMPATIBLE", status: 409 });
+      expect(legacy.seen.authorized).toEqual([]);
+      await inferRouted(legacy.ports, factory, "A", "t", { messages: obs });
+      expect(JSON.stringify((fake.lastBody as { system?: unknown }).system)).not.toContain("YOU EXIST UNDER ECONOMIC PRESSURE");
+      await inferRouted(fakePorts({ doctrines: ["founder-v4", "founder-v5"] }).ports, factory, "A", "t", { messages: obs, doctrine: "founder-v5" });
+      expect(JSON.stringify((fake.lastBody as { system?: unknown }).system)).toContain("YOU EXIST UNDER ECONOMIC PRESSURE");
     });
   });
 
@@ -432,7 +492,8 @@ describe("founder runtime: task classes and escalation (new runtimes only)", () 
     expect(sent).toHaveLength(1);
     expect(sent[0].messages).toHaveLength(1);
     expect(String((sent[0].messages[0] as { content: string }).content)).toMatch(/^CRITICAL DECISION PACKET \(fleet-decision-v1\)/);
-    expect(sent[0].route).toEqual({ taskClass: "evidence_conflict_resolution", escalation: { reasonCode: "EVIDENCE_CONFLICT", requestedTier: "T3", parentRequestId: "22222222-2222-4222-8222-222222222222" } });
+    expect(sent[0].route).toEqual({ taskClass: "evidence_conflict_resolution", escalation: { reasonCode: "EVIDENCE_CONFLICT", requestedTier: "T3", parentRequestId: "22222222-2222-4222-8222-222222222222" },
+      helper: { kind: "escalation", purpose: "decision" } }); // v82: recorded with the call
     const facts = JSON.parse(fs.readFileSync(path.join(mem, "facts.json"), "utf8"));
     expect(JSON.parse(facts[r.factKey])).toMatchObject({ answer: "Decision: still run it; margin £10.24", tier: "T3", model: OPUS, reason: "EVIDENCE_CONFLICT" });
     expect(r.packetBytes).toBeGreaterThan(0);

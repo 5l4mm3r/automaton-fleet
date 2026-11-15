@@ -27,6 +27,7 @@
 import crypto from "crypto";
 import { candidateFor, parseRouteRequest, route, type RouteDecision, type TierCandidate } from "../cognition/router.js";
 import type { ProviderFactory } from "../cognition/routed-gateway.js";
+import { maxCallUsdMicrocents, reserveControlAi, settleControlAi, type ControlBudgetPort } from "../spend/control-budget.js";
 import { ProviderError } from "../cognition/types.js";
 import { redactText } from "../redact.js";
 
@@ -44,7 +45,7 @@ export interface RelevanceJob {
   artifact: { contentSha256: string; host: string; fetchedAt: string; title: string | null; excerpt: string; excerptSha256: string; truncated: boolean } | null;
 }
 
-export interface RelevancePorts {
+export interface RelevancePorts extends ControlBudgetPort {
   relevancePending(limit: number): Promise<Record<string, unknown>>;
   relevanceRecord(experimentId: string, attemptId: string, verdict: Verdict, tier: string, reason: string, refs: Record<string, unknown>, calls: unknown[]): Promise<Record<string, unknown> & { ok: boolean }>;
   /** A failed call is never lost: actual usage if reported, known zero if not billed, else an audited unknown-cost item. */
@@ -222,6 +223,9 @@ export class RelevanceAssessor {
     const requestId = crypto.randomUUID();
     const prompt = relevancePrompt(job);
     const maxTokens = Math.min(c.maxOutputTokens, 4_000);
+    // v96: the call's bounded maximum is reserved against Fleet Control's daily ceiling first; no room, no call.
+    const budget = await reserveControlAi(this.o.ports, "evidence_relevance", job.attemptId, maxCallUsdMicrocents(c, RELEVANCE_SYSTEM, [prompt], maxTokens));
+    if (!budget.ok) { this.o.audit?.("experiment_relevance_budget", { attemptId: job.attemptId, reason: budget.reason }); return null; }
     const costOf = (u: { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number }) => Math.max(0, Math.round(
       u.inputTokens * c.prices.inputMicrocentsPerToken + u.outputTokens * c.prices.outputMicrocentsPerToken
       + (u.cacheReadTokens ?? 0) * c.prices.cacheReadMicrocentsPerToken + (u.cacheWriteTokens ?? 0) * c.prices.cacheWriteMicrocentsPerToken));
@@ -236,6 +240,7 @@ export class RelevanceAssessor {
         deadlineAt: Date.now() + (this.o.deadlineMs ?? 120_000),
       });
       const usd = costOf(res.usage);
+      await settleControlAi(this.o.ports, budget.reservationId, usd);
       const parsed = parseAssessment(res.content);
       return {
         parsed,
@@ -245,6 +250,7 @@ export class RelevanceAssessor {
     } catch (err) {
       const pe = err instanceof ProviderError ? err : null;
       const usage = pe?.info.charge === "usage" ? pe.info.usage : undefined;
+      await settleControlAi(this.o.ports, budget.reservationId, usage ? costOf(usage) : pe?.info.charge === "none" ? 0 : null);
       // Upper bound when the cost is unknown: the whole prompt as input plus the full output allowance.
       const estimate = Math.ceil((RELEVANCE_SYSTEM.length + prompt.length) / 3) * c.prices.inputMicrocentsPerToken + maxTokens * c.prices.outputMicrocentsPerToken;
       const failed = {
